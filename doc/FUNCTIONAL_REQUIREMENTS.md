@@ -320,13 +320,15 @@ class PipelineItem(BaseModel):
 # }
 ```
 
-### 2. Storage Models (`app/domains/base/models.py`)
+### 2. Domain Models (`app/domains/base/models.py`)
 
-Persistent storage representations.
+Pydantic **domain/transfer objects** at the repository boundary — in-memory, not the
+stored rows. The persistent schema is the SQLAlchemy `Table`s in `DocumentRepository`,
+which maps each model to/from its table (`Document` ↔ `documents`, etc.).
 
 ```python
 class Document(BaseModel):
-    """A source document in persistent storage."""
+    """A source document. Mapped to/from the ``documents`` table by the repository."""
     
     id: str | None = None
     content: str
@@ -335,7 +337,7 @@ class Document(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class Chunk(BaseModel):
-    """A text chunk extracted from a document."""
+    """A text chunk extracted from a document. Mapped to/from the ``chunks`` table."""
     
     id: str | None = None
     parent_doc_id: str          # Foreign key to Document.id
@@ -347,7 +349,7 @@ class Chunk(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class Embedding(BaseModel):
-    """A dense vector embedding for a chunk."""
+    """A chunk's dense vector. Mapped to/from the ``embeddings`` table."""
     
     id: str | None = None
     chunk_id: str               # Foreign key to Chunk.id

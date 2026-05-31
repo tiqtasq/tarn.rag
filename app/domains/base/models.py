@@ -1,4 +1,10 @@
-"""Shared data models flowing through ingestion and (future) retrieval."""
+"""Shared data models flowing through ingestion and (future) retrieval.
+
+These are Pydantic **domain/transfer objects** used at the repository boundary —
+in-memory representations, not the stored rows. The persistent schema is the
+SQLAlchemy ``Table`` definitions in ``DocumentRepository``, which maps each model
+to/from its table (``Document`` <-> ``documents``, etc.).
+"""
 
 from typing import Any
 
@@ -16,7 +22,7 @@ class PipelineItem(BaseModel):
 
 
 class Document(BaseModel):
-    """A source document in persistent storage."""
+    """A source document. Mapped to/from the ``documents`` table by the repository."""
 
     id: str | None = None
     content: str
@@ -26,7 +32,7 @@ class Document(BaseModel):
 
 
 class Chunk(BaseModel):
-    """A text chunk extracted from a document."""
+    """A text chunk extracted from a document. Mapped to/from the ``chunks`` table."""
 
     id: str | None = None
     parent_doc_id: str
@@ -39,7 +45,7 @@ class Chunk(BaseModel):
 
 
 class Embedding(BaseModel):
-    """A dense vector embedding for a chunk."""
+    """A chunk's dense vector. Mapped to/from the ``embeddings`` table."""
 
     id: str | None = None
     chunk_id: str
