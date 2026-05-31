@@ -4,26 +4,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-Implementation has **started** (Phase 1 scaffolded). The authoritative design is
+Implementation is **underway** (Phases 1–2 done). The authoritative design is
 `doc/FUNCTIONAL_REQUIREMENTS.md` ("RAG Ingestion Pipeline" spec) — treat it as the
 source of truth for structure, models, interfaces, and behavior, and follow its
 phased **Implementation Checklist** (Phases 1–6), since later layers depend on
 earlier ones (models → repository → stages → orchestration → service/API).
 
-**Done (Phase 1, tested on SQLite):** `pyproject.toml`; `app/domains/base/models.py`
-(Pydantic v2 models); `app/core/exceptions.py`; the SQLAlchemy Core repository
-(`base/repository.py` + `sqlite_repository.py` tested, `postgres_repository.py`
-compiles but needs the `postgres` extra); `app/domains/ingestion/models.py`
-(`IngestionJob`); `app/domains/ingestion/queue.py` (`JobQueue` port + `InMemoryJobQueue`
-+ lazy `PgQueuerJobQueue`). Tests in `tests/` (8 passing).
+**Done (Phases 1–2, tested on SQLite, all green):**
+- Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
+  SQLAlchemy Core repository (`base/repository.py` + `sqlite_repository.py` tested,
+  `postgres_repository.py` compiles but needs the `postgres` extra); `ingestion/models.py`
+  (`IngestionJob`); `ingestion/queue.py` (`JobQueue` ABC + `InMemoryJobQueue` + lazy
+  `PgQueuerJobQueue`).
+- Phase 2: `ingestion/pipeline.py` (`PipelineStage`/`MapperStage`/`ChunkerStage`/
+  `FilterStage`/`Pipeline`); `ingestion/result_sink.py` (`ResultSink` + 5 sinks +
+  `create_sink_registry`); `ingestion/stages/` (Load/Clean/Chunk/Enrich/Embed).
 
-**Not yet built:** stages, `ResultSink`s, orchestrator, worker, service, API, DI,
-observability. Implementation notes: the `_upsert_document` upsert was made a
-**concrete portable** method on the base (not a per-dialect hook — the spec showed
-`ON CONFLICT`, but select-then-update/insert is correct on both dialects); schema
-creation uses **two hooks** (`_before_create_schema`/`_after_create_schema`) so the
-pgvector extension is created before tables and indexes after. Use `datetime.now(UTC)`,
-not the spec's `datetime.utcnow()` (deprecated on 3.12).
+**Not yet built:** orchestrator, worker, service, API, DI, observability, the
+`config.py` factories (`create_ingestion_pipeline`) and `Settings`. Implementation
+notes: `_upsert_document` is a **concrete portable** base method (not a per-dialect
+hook — `ON CONFLICT` → portable select-then-update/insert); schema creation uses two
+hooks (`_before_create_schema`/`_after_create_schema`) so pgvector's extension is made
+before tables and indexes after; stages run `validate()` inside `super().__init__()`,
+so a stage must set any attrs `validate()` reads **before** calling super; `EmbedStage`
+lazy-loads sentence-transformers (tests set `stage._model` to a fake `encode`). Use
+`datetime.now(UTC)`, not the spec's `datetime.utcnow()` (deprecated on 3.12).
 
 ## What This System Is
 
