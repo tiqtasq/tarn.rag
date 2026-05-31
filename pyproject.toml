@@ -1,0 +1,32 @@
+[project]
+name = "tarn-rag"
+version = "0.1.0"
+description = "RAG ingestion pipeline — composable, DAG-based, database-agnostic"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings>=2",
+    "sqlalchemy>=2",
+    "aiosqlite",
+    "numpy",
+]
+
+[project.optional-dependencies]
+# Postgres/pgQueuer backends — not needed for the SQLite test path.
+postgres = ["asyncpg", "pgvector"]
+queue = ["pgqueuer"]
+api = ["fastapi", "uvicorn"]
+embed = ["sentence-transformers"]
+dev = ["pytest", "pytest-asyncio"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["."]
