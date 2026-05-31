@@ -1,0 +1,33 @@
+name: Validate branch name
+
+on:
+  pull_request:
+    branches:
+      - '*'
+  push:
+    branches-ignore:
+      - main
+      - develop
+      
+jobs:
+  validate_branch-name:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Get branch name
+      id: get_branch_name
+      run: echo "::set-output name=name::${{ github.head_ref || github.ref_name }}"
+
+    - name: Validate Branch Name
+      run: |
+        BRANCH_NAME="${{ steps.get_branch_name.outputs.name }}"
+        if [[ "$BRANCH_NAME" == "main" || "$BRANCH_NAME" == "develop" || "$BRANCH_NAME" =~ ^feature\/.* || "$BRANCH_NAME" =~ ^refactor\/.* || "$BRANCH_NAME" =~ ^bugfix\/.* ]]; then
+          echo "Branch name '$BRANCH_NAME' is valid."
+        else
+          echo "Error: Branch name '$BRANCH_NAME' does not follow conventions."
+          echo "Branch names must start with 'feature/', 'bugfix/', or be 'main' or 'develop'."
+          exit 1
+        fi
