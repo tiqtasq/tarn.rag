@@ -995,6 +995,7 @@ class PipelineStage(ABC):
     def __init__(self, name: str, **config):
         self.name = name
         self.config = config
+        # validate() runs here: subclasses must set any attrs it reads BEFORE super().__init__()
         self.validate()
     
     @abstractmethod
@@ -1300,9 +1301,10 @@ class ChunkStage(ChunkerStage):
     """Split documents into retrieval-sized chunks."""
     
     def __init__(self, chunk_size: int = 512, overlap: int = 50, **config):
-        super().__init__(name="Chunk", chunk_size=chunk_size, overlap=overlap, **config)
+        # set before super().__init__(), which runs validate()
         self.chunk_size = chunk_size
         self.overlap = overlap
+        super().__init__(name="Chunk", chunk_size=chunk_size, overlap=overlap, **config)
     
     def chunk(self, text: str, metadata: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         """Split text using recursive chunking."""
@@ -1391,11 +1393,12 @@ class EmbedStage(PipelineStage):
     def __init__(self,
                  embedding_model: str = "sentence-transformers/all-minilm-l6-v2",
                  model_batch_size: int = 32, **config):
-        super().__init__(name="Embed", embedding_model=embedding_model,
-                         model_batch_size=model_batch_size, **config)
+        # set before super().__init__(), which runs validate()
         self.embedding_model = embedding_model
         self.model_batch_size = model_batch_size
         self._model = None  # lazy load
+        super().__init__(name="Embed", embedding_model=embedding_model,
+                         model_batch_size=model_batch_size, **config)
 
     def process(self, item: PipelineItem) -> Iterator[Embedding]:
         """Embed a single chunk (one model call)."""
