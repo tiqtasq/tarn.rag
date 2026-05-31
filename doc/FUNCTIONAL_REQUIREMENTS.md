@@ -288,14 +288,21 @@ rag-ingestion/
 
 ### 1. PipelineItem (`app/domains/base/models.py`)
 
-The fundamental unit flowing through the ingestion pipeline.
+The single, uniform **transport** type that flows through the pipeline. Every stage
+is `PipelineItem -> Iterator[PipelineItem]`, and the worker / DAG / inline job payload
+are all generic over this one type, so the engine stays stage- and entity-agnostic;
+per-entity structure rides in the loose `metadata` bag. It is deliberately distinct
+from the persistence DTOs (`Document`/`Chunk`/`Embedding`, §2), which never flow — the
+field overlap with `Document` is incidental and diverges for `Chunk`/`Embedding`,
+which is why one uniform transport type beats flowing the three persistence types.
 
 ```python
 from typing import Any
 from pydantic import BaseModel, Field, ConfigDict
 
 class PipelineItem(BaseModel):
-    """A document or chunk flowing through the ingestion pipeline."""
+    """The single, uniform TRANSPORT type that flows through every stage (the engine
+    is generic over it). Distinct from the persistence DTOs, which never flow."""
     
     id: str | None = None  # Assigned by storage layer
     content: str              # The actual text
@@ -322,9 +329,11 @@ class PipelineItem(BaseModel):
 
 ### 2. Domain Models (`app/domains/base/models.py`)
 
-Pydantic **domain/transfer objects** at the repository boundary — in-memory, not the
-stored rows. The persistent schema is the SQLAlchemy `Table`s in `DocumentRepository`,
-which maps each model to/from its table (`Document` ↔ `documents`, etc.).
+Typed **persistence DTOs** at the repository boundary — in-memory, not the stored
+rows. They are materialised at the ResultSinks to write rows and reconstructed on
+reads; they **never flow** through the pipeline (that's `PipelineItem`, §1). The
+persistent schema is the SQLAlchemy `Table`s in `DocumentRepository`, which maps each
+model to/from its table (`Document` ↔ `documents`, etc.).
 
 ```python
 class Document(BaseModel):
@@ -1561,8 +1570,8 @@ reads the small `job_status` projection in the repository.
 > to `PgQueuerJobQueue` and should be confirmed against the pinned pgQueuer version.
 
 ```python
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Protocol
 import asyncio
 import asyncpg
 from pgqueuer import QueueManager
@@ -1577,16 +1586,21 @@ ENTRYPOINT = "ingest"   # single pgQueuer entrypoint; the handler dispatches by 
 JobHandler = Callable[[list[IngestionJob]], Awaitable[None]]
 
 
-class JobQueue(Protocol):
+class JobQueue(ABC):
     """The minimal queue surface the domain uses. Mechanics (claiming, retries,
     NOTIFY, dead-lettering) belong to the implementation — never reimplement them."""
 
+    @abstractmethod
     async def enqueue(self, job: IngestionJob) -> None: ...
+
+    @abstractmethod
     def set_handler(self, handler: JobHandler) -> None: ...
+
+    @abstractmethod
     async def run(self) -> None: ...
 
 
-class PgQueuerJobQueue:
+class PgQueuerJobQueue(JobQueue):
     """JobQueue backed by pgQueuer — the ONLY module that imports pgQueuer. pgQueuer
     owns claiming/retries/NOTIFY/dead-lettering; a handler that raises propagates so
     pgQueuer requeues the job (= recovery, D5)."""
@@ -1612,7 +1626,7 @@ class PgQueuerJobQueue:
         await self._qm.run()
 
 
-class InMemoryJobQueue:
+class InMemoryJobQueue(JobQueue):
     """In-process JobQueue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
     at-least-once + requeue-on-raise semantics so tests reflect reality.
 

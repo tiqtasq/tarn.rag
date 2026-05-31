@@ -8,8 +8,8 @@ double that runs the whole flow with no Postgres and no pgQueuer.
 from __future__ import annotations
 
 import asyncio
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Protocol, runtime_checkable
 
 from app.domains.ingestion.models import IngestionJob
 
@@ -19,17 +19,21 @@ ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the handler dispatches by s
 JobHandler = Callable[[list[IngestionJob]], Awaitable[None]]
 
 
-@runtime_checkable
-class JobQueue(Protocol):
+class JobQueue(ABC):
     """The minimal queue surface the domain uses. Mechanics (claiming, retries,
     NOTIFY, dead-lettering) belong to the implementation — never reimplement them."""
 
+    @abstractmethod
     async def enqueue(self, job: IngestionJob) -> None: ...
+
+    @abstractmethod
     def set_handler(self, handler: JobHandler) -> None: ...
+
+    @abstractmethod
     async def run(self) -> None: ...
 
 
-class InMemoryJobQueue:
+class InMemoryJobQueue(JobQueue):
     """In-process JobQueue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
     at-least-once + requeue-on-raise semantics so tests reflect reality.
 
@@ -68,7 +72,7 @@ class InMemoryJobQueue:
                     await self._jobs.put((job, attempts + 1))
 
 
-class PgQueuerJobQueue:
+class PgQueuerJobQueue(JobQueue):
     """JobQueue backed by pgQueuer — the only adapter that imports pgQueuer (lazily).
     pgQueuer owns claiming/retries/NOTIFY/dead-lettering; a handler that raises
     propagates so pgQueuer requeues the job (= recovery, D5)."""
