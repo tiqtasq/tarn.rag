@@ -286,16 +286,49 @@ rag-ingestion/
 
 ## Core Models
 
+These four models are **two forms of the things being ingested** — not four unrelated
+types, and not an inheritance hierarchy:
+
+- **In-flight form → `PipelineItem`** (§1): the single uniform type that flows between
+  stages. A *document* (at Load/Clean) and a *chunk* (at Chunk/Enrich/Embed) are both
+  just `PipelineItem`s — which one it is rides in `metadata`, not the type.
+- **At-rest form → `Document`/`Chunk`/`Embedding`** (§2): typed persistence DTOs
+  materialised at the ResultSinks. They never flow.
+
+Worked trace of one ingest (watch the form change):
+
+```
+after Load    PipelineItem(content="<doc text>", metadata={source_id, doc_id})
+after Chunk   PipelineItem(content="<chunk 3>",  metadata={..., chunk_index: 3})
+                  |  ChunkResultSink persists it →
+                  v
+              Chunk(id="c3", parent_doc_id="d1", content="<chunk 3>", chunk_index=3)
+after Embed   Embedding(chunk_id="c3", vector=[...])   # terminal: never flows
+```
+
+So a chunk-in-flight *is* a `PipelineItem`; `Chunk` is its stored row. `Embedding` is
+the exception (Embed is terminal → only ever at-rest). The relations among the four
+are **composition** (`Chunk.parent_doc_id`→`Document`, `Embedding.chunk_id`→`Chunk`)
+and **transformation** (a sink maps a `PipelineItem` into a DTO) — fields and
+functions, not inheritance.
+
 ### 1. PipelineItem (`app/domains/base/models.py`)
 
-The fundamental unit flowing through the ingestion pipeline.
+The single, uniform **transport** type that flows through the pipeline. Every stage
+is `PipelineItem -> Iterator[PipelineItem]`, and the worker / DAG / inline job payload
+are all generic over this one type, so the engine stays stage- and entity-agnostic;
+per-entity structure rides in the loose `metadata` bag. It is deliberately distinct
+from the persistence DTOs (`Document`/`Chunk`/`Embedding`, §2), which never flow — the
+field overlap with `Document` is incidental and diverges for `Chunk`/`Embedding`,
+which is why one uniform transport type beats flowing the three persistence types.
 
 ```python
 from typing import Any
 from pydantic import BaseModel, Field, ConfigDict
 
 class PipelineItem(BaseModel):
-    """A document or chunk flowing through the ingestion pipeline."""
+    """The single, uniform TRANSPORT type that flows through every stage (the engine
+    is generic over it). Distinct from the persistence DTOs, which never flow."""
     
     id: str | None = None  # Assigned by storage layer
     content: str              # The actual text
@@ -320,13 +353,17 @@ class PipelineItem(BaseModel):
 # }
 ```
 
-### 2. Storage Models (`app/domains/base/models.py`)
+### 2. Domain Models (`app/domains/base/models.py`)
 
-Persistent storage representations.
+Typed **persistence DTOs** at the repository boundary — in-memory, not the stored
+rows. They are materialised at the ResultSinks to write rows and reconstructed on
+reads; they **never flow** through the pipeline (that's `PipelineItem`, §1). The
+persistent schema is the SQLAlchemy `Table`s in `DocumentRepository`, which maps each
+model to/from its table (`Document` ↔ `documents`, etc.).
 
 ```python
 class Document(BaseModel):
-    """A source document in persistent storage."""
+    """A source document. Mapped to/from the ``documents`` table by the repository."""
     
     id: str | None = None
     content: str
@@ -335,7 +372,7 @@ class Document(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class Chunk(BaseModel):
-    """A text chunk extracted from a document."""
+    """A text chunk extracted from a document. Mapped to/from the ``chunks`` table."""
     
     id: str | None = None
     parent_doc_id: str          # Foreign key to Document.id
@@ -347,7 +384,7 @@ class Chunk(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
 class Embedding(BaseModel):
-    """A dense vector embedding for a chunk."""
+    """A chunk's dense vector. Mapped to/from the ``embeddings`` table."""
     
     id: str | None = None
     chunk_id: str               # Foreign key to Chunk.id
@@ -1559,8 +1596,8 @@ reads the small `job_status` projection in the repository.
 > to `PgQueuerJobQueue` and should be confirmed against the pinned pgQueuer version.
 
 ```python
+from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from typing import Protocol
 import asyncio
 import asyncpg
 from pgqueuer import QueueManager
@@ -1575,16 +1612,21 @@ ENTRYPOINT = "ingest"   # single pgQueuer entrypoint; the handler dispatches by 
 JobHandler = Callable[[list[IngestionJob]], Awaitable[None]]
 
 
-class JobQueue(Protocol):
+class JobQueue(ABC):
     """The minimal queue surface the domain uses. Mechanics (claiming, retries,
     NOTIFY, dead-lettering) belong to the implementation — never reimplement them."""
 
+    @abstractmethod
     async def enqueue(self, job: IngestionJob) -> None: ...
+
+    @abstractmethod
     def set_handler(self, handler: JobHandler) -> None: ...
+
+    @abstractmethod
     async def run(self) -> None: ...
 
 
-class PgQueuerJobQueue:
+class PgQueuerJobQueue(JobQueue):
     """JobQueue backed by pgQueuer — the ONLY module that imports pgQueuer. pgQueuer
     owns claiming/retries/NOTIFY/dead-lettering; a handler that raises propagates so
     pgQueuer requeues the job (= recovery, D5)."""
@@ -1610,7 +1652,7 @@ class PgQueuerJobQueue:
         await self._qm.run()
 
 
-class InMemoryJobQueue:
+class InMemoryJobQueue(JobQueue):
     """In-process JobQueue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
     at-least-once + requeue-on-raise semantics so tests reflect reality.
 

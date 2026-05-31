@@ -140,8 +140,12 @@ Packaging via `pyproject.toml` + `requirements.txt`.
 
 **Type-annotation convention (Python 3.12):** use builtin generics (`list`, `dict`,
 `tuple`, `type`) and `X | None` — never `typing.List`/`Dict`/`Optional`. Import
-`Iterator`/`Iterable`/`Callable` from `collections.abc`; keep `Any`/`Literal`/
-`Protocol` from `typing`. The spec's code blocks already follow this.
+`Iterator`/`Iterable`/`Callable` from `collections.abc`; keep `Any`/`Literal` from
+`typing`. The spec's code blocks already follow this.
+
+**Interfaces convention:** prefer **ABCs** (`abc.ABC` + `@abstractmethod`) over
+`typing.Protocol` for interfaces/ports — team preference. Implementations inherit the
+ABC explicitly (e.g. `JobQueue`, `DocumentRepository`).
 
 ## Commands
 
