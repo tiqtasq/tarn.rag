@@ -286,6 +286,32 @@ rag-ingestion/
 
 ## Core Models
 
+These four models are **two forms of the things being ingested** — not four unrelated
+types, and not an inheritance hierarchy:
+
+- **In-flight form → `PipelineItem`** (§1): the single uniform type that flows between
+  stages. A *document* (at Load/Clean) and a *chunk* (at Chunk/Enrich/Embed) are both
+  just `PipelineItem`s — which one it is rides in `metadata`, not the type.
+- **At-rest form → `Document`/`Chunk`/`Embedding`** (§2): typed persistence DTOs
+  materialised at the ResultSinks. They never flow.
+
+Worked trace of one ingest (watch the form change):
+
+```
+after Load    PipelineItem(content="<doc text>", metadata={source_id, doc_id})
+after Chunk   PipelineItem(content="<chunk 3>",  metadata={..., chunk_index: 3})
+                  |  ChunkResultSink persists it →
+                  v
+              Chunk(id="c3", parent_doc_id="d1", content="<chunk 3>", chunk_index=3)
+after Embed   Embedding(chunk_id="c3", vector=[...])   # terminal: never flows
+```
+
+So a chunk-in-flight *is* a `PipelineItem`; `Chunk` is its stored row. `Embedding` is
+the exception (Embed is terminal → only ever at-rest). The relations among the four
+are **composition** (`Chunk.parent_doc_id`→`Document`, `Embedding.chunk_id`→`Chunk`)
+and **transformation** (a sink maps a `PipelineItem` into a DTO) — fields and
+functions, not inheritance.
+
 ### 1. PipelineItem (`app/domains/base/models.py`)
 
 The single, uniform **transport** type that flows through the pipeline. Every stage

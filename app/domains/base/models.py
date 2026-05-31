@@ -1,27 +1,40 @@
 """Shared Pydantic models for ingestion and (future) retrieval.
 
-Two distinct KINDS of model live here, deliberately kept separate even though some
-fields coincide:
+These four models are TWO FORMS of the things being ingested — not four unrelated
+types, and not an inheritance hierarchy:
 
-1. ``PipelineItem`` is the single, uniform TRANSPORT type the engine flows. Every
-   stage is ``PipelineItem -> Iterator[PipelineItem]`` and the worker / DAG / inline
-   job payload are all generic over this one type, so the engine stays stage- and
-   entity-agnostic. Per-entity structure (doc id, chunk index, ...) rides in the
-   loose ``metadata`` bag rather than typed fields.
+* IN-FLIGHT form -> ``PipelineItem``. The single, uniform type that flows between
+  stages. A *document* (at Load/Clean) and a *chunk* (at Chunk/Enrich/Embed) are
+  BOTH just ``PipelineItem``s; which one it is rides in ``metadata`` (e.g.
+  ``chunk_index``), not in the type. The engine (stages, worker, DAG, inline job
+  payload) is generic over this one type, so it stays stage- and entity-agnostic.
 
-2. ``Document`` / ``Chunk`` / ``Embedding`` are typed PERSISTENCE records (DTOs) at
-   the repository boundary. They are materialised at the ResultSinks to write rows
-   and reconstructed on reads; they NEVER flow through the pipeline. The persistent
-   schema itself is the SQLAlchemy ``Table``s in ``DocumentRepository``, which maps
-   each model to/from its table (``Document`` <-> ``documents``, etc.).
+* AT-REST form -> ``Document`` / ``Chunk`` / ``Embedding``. Typed persistence records
+  (DTOs) materialised at the ResultSinks to write rows (and reconstructed on reads).
+  They NEVER flow; the persistent schema is the SQLAlchemy ``Table``s in
+  ``DocumentRepository``, which maps each DTO to/from its table.
 
-So ``Document`` is NOT a ``PipelineItem`` and does not inherit from it: the field
-overlap is incidental (a document is just content + metadata), and it diverges for
-``Chunk`` (parent_doc_id, chunk_index) and ``Embedding`` (no content at all) — which
-is exactly why ONE uniform transport type is the right abstraction rather than
-flowing the three persistence types. (Trade-off: a loosely-typed transport keeps the
-engine generic and extensible; the alternative — typed flow, Document -> [Chunk] ->
-Embedding — buys type safety at the cost of a non-generic engine.)
+Worked trace of one ingest — watch the form change:
+
+    after Load    PipelineItem(content="<doc text>", metadata={source_id, doc_id})
+    after Chunk   PipelineItem(content="<chunk 3>",  metadata={..., chunk_index: 3})
+                      |  ChunkResultSink persists it ->
+                      v
+                  Chunk(id="c3", parent_doc_id="d1", content="<chunk 3>", chunk_index=3)
+    after Embed   Embedding(chunk_id="c3", vector=[...])   # terminal: never flows
+
+So a chunk-in-flight IS a ``PipelineItem``; ``Chunk`` is its stored row. ``Embedding``
+is the exception — Embed is the terminal stage, so an embedding is only ever at-rest.
+
+Why two forms, not one: the in-flight form is deliberately loose (one uniform type +
+a metadata bag) so the engine is generic and extensible; the at-rest form is typed so
+the storage contract is explicit and validated (``store_chunks`` guarantees real
+``parent_doc_id`` / ``chunk_index`` fields, not "hopefully in a dict"). The field
+overlap (id/content/metadata) is what makes them look alike, but it is coincidental
+and diverges (``Chunk`` adds FKs, ``Embedding`` has no content) — hence no shared base
+or inheritance. The relations that DO hold are composition (``Chunk.parent_doc_id`` ->
+``Document``, ``Embedding.chunk_id`` -> ``Chunk``) and transformation (a sink maps a
+``PipelineItem`` into a DTO) — expressed by fields and functions, not a hierarchy.
 """
 
 from typing import Any
@@ -30,12 +43,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PipelineItem(BaseModel):
-    """The single, uniform TRANSPORT type that flows through every stage.
+    """The IN-FLIGHT form — the single, uniform type that flows through every stage.
 
-    The engine (stages, worker, DAG, inline job payload) is generic over this one
-    type; per-entity structure rides in ``metadata``. Distinct from — and not a base
-    of — the persistence DTOs below, which never flow (see the module docstring for
-    why the field overlap with Document is intentional).
+    A document or a chunk *in flight* is a PipelineItem (which one rides in
+    ``metadata``). The engine (stages, worker, DAG, inline job payload) is generic
+    over this one type. Distinct from — and not a base of — the at-rest DTOs below,
+    which never flow (see the module docstring for the in-flight/at-rest framing).
     """
 
     id: str | None = None  # assigned by the storage layer
@@ -46,8 +59,8 @@ class PipelineItem(BaseModel):
 
 
 class Document(BaseModel):
-    """A source document (persistence DTO; built at a sink, never flows). Mapped
-    to/from the ``documents`` table by the repository."""
+    """A source document — AT-REST form (persistence DTO; built at a sink, never
+    flows). Mapped to/from the ``documents`` table by the repository."""
 
     id: str | None = None
     content: str
@@ -57,8 +70,8 @@ class Document(BaseModel):
 
 
 class Chunk(BaseModel):
-    """A text chunk (persistence DTO) extracted from a document. Mapped to/from the
-    ``chunks`` table."""
+    """A text chunk — at-rest form (persistence DTO) of a chunk that flowed as a
+    PipelineItem. Mapped to/from the ``chunks`` table."""
 
     id: str | None = None
     parent_doc_id: str
@@ -71,7 +84,8 @@ class Chunk(BaseModel):
 
 
 class Embedding(BaseModel):
-    """A chunk's dense vector (persistence DTO). Mapped to/from the ``embeddings`` table."""
+    """A chunk's dense vector — at-rest ONLY (terminal stage output; never flows).
+    Mapped to/from the ``embeddings`` table."""
 
     id: str | None = None
     chunk_id: str
