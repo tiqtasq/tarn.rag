@@ -17,7 +17,7 @@ postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
 api = ["fastapi", "uvicorn"]
 embed = ["sentence-transformers"]
-dev = ["pytest", "pytest-asyncio"]
+dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [build-system]
 requires = ["setuptools>=68"]

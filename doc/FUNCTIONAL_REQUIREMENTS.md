@@ -170,7 +170,7 @@ rag-ingestion/
 │   │       ├── __init__.py
 │   │       ├── endpoints/
 │   │       │   ├── __init__.py
-│   │       │   └── ingestion.py                 # POST /v1/ingest, GET /v1/jobs/{id}
+│   │       │   └── ingestion.py                 # POST /v1/ingest(/content), GET /v1/ingest/documents/{id}/status
 │   │       ├── schemas.py                       # Pydantic request/response models
 │   │       └── dependencies.py                  # FastAPI dependency injection
 │   │
@@ -213,6 +213,7 @@ rag-ingestion/
 │   │       ├── retriever.py                     # Future: retrieval logic
 │   │       └── service.py                       # Future: RetrievalService
 │   │
+│   ├── factories.py                            # Composition factories (create_ingestion_pipeline, create_sink_registry)
 │   ├── main.py                                  # FastAPI app definition
 │   └── __init__.py
 │
@@ -264,13 +265,12 @@ rag-ingestion/
 │   └── docker-compose.yml                       # Local dev setup
 │
 ├── scripts/
-│   ├── init_db.sh                               # Initialize databases (create tables)
-│   └── run_worker.py                            # CLI to run ingestion workers
+│   └── init_db.sh                               # Initialize databases (create tables)
 │
+├── run_worker.py                                # Worker process composition root (consumer side)
 ├── .env.example                                 # Example environment variables
 ├── requirements.txt                             # Python dependencies
 ├── pyproject.toml                               # Project metadata
-├── pytest.ini                                   # Pytest configuration
 └── README.md
 ```
 
@@ -537,7 +537,8 @@ by stage name):
 - **ChunkMetadataResultSink** (EnrichMetadata) — `update_chunk_metadata`.
 - **EmbeddingResultSink** (Embed) — bulk `store_embeddings` in persistence-batch-sized writes.
 
-`create_sink_registry()` maps the five stage names → sink classes (lives in `config.py`).
+`create_sink_registry()` maps the five stage names → sink classes (lives in `result_sink.py`;
+re-exported from `app/factories.py`).
 
 ---
 
@@ -607,295 +608,64 @@ the batch's stage (the `Batch` already guarantees one). A raised exception propa
 consumer → requeue (recovery, D5).
 ## Services (Facade Pattern)
 
-### IngestionService (`app/domains/ingestion/service.py`)
+**`IngestionService`** (`app/domains/ingestion/service.py`) — the high-level facade used by
+the API (and any CLI). The public surface is **document-centric**: jobs never leak.
 
-```python
-from typing import Any
-from app.domains.ingestion.orchestrator import PipelineOrchestrator, PipelineDAG
-from app.domains.ingestion.pipeline import Pipeline
-from app.domains.base.models import PipelineItem, Document, Chunk, Embedding
-from app.domains.base.repository import DocumentRepository
-from app.core.observability import Observability
-import uuid
-from datetime import datetime
+- `ingest_from_paths(file_paths)` and `ingest_from_content(documents)` shape `PipelineItem`s
+  (assigning a `source_id` == `document_id` when the caller doesn't supply one; a
+  client-supplied `source_id` is honored), then delegate to `orchestrator.ingest_documents`.
+  Both return `{"documents": [{"document_id", "status": "queued"}], "documents_queued": n}`.
+- `get_document_status(document_id, verbose=False)` returns the repository's derived status
+  (`pending | in_progress | complete | failed`), or `None` if unknown. `verbose=True` adds a
+  debug-only `jobs` breakdown (`repository.document_jobs`) — the only place per-job state is
+  exposed.
 
-class IngestionService:
-    """High-level facade for the ingestion pipeline; used by the API and CLI. The
-    public surface is document-centric — jobs never leak to clients."""
-
-    def __init__(self,
-                 pipeline: Pipeline,
-                 orchestrator: PipelineOrchestrator,
-                 repository: DocumentRepository,
-                 observability: Observability | None = None):
-        self.pipeline = pipeline
-        self.orchestrator = orchestrator
-        self.repository = repository          # persistence + document-status reads
-        self.obs = observability
-
-    async def ingest_from_paths(self, file_paths: list[str]) -> dict[str, Any]:
-        """Queue ingestion of documents loaded from file paths. Returns document_ids."""
-        items = []
-        for path in file_paths:
-            source_id = str(uuid.uuid4())
-            items.append(PipelineItem(
-                id=source_id,
-                content="",  # loaded by LoadAndParseStage
-                metadata={
-                    "source_id": source_id,
-                    "source_path": path,
-                    "source_type": self._infer_source_type(path),
-                    "created_at": datetime.utcnow().isoformat(),
-                },
-            ))
-        return await self._queue(items)
-
-    async def ingest_from_content(self, documents: list[dict[str, str]]) -> dict[str, Any]:
-        """Queue ingestion of pre-loaded content. A client-supplied source_id becomes
-        the document_id; otherwise one is assigned."""
-        items = []
-        for doc in documents:
-            content = doc.pop("content")
-            source_id = doc.get("source_id", str(uuid.uuid4()))
-            items.append(PipelineItem(
-                id=source_id,
-                content=content,
-                metadata={"source_id": source_id,
-                          "created_at": datetime.utcnow().isoformat(), **doc},
-            ))
-        return await self._queue(items)
-
-    async def _queue(self, items: list[PipelineItem]) -> dict[str, Any]:
-        document_ids = await self.orchestrator.ingest_documents(items)
-        if self.obs:
-            self.obs.counter("ingestion.documents_queued", len(items))
-        return {
-            "documents": [{"document_id": d, "status": "queued"} for d in document_ids],
-            "documents_queued": len(document_ids),
-        }
-
-    async def get_document_status(self, document_id: str,
-                                  verbose: bool = False) -> dict[str, Any] | None:
-        """Document-level status derived from persisted data (no job concept): present?
-        chunk_count / embedding_count -> pending|in_progress|complete, rolled up to
-        'failed' if any of the document's jobs failed. None if unknown. With
-        verbose=True, adds a debug-only `jobs` breakdown — the only place per-job state
-        is exposed."""
-        status = await self.repository.document_status(document_id)
-        if status is None:
-            return None
-        if verbose:
-            status["jobs"] = await self.repository.document_jobs(document_id)
-        return status
-
-    def _infer_source_type(self, path: str) -> str:
-        ext = path.lower().split(".")[-1]
-        return {"pdf": "pdf", "txt": "text", "text": "text",
-                "html": "html", "htm": "html"}.get(ext, "unknown")
-```
+The facade is thin: it holds the pipeline (reference), the orchestrator (queueing), and the
+repository (status reads); `observability` is optional (typed `Any`, Phase 5).
 
 ---
 
-## API Layer
+## API Layer (`app/api/v1/`)
 
-### Schemas (`app/api/v1/schemas.py`)
+FastAPI, document-centric. Three routes under `APIRouter(prefix="/v1/ingest")`
+(`endpoints/ingestion.py`):
 
-```python
-from pydantic import BaseModel
+- `POST /v1/ingest/` (`IngestRequest{file_paths}`) and `POST /v1/ingest/content`
+  (`IngestFromContentRequest{documents}`) → `IngestResponse{documents: [DocumentRef
+  {document_id, status}], documents_queued}`.
+- `GET /v1/ingest/documents/{document_id}/status?verbose=` →
+  `DocumentStatusResponse{document_id, status, chunk_count, embedding_count, jobs?}`
+  (`jobs` is `list[dict] | None`, present only under `?verbose=true`); **404** when unknown.
 
-class IngestRequest(BaseModel):
-    """Request to ingest documents."""
-    file_paths: list[str]  # Paths to files to ingest
+Schemas live in `schemas.py`; jobs never appear in the contract except that debug `jobs`.
 
-class IngestFromContentRequest(BaseModel):
-    """Request to ingest pre-loaded content."""
-    documents: list[dict[str, str]]  # [{"content": "...", "source_id": "..."}]
-
-class DocumentRef(BaseModel):
-    """A document handle returned to the client (jobs are never exposed)."""
-    document_id: str
-    status: str  # "queued"
-
-class IngestResponse(BaseModel):
-    """Response from an ingest endpoint — document-centric."""
-    documents: list[DocumentRef]
-    documents_queued: int
-
-class DocumentStatusResponse(BaseModel):
-    """Document-level ingestion status (derived from persisted data)."""
-    document_id: str
-    status: str  # pending | in_progress | complete | failed
-    chunk_count: int
-    embedding_count: int
-    jobs: dict | None = None  # debug-only, present when ?verbose=true
-```
-
-### Endpoints (`app/api/v1/endpoints/ingestion.py`)
-
-```python
-from fastapi import APIRouter, Depends, HTTPException
-from app.api.v1.schemas import (
-    IngestRequest, IngestFromContentRequest, IngestResponse, DocumentStatusResponse,
-)
-from app.domains.ingestion.service import IngestionService
-from app.api.v1.dependencies import get_ingestion_service
-
-router = APIRouter(prefix="/v1/ingest", tags=["ingestion"])
-
-@router.post("/", response_model=IngestResponse)
-async def ingest(
-    req: IngestRequest,
-    service: IngestionService = Depends(get_ingestion_service),
-) -> IngestResponse:
-    """Ingest documents from file paths. Returns a document_id per document."""
-    return IngestResponse(**await service.ingest_from_paths(req.file_paths))
-
-@router.post("/content", response_model=IngestResponse)
-async def ingest_content(
-    req: IngestFromContentRequest,
-    service: IngestionService = Depends(get_ingestion_service),
-) -> IngestResponse:
-    """Ingest pre-loaded document content. Returns a document_id per document."""
-    return IngestResponse(**await service.ingest_from_content(req.documents))
-
-@router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)
-async def document_status(
-    document_id: str,
-    verbose: bool = False,   # debug only: include the per-job breakdown
-    service: IngestionService = Depends(get_ingestion_service),
-) -> DocumentStatusResponse:
-    """Document-level ingestion status. Jobs are an internal detail — exposed only
-    under ?verbose=true for debugging."""
-    status = await service.get_document_status(document_id, verbose=verbose)
-    if status is None:
-        raise HTTPException(status_code=404, detail="Document not found")
-    return DocumentStatusResponse(**status)
-```
-
-### Dependency Injection (`app/api/v1/dependencies.py`)
-
-```python
-from fastapi import Depends
-from app.core.config import Settings
-from app.domains.base.postgres_repository import PostgresRepository
-from app.domains.base.sqlite_repository import SqliteRepository
-from app.domains.ingestion.service import IngestionService
-from app.domains.ingestion.orchestrator import PipelineOrchestrator, PipelineDAG
-from app.domains.ingestion.pipeline import Pipeline
-from app.domains.ingestion.result_sink import ResultSink
-from app.domains.ingestion.queue import JobQueue, PgQueuerJobQueue
-from app.core.observability import Observability
-
-async def get_settings() -> Settings:
-    return Settings()
-
-async def get_repository(settings: Settings = Depends(get_settings)):
-    """Return the configured repository (PostgreSQL or SQLite)."""
-    if "postgres" in settings.DOCUMENT_DB_URL:
-        repo = PostgresRepository(settings.DOCUMENT_DB_URL,
-                                  embedding_dimension=settings.EMBEDDING_DIMENSION)
-    else:
-        repo = SqliteRepository(settings.DOCUMENT_DB_URL)
-    await repo.connect()
-    return repo
-
-async def get_job_queue(settings: Settings = Depends(get_settings)) -> PgQueuerJobQueue:
-    """The queue adapter — implements both JobEnqueuer (producer) and JobConsumer
-    (runtime). pgQueuer in prod; swap an InMemoryJobQueue in tests."""
-    return await PgQueuerJobQueue.connect(settings.QUEUE_DB_URL)
-
-async def get_observability(settings: Settings = Depends(get_settings)) -> Observability | None:
-    if settings.OBSERVABILITY_ENABLED:
-        pass  # instantiate based on config
-    return None
-
-async def get_ingestion_pipeline(settings: Settings = Depends(get_settings)) -> Pipeline:
-    from config import create_ingestion_pipeline
-    return create_ingestion_pipeline()
-
-async def get_sink_registry() -> dict[str, type[ResultSink]]:
-    from config import create_sink_registry
-    return create_sink_registry()
-
-async def get_orchestrator(
-    pipeline: Pipeline = Depends(get_ingestion_pipeline),
-    enqueuer: JobEnqueuer = Depends(get_job_queue),
-    repository = Depends(get_repository),
-    sink_registry: dict[str, type[ResultSink]] = Depends(get_sink_registry),
-) -> PipelineOrchestrator:
-    """Return the orchestrator (enqueues via JobEnqueuer; owns finalize/status/fan-out, D5)."""
-    return PipelineOrchestrator(PipelineDAG(pipeline.stages), enqueuer, repository, sink_registry)
-
-async def get_ingestion_service(
-    pipeline: Pipeline = Depends(get_ingestion_pipeline),
-    orchestrator: PipelineOrchestrator = Depends(get_orchestrator),
-    repository = Depends(get_repository),
-    observability = Depends(get_observability),
-) -> IngestionService:
-    return IngestionService(pipeline, orchestrator, repository, observability)
-```
+**DI / composition (`dependencies.py`, `app/main.py`, `run_worker.py`).** The wiring is built
+**once per process**, not per request: `make_repository(settings)` (Postgres on a `postgres`
+URL, else SQLite; heavy backends imported lazily; connects the engine), `make_queue(settings)`
+(`PgQueuerJobQueue.connect`), and `build_service` / `build_orchestrator` (which use
+`create_ingestion_pipeline` + `create_sink_registry`). The API's `lifespan` (`create_app()` in
+`app/main.py`) builds the `IngestionService` once and stores it on `app.state`; the request
+dependency `get_ingestion_service(request)` just returns it (tests override it with an
+InMemory + SQLite wiring — the real lifespan does not run under httpx's ASGI transport).
+`run_worker.py` is the consumer composition root: the same builders, then
+`consumer.set_handler(worker.handle_batch)` + `await consumer.run()`. (This supersedes the
+earlier per-request DI sketch, which would have reconnected the DB on every call.) The API
+process only enqueues root jobs; downstream fan-out happens in the worker process's
+orchestrator — both share the same databases.
 
 ---
 
 ## Configuration
 
-### Settings (`app/core/config.py`)
-
-```python
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-class Settings(BaseSettings):
-    """Application configuration from environment variables."""
-    
-    # FastAPI
-    APP_NAME: str = "RAG Ingestion"
-    APP_VERSION: str = "0.1.0"
-    DEBUG: bool = False
-    
-    # Databases
-    QUEUE_DB_URL: str  # pgQueuer queue database
-    DOCUMENT_DB_URL: str  # Document/chunk/embedding storage
-    
-    # Ingestion
-    EMBEDDING_MODEL: str = "sentence-transformers/all-minilm-l6-v2"
-    EMBEDDING_DIMENSION: int = 384  # MUST match the model; sets the pgvector column width
-    CHUNK_SIZE: int = 512
-    CHUNK_OVERLAP: int = 50
-    EMBEDDING_BATCH_SIZE: int = 32
-    
-    # Workers
-    WORKER_QUEUE_TIMEOUT_SECONDS: int = 30
-    WORKER_CONCURRENCY: int = 4
-    
-    # Observability
-    OBSERVABILITY_ENABLED: bool = False
-    OBSERVABILITY_TYPE: str | None = None  # "prometheus", "structured_logging"
-    
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
-```
-
-### .env.example
-
-```bash
-DEBUG=true
-
-# Queue database
-QUEUE_DB_URL=postgresql://user:password@localhost:5432/rag_queue
-
-# Document/embedding storage
-DOCUMENT_DB_URL=postgresql://user:password@localhost:5432/rag_docs
-
-# Embedding
-EMBEDDING_MODEL=sentence-transformers/all-minilm-l6-v2
-EMBEDDING_DIMENSION=384
-EMBEDDING_BATCH_SIZE=32
-
-# Workers
-WORKER_CONCURRENCY=4
-
-# Observability
-OBSERVABILITY_ENABLED=false
-```
+**`Settings`** (`app/core/config.py`, pydantic-settings; cached `get_settings()`):
+`QUEUE_DB_URL` and `DOCUMENT_DB_URL` are required (two separate stores). Embedding
+(`EMBEDDING_MODEL`; `EMBEDDING_DIMENSION` — must match the model and sets the pgvector column
+width; `CHUNK_SIZE`, `CHUNK_OVERLAP`, `EMBEDDING_BATCH_SIZE`), worker, and observability fields
+have defaults. `model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)`. The
+composition **factories** live in **`app/factories.py`** (wiring, not config):
+`create_ingestion_pipeline(settings=None)` builds the five configured stages, and
+`create_sink_registry` is re-exported from `result_sink.py`. See **`.env.example`** at the
+repo root for the environment template.
 
 ---
 
@@ -1034,10 +804,11 @@ class NoOpObservability(Observability):
 - [ ] Test orchestrator finalize()/ack/downstream-enqueue and persistence-failure recovery (D5)
 
 ### Phase 4: Services & API
-- [ ] Implement IngestionService (facade)
-- [ ] Implement API endpoints (POST /v1/ingest, GET /v1/ingest/jobs/{id})
-- [ ] Implement dependency injection
-- [ ] Test end-to-end API flow
+- [x] Implement IngestionService (facade) — document-centric; jobs never leak
+- [x] Implement API endpoints (POST /v1/ingest/ and /content, GET /v1/ingest/documents/{document_id}/status)
+- [x] Implement configuration (`Settings`, `app/core/config.py`) + composition factories (`app/factories.py`)
+- [x] Implement dependency injection + composition roots (`app/main.py` API, `run_worker.py` worker)
+- [x] Test end-to-end API flow (httpx ASGITransport over InMemoryJobQueue + SQLite)
 
 ### Phase 5: Observability
 - [ ] Implement observability interface and NoOpObservability

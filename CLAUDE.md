@@ -10,7 +10,7 @@ source of truth for structure, models, interfaces, and behavior, and follow its
 phased **Implementation Checklist** (Phases 1–6), since later layers depend on
 earlier ones (models → repository → stages → orchestration → service/API).
 
-**Done (Phases 1–2, tested on SQLite, all green):**
+**Done (Phases 1–4, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
   SQLAlchemy Core repository (`base/repository.py` + `sqlite_repository.py` tested,
   `postgres_repository.py` compiles but needs the `postgres` extra); `ingestion/models.py`
@@ -25,9 +25,29 @@ earlier ones (models → repository → stages → orchestration → service/API
   (`IngestionWorker`, a pure job handler, depends only on the batch ABCs). End-to-end test
   (`tests/integration/test_ingestion_e2e.py`) runs a doc through the whole pipeline on
   `InMemoryJobQueue` + SQLite, incl. fan-out and idempotent re-ingest.
+- Phase 4: `core/config.py` (`Settings` + cached `get_settings`); `app/factories.py`
+  (`create_ingestion_pipeline` from Settings + re-export `create_sink_registry`);
+  `ingestion/service.py` (`IngestionService` facade — document-centric); `api/v1/`
+  (`schemas.py`, `endpoints/ingestion.py`, `dependencies.py`); `app/main.py` (`create_app` +
+  lifespan); `run_worker.py` (consumer composition root). API tested via httpx
+  ASGITransport over `InMemoryJobQueue` + SQLite (`tests/api/v1/test_ingestion_api.py`,
+  `tests/domains/ingestion/test_service.py`). **`fastapi` + `httpx` are now installed** in
+  the env (httpx added to the `dev` extra).
 
-**Not yet built:** service facade, API + schemas, DI/`dependencies.py`, observability,
-the top-level `config.py` factory (`create_ingestion_pipeline`) and `Settings`.
+**Not yet built:** observability (Phase 5: the `Observability` ABC / `NoOpObservability` +
+wiring; the service/worker currently take `observability: Any = None`).
+
+**Phase-4 notes:** **config vs wiring split** — `Settings` live in `app/core/config.py`; the
+composition *factories* live in **`app/factories.py`** (they're wiring, not config). **Wire once,
+not per request** — the API `lifespan` and `run_worker.py` build the repo/queue/orchestrator
+**once** via shared `make_repository`/`make_queue`/`build_*` helpers in
+`api/v1/dependencies.py` and store the service on `app.state`; the request dep
+`get_ingestion_service(request)` just returns it (tests override it). This intentionally
+replaces the spec's illustrative per-request DI (which would reconnect the DB each call).
+The API process only *enqueues* root jobs; downstream fan-out runs in the worker process's
+orchestrator. `DocumentStatusResponse.jobs` is `list[dict] | None` (repo's `document_jobs`
+returns a list, not the spec's `dict`). The API's `create_app()` needs no env (settings are
+read lazily in the lifespan, which httpx's ASGI transport doesn't trigger).
 
 Implementation notes: `_upsert_document` is a **concrete portable** base method (not a
 per-dialect hook — `ON CONFLICT` → portable select-then-update/insert); `store_document`
@@ -190,10 +210,12 @@ conda run -n tarn.rag python -m py_compile $(find app -name "*.py")
 ```
 
 Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy`, `aiosqlite`, `numpy`,
-`pytest`, `pytest-asyncio`) are installed in the env. The Postgres/pgQueuer/API/embed
-backends are optional extras in `pyproject.toml` (`postgres`, `queue`, `api`, `embed`)
-and are NOT installed yet — keep the SQLite test path free of those imports (the
-`postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily).
+`pytest`, `pytest-asyncio`) plus **`fastapi` + `httpx`** (Phase 4) are installed in the env.
+The Postgres/pgQueuer/embed backends are optional extras in `pyproject.toml` (`postgres`,
+`queue`, `embed`) and are **NOT installed** — keep the SQLite test path free of those imports
+(the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily, and
+`api/v1/dependencies.py` imports the Postgres repo / pgQueuer adapter lazily inside the
+`make_*` builders). The API tests run on `InMemoryJobQueue` + SQLite (DI overridden).
 
-Tests live flat in `tests/` for now (`test_repository.py`, `test_queue.py`); the
-spec's deeper `tests/unit|integration/...` layout can come as the suite grows.
+Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`, `tests/api/v1/`); the
+suite runs entirely on SQLite + InMemory queue (no Postgres/pgQueuer needed).
