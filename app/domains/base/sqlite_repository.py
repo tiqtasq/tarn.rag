@@ -10,7 +10,7 @@ import json
 from typing import Any
 
 import numpy as np
-from sqlalchemy import Text, select
+from sqlalchemy import Text, event, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domains.base.models import Chunk
@@ -19,6 +19,16 @@ from app.domains.base.repository import DocumentRepository
 
 class SqliteRepository(DocumentRepository):
     """SQLite adapter; vectors as JSON, in-memory cosine search."""
+
+    def __init__(self, connection_url: str, embedding_dimension: int = 384):
+        super().__init__(connection_url, embedding_dimension)
+        # SQLite enforces foreign keys / ON DELETE CASCADE only when
+        # ``PRAGMA foreign_keys=ON``, which is per-connection.
+        @event.listens_for(self.engine.sync_engine, "connect")
+        def _enable_foreign_keys(dbapi_connection, _record):  # noqa: ANN001
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
 
     def _driver_url(self, url: str) -> str:
         path = url.replace("sqlite:///", "").replace("sqlite://", "")

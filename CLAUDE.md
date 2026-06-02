@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-Implementation is **underway** (Phases 1–2 done). The authoritative design is
+Implementation is **underway** (Phases 1–3 done). The authoritative design is
 `doc/FUNCTIONAL_REQUIREMENTS.md` ("RAG Ingestion Pipeline" spec) — treat it as the
 source of truth for structure, models, interfaces, and behavior, and follow its
 phased **Implementation Checklist** (Phases 1–6), since later layers depend on
@@ -14,21 +14,32 @@ earlier ones (models → repository → stages → orchestration → service/API
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
   SQLAlchemy Core repository (`base/repository.py` + `sqlite_repository.py` tested,
   `postgres_repository.py` compiles but needs the `postgres` extra); `ingestion/models.py`
-  (`IngestionJob`); `ingestion/queue.py` (`JobQueue` ABC + `InMemoryJobQueue` + lazy
-  `PgQueuerJobQueue`).
+  (`IngestionJob`); `ingestion/queue.py` (`JobEnqueuer` + `JobConsumer` ABCs +
+  `InMemoryJobQueue` + lazy `PgQueuerJobQueue`).
 - Phase 2: `ingestion/pipeline.py` (`PipelineStage`/`MapperStage`/`ChunkerStage`/
   `FilterStage`/`Pipeline`); `ingestion/result_sink.py` (`ResultSink` + 5 sinks +
   `create_sink_registry`); `ingestion/stages/` (Load/Clean/Chunk/Enrich/Embed).
+- Phase 3: `ingestion/batch.py` (`BatchContext` + `BatchCoordinator` ABCs — the
+  worker↔orchestration handshake); `ingestion/orchestrator.py` (`PipelineDAG` +
+  `PipelineOrchestrator`, the `BatchCoordinator`); `ingestion/worker.py`
+  (`IngestionWorker`, a pure job handler, depends only on the batch ABCs). End-to-end test
+  (`tests/integration/test_ingestion_e2e.py`) runs a doc through the whole pipeline on
+  `InMemoryJobQueue` + SQLite, incl. fan-out and idempotent re-ingest.
 
-**Not yet built:** orchestrator, worker, service, API, DI, observability, the
-`config.py` factories (`create_ingestion_pipeline`) and `Settings`. Implementation
-notes: `_upsert_document` is a **concrete portable** base method (not a per-dialect
-hook — `ON CONFLICT` → portable select-then-update/insert); schema creation uses two
-hooks (`_before_create_schema`/`_after_create_schema`) so pgvector's extension is made
-before tables and indexes after; stages run `validate()` inside `super().__init__()`,
-so a stage must set any attrs `validate()` reads **before** calling super; `EmbedStage`
-lazy-loads sentence-transformers (tests set `stage._model` to a fake `encode`). Use
-`datetime.now(UTC)`, not the spec's `datetime.utcnow()` (deprecated on 3.12).
+**Not yet built:** service facade, API + schemas, DI/`dependencies.py`, observability,
+the top-level `config.py` factory (`create_ingestion_pipeline`) and `Settings`.
+
+Implementation notes: `_upsert_document` is a **concrete portable** base method (not a
+per-dialect hook — `ON CONFLICT` → portable select-then-update/insert); `store_document`
+**deletes the doc's chunks on (re)store** so the distributed Load-then-Chunk flow is
+idempotent — and `SqliteRepository.__init__` enables `PRAGMA foreign_keys=ON` (per
+connection) so the cascade actually removes the chunks' embeddings; schema creation
+uses two hooks (`_before_create_schema`/`_after_create_schema`) so pgvector's extension
+is made before tables and indexes after; stages run `validate()` inside
+`super().__init__()`, so a stage must set any attrs `validate()` reads **before** super;
+`EmbedStage` lazy-loads sentence-transformers (tests set `stage._model` to a fake
+`encode`; e2e uses a `FakeEmbedStage` in the registry). Use `datetime.now(UTC)`, not the
+spec's `datetime.utcnow()` (deprecated on 3.12).
 
 ## What This System Is
 
@@ -51,27 +62,37 @@ Decisions" section (D1–D6) holds the full rationale; this is the summary.
 - **Distributed execution, one job per `(item, stage)` (D1).** Fan-out stages
   enqueue one downstream job per output item (chunker → *m* chunks → *m* embed
   jobs). In-flight items travel **inline in the job payload** — no temp item store.
-- **Job granularity (D2):** one chunk per job. The domain depends on a tiny **`JobQueue`
-  port** (`enqueue` / `set_handler` / `run`); the worker is a registered handler, not a
-  puller. **`PgQueuerJobQueue`** is the only file that imports pgQueuer (pgQueuer owns
+- **Job granularity (D2):** one chunk per job. The domain depends on two role-segregated
+  ports — **`JobEnqueuer`** (`enqueue`, the producer, used by the orchestrator) and
+  **`JobConsumer`** (`set_handler` / `run`, the consumer runtime); the worker is a registered
+  handler, not a puller. **`PgQueuerJobQueue`** is the only file that imports pgQueuer (pgQueuer owns
   SKIP LOCKED / retries / NOTIFY / dead-lettering); **`InMemoryJobQueue`** is the test
-  double — the whole flow runs on it + SQLite with no Postgres/pgQueuer. A dispatch is
-  one job (or a list under batch dispatch, restoring cross-document batching). Compute
-  batch ⊥ the sink's persistence batch (two-tier batching). Keep the port a delegating
-  seam — never reimplement queue mechanics in it.
+  double — the whole flow runs on it + SQLite with no Postgres/pgQueuer. The consumer
+  hands the worker a **`Batch`** (`ingestion/models.py`) — a **homogeneous** unit (all jobs
+  share one `stage_name`; `Batch`'s constructor enforces it, so the worker never re-checks).
+  Today every dispatch is one job; batch dispatch must group same-stage claims (restoring
+  cross-document batching). Compute batch ⊥ the sink's persistence batch (two-tier
+  batching). Keep the port a delegating seam — never reimplement queue mechanics in it.
 - **Three-layer split (D3):**
-  - **Worker = compute only.** A pgQueuer handler: runs the pure stage, groups work
-    into model calls as it sees fit, hands results to a `ResultSink`. Never persists,
-    acks, enqueues, or retries. Raising → pgQueuer requeues (recovery).
-  - **`ResultSink` = persistence (D4).** Output-side sink; batches and writes
-    results. `submit(results)` + `close()` are called by the **worker** (sync,
-    buffer-only). `async finalize() -> FinalizationOutcome` is called by the
-    **orchestrator only**. Replaces the spec's input-side `BatchingWrapper`.
-  - **Orchestrator = lifecycle + DAG walking (D5).** After the worker `close()`s, it
-    `await`s `sink.finalize()`; on success it records status + enqueues downstream
-    jobs (pgQueuer acks on handler return); on failure it records `failed` and
-    **raises** so pgQueuer requeues. Dependencies are implicit (downstream enqueued
-    only after upstream persists).
+  - **Worker = compute only.** A pure job handler (holds only the coordinator, no queue,
+    no run loop — the composition root registers `worker.handle_batch` on a `JobConsumer`
+    and runs the consumer's loop): `handle_batch(batch)` gets a homogeneous `Batch`, gets the
+    stage via `BatchCoordinator.get_stage(batch.stage_name)` (the DAG's **long-lived**
+    instance — so EmbedStage's model loads once, not per job; the worker holds no stage
+    registry and the job carries no `stage_config`), runs it, and reports to a
+    **`BatchContext`** from `begin_batch(batch)` (a per-batch unit of work —
+    `app/domains/ingestion/batch.py`): `ctx.submit()` the results, then `ctx.complete()`
+    (or `ctx.fail()` on compute error and re-raise). The worker depends **only** on the
+    two batch ABCs — never the orchestrator, repo, queue, or `ResultSink`. Raising →
+    queue requeues (recovery).
+  - **`ResultSink` = persistence (D4).** Output-side sink; batches and writes results.
+    Kept pure and **composed inside the `BatchContext`** — the worker never touches it.
+    `async finalize() -> FinalizationOutcome`. Replaces the spec's `BatchingWrapper`.
+  - **Orchestrator = `BatchCoordinator` + lifecycle + DAG walking (D5).** `begin_batch`
+    records `processing` and builds the context; `ctx.complete()` finalizes the sink,
+    records status, and enqueues downstream jobs — or records `failed` and **raises**
+    so the queue requeues. (`PipelineOrchestrator` also owns `ingest_documents`.)
+    Dependencies are implicit (downstream enqueued only after upstream persists).
 - **Stages stay pure (D6)** — no DB/queue access. **pgQueuer owns the queue tables**;
   the API's document status comes from a small document-keyed **`job_status`
   projection** in the repository (a read-model, not a queue).
@@ -150,7 +171,7 @@ Packaging via `pyproject.toml` + `requirements.txt`.
 
 **Interfaces convention:** prefer **ABCs** (`abc.ABC` + `@abstractmethod`) over
 `typing.Protocol` for interfaces/ports — team preference. Implementations inherit the
-ABC explicitly (e.g. `JobQueue`, `DocumentRepository`).
+ABC explicitly (e.g. `JobEnqueuer`/`JobConsumer`, `DocumentRepository`).
 
 ## Commands
 
