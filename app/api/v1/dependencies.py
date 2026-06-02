@@ -12,6 +12,7 @@ from __future__ import annotations
 from fastapi import Request
 
 from app.core.config import Settings, get_settings
+from app.core.observability import NoOpObservability, Observability
 from app.domains.base.repository import DocumentRepository
 from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from app.domains.ingestion.queue import JobEnqueuer, PgQueuerJobQueue
@@ -22,10 +23,18 @@ __all__ = [
     "get_settings",
     "make_repository",
     "make_queue",
+    "get_observability",
     "build_orchestrator",
     "build_service",
     "get_ingestion_service",
 ]
+
+
+def get_observability(settings: Settings) -> Observability | None:
+    """The process observability, or ``None`` when disabled (call sites guard ``self.obs``).
+    When enabled we return ``NoOpObservability`` for now — real adapters (Prometheus,
+    structured logging) are future work and plug in here behind the same ABC."""
+    return NoOpObservability() if settings.OBSERVABILITY_ENABLED else None
 
 
 async def make_repository(settings: Settings) -> DocumentRepository:
@@ -54,25 +63,33 @@ async def make_queue(settings: Settings) -> PgQueuerJobQueue:
 
 
 def build_orchestrator(
-    settings: Settings, enqueuer: JobEnqueuer, repository: DocumentRepository
+    settings: Settings,
+    enqueuer: JobEnqueuer,
+    repository: DocumentRepository,
+    observability: Observability | None = None,
 ) -> PipelineOrchestrator:
     """Assemble the orchestrator (DAG + sinks) — the worker's BatchCoordinator and the
     service's queueing engine."""
     pipeline = create_ingestion_pipeline(settings)
     return PipelineOrchestrator(
-        PipelineDAG(pipeline.stages), enqueuer, repository, create_sink_registry()
+        PipelineDAG(pipeline.stages), enqueuer, repository, create_sink_registry(),
+        observability=observability,
     )
 
 
 def build_service(
-    settings: Settings, enqueuer: JobEnqueuer, repository: DocumentRepository
+    settings: Settings,
+    enqueuer: JobEnqueuer,
+    repository: DocumentRepository,
+    observability: Observability | None = None,
 ) -> IngestionService:
     """Assemble the full facade for the API process."""
     pipeline = create_ingestion_pipeline(settings)
     orchestrator = PipelineOrchestrator(
-        PipelineDAG(pipeline.stages), enqueuer, repository, create_sink_registry()
+        PipelineDAG(pipeline.stages), enqueuer, repository, create_sink_registry(),
+        observability=observability,
     )
-    return IngestionService(pipeline, orchestrator, repository)
+    return IngestionService(pipeline, orchestrator, repository, observability)
 
 
 def get_ingestion_service(request: Request) -> IngestionService:

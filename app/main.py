@@ -13,7 +13,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.v1.dependencies import build_service, make_queue, make_repository
+from app.api.v1.dependencies import (
+    build_service,
+    get_observability,
+    make_queue,
+    make_repository,
+)
 from app.api.v1.endpoints import ingestion
 from app.core.config import Settings, get_settings
 
@@ -25,7 +30,10 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     repository = await make_repository(settings)
     enqueuer = await make_queue(settings)
-    app.state.ingestion_service = build_service(settings, enqueuer, repository)
+    observability = get_observability(settings)
+    app.state.ingestion_service = build_service(
+        settings, enqueuer, repository, observability
+    )
     logger.info("Ingestion API ready (%s v%s)", settings.APP_NAME, settings.APP_VERSION)
     try:
         yield

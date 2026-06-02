@@ -10,7 +10,7 @@ source of truth for structure, models, interfaces, and behavior, and follow its
 phased **Implementation Checklist** (Phases 1–6), since later layers depend on
 earlier ones (models → repository → stages → orchestration → service/API).
 
-**Done (Phases 1–4, tested on SQLite, all green):**
+**Done (Phases 1–5, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
   SQLAlchemy Core repository (`base/repository.py` + `sqlite_repository.py` tested,
   `postgres_repository.py` compiles but needs the `postgres` extra); `ingestion/models.py`
@@ -33,9 +33,17 @@ earlier ones (models → repository → stages → orchestration → service/API
   ASGITransport over `InMemoryJobQueue` + SQLite (`tests/api/v1/test_ingestion_api.py`,
   `tests/domains/ingestion/test_service.py`). **`fastapi` + `httpx` are now installed** in
   the env (httpx added to the `dev` extra).
+- Phase 5: `core/observability.py` (`Observability` ABC — abstract `log`/`counter`/`gauge` +
+  concrete `timer` contextmanager — + `NoOpObservability`). Obs is held by the **worker**
+  (per-stage `timer`/throughput counters + error counter/`log`) and the **orchestrator**
+  (lifecycle: `ingest.documents`/`ingest.jobs_enqueued`, per-stage `completed`/`failed`/
+  `persist_failed`); **stages stay pure** (no obs — the worker observes them). Wired via
+  `get_observability(settings)` → `build_orchestrator`/`build_service` + the worker. Tests:
+  `tests/core/test_observability.py`, `tests/domains/ingestion/test_observability_wiring.py`
+  (recording fake asserts emission on success + compute failure).
 
-**Not yet built:** observability (Phase 5: the `Observability` ABC / `NoOpObservability` +
-wiring; the service/worker currently take `observability: Any = None`).
+**Not yet built:** the real `Observability` adapters (Prometheus, structured logging) — future
+work behind the ABC; `get_observability` returns `NoOpObservability` when enabled for now.
 
 **Phase-4 notes:** **config vs wiring split** — `Settings` live in `app/core/config.py`; the
 composition *factories* live in **`app/factories.py`** (they're wiring, not config). **Wire once,

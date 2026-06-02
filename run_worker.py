@@ -14,7 +14,12 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.api.v1.dependencies import build_orchestrator, make_queue, make_repository
+from app.api.v1.dependencies import (
+    build_orchestrator,
+    get_observability,
+    make_queue,
+    make_repository,
+)
 from app.core.config import get_settings
 from app.domains.ingestion.worker import IngestionWorker
 
@@ -26,9 +31,11 @@ async def main() -> None:
     settings = get_settings()
     repository = await make_repository(settings)
     queue = await make_queue(settings)
-    orchestrator = build_orchestrator(settings, queue, repository)
+    observability = get_observability(settings)
+    orchestrator = build_orchestrator(settings, queue, repository, observability)
 
-    worker = IngestionWorker(orchestrator)  # pure handler; coordinator = orchestrator
+    # pure handler; coordinator = orchestrator. Worker observes compute; orchestrator the lifecycle.
+    worker = IngestionWorker(orchestrator, observability=observability)
     queue.set_handler(worker.handle_batch)  # the only wiring the worker needs
     logger.info("Ingestion worker %s started", worker.worker_id)
     try:

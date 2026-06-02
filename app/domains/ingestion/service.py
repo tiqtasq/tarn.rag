@@ -78,6 +78,7 @@ class IngestionService:
         document_ids = await self.orchestrator.ingest_documents(items)
         if self.obs:
             self.obs.counter("ingestion.documents_queued", len(items))
+            await self.obs.log("info", "documents queued", count=len(document_ids))
         return {
             "documents": [{"document_id": d, "status": "queued"} for d in document_ids],
             "documents_queued": len(document_ids),

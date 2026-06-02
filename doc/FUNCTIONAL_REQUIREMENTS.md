@@ -671,49 +671,23 @@ repo root for the environment template.
 
 ## Observability
 
-### Interface (`app/core/observability.py`)
+**Interface (`app/core/observability.py`).** `Observability` (ABC): abstract `async
+log(level, message, **context)`, `counter(name, value=1, tags=None)`, `gauge(name, value,
+tags=None)`, plus a **concrete** `timer(name, tags=None)` `@contextmanager` that records
+elapsed seconds as `{name}.seconds` via `gauge` (so every adapter — and the no-op — gets it
+for free). `NoOpObservability` implements the three abstracts as no-ops.
 
-```python
-from abc import ABC, abstractmethod
-from contextlib import contextmanager
-from typing import Any
-import time
+**Who holds it (and who doesn't).** Observability is **optional and None-able** — core logic
+runs with `observability=None`, and every call site guards `self.obs`. It is held by the
+**worker** (compute: per-stage `timer`, throughput counters, an error counter + `log` on
+compute failure) and the **orchestrator** (lifecycle: `ingest.documents` /
+`ingest.jobs_enqueued`, and per-stage `completed` / `failed` / `persist_failed` from the
+batch context). **Stages stay pure (D6)** — they take no obs; the worker observes them from
+the outside (it knows the stage name, item counts, and timing). The composition roots build it
+via `get_observability(settings)` (returns `NoOpObservability` when `OBSERVABILITY_ENABLED`,
+else `None`) and thread it through `build_orchestrator` / `build_service` and into the worker.
 
-class Observability(ABC):
-    """Abstract observability interface for metrics, logging, tracing."""
-    
-    @abstractmethod
-    async def log(self, level: str, message: str, **context):
-        """Log a message with context. Level: debug, info, warning, error."""
-        pass
-    
-    @abstractmethod
-    def counter(self, metric_name: str, value: int = 1, tags: dict[str, str] | None = None):
-        """Increment a counter metric."""
-        pass
-    
-    @abstractmethod
-    def gauge(self, metric_name: str, value: float, tags: dict[str, str] | None = None):
-        """Set a gauge metric."""
-        pass
-    
-    @contextmanager
-    def timer(self, metric_name: str, tags: dict[str, str] | None = None):
-        """Context manager for timing operations."""
-        start = time.time()
-        try:
-            yield
-        finally:
-            elapsed = time.time() - start
-            self.gauge(f"{metric_name}.seconds", elapsed, tags=tags)
-
-class NoOpObservability(Observability):
-    """No-op implementation. Use for development/testing."""
-    
-    async def log(self, level, message, **context): pass
-    def counter(self, metric_name, value=1, tags=None): pass
-    def gauge(self, metric_name, value, tags=None): pass
-```
+> Real adapters (Prometheus, structured logging) are future work and plug in behind this ABC.
 
 ---
 
@@ -811,17 +785,17 @@ class NoOpObservability(Observability):
 - [x] Test end-to-end API flow (httpx ASGITransport over InMemoryJobQueue + SQLite)
 
 ### Phase 5: Observability
-- [ ] Implement observability interface and NoOpObservability
-- [ ] Add observability calls to worker and stages
+- [x] Implement observability interface and NoOpObservability
+- [x] Add observability calls to the worker (compute) and orchestrator (lifecycle) — stages stay pure (D6)
 - [ ] (Future) Implement Prometheus adapter
 - [ ] (Future) Implement structured logging adapter
 
 ### Phase 6: Testing & Documentation
-- [ ] Unit tests for each stage
-- [ ] Integration tests for full pipeline
-- [ ] Test repository transactional behavior
-- [ ] Write API documentation
-- [ ] Write README with setup instructions
+- [x] Unit tests for each stage (`tests/domains/ingestion/test_stages.py`)
+- [x] Integration tests for full pipeline (`tests/integration/test_ingestion_e2e.py` + service/API e2e)
+- [x] Test repository transactional behavior (`test_store_document_is_atomic` + idempotency/cascade)
+- [x] Write API documentation (`doc/API_SPEC.md`, incl. local startup)
+- [ ] Write README with setup instructions (optional — setup lives in `doc/API_SPEC.md`)
 
 ---
 
