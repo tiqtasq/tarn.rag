@@ -1,8 +1,10 @@
-"""Job queue port + adapters.
+"""Job queue ports + adapters.
 
-The domain depends only on the tiny ``JobQueue`` port. ``PgQueuerJobQueue`` is the
-only place that touches pgQueuer (lazily imported); ``InMemoryJobQueue`` is a test
-double that runs the whole flow with no Postgres and no pgQueuer.
+The queue surface is segregated by role: ``JobEnqueuer`` (producer — the orchestrator
+puts jobs on the queue) and ``JobConsumer`` (the runtime — register a handler and run
+the dispatch loop, which belongs to the queue technology). One adapter implements both:
+``PgQueuerJobQueue`` (the only place that touches pgQueuer, lazily imported) and
+``InMemoryJobQueue`` (a test double that runs the whole flow with no Postgres/pgQueuer).
 """
 
 from __future__ import annotations
@@ -11,20 +13,28 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 
-from app.domains.ingestion.models import IngestionJob
+from app.domains.ingestion.models import Batch, IngestionJob
 
-ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the handler dispatches by stage_name
+ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the consumer forms homogeneous Batches
 
-# A handler receives a BATCH of jobs (one job, or several under batch dispatch).
-JobHandler = Callable[[list[IngestionJob]], Awaitable[None]]
+# A handler receives a Batch — a homogeneous unit (all jobs share one stage_name). Today
+# every dispatch is a single job; batch dispatch must group claims by stage_name (Batch
+# enforces it). Forming the Batch is the consumer's job; the worker just runs it.
+JobHandler = Callable[[Batch], Awaitable[None]]
 
 
-class JobQueue(ABC):
-    """The minimal queue surface the domain uses. Mechanics (claiming, retries,
-    NOTIFY, dead-lettering) belong to the implementation — never reimplement them."""
+class JobEnqueuer(ABC):
+    """Producer side — put jobs on the queue. Used by the orchestrator."""
 
     @abstractmethod
     async def enqueue(self, job: IngestionJob) -> None: ...
+
+
+class JobConsumer(ABC):
+    """Consumer/runtime side — register a handler and run the dispatch loop. The loop
+    itself belongs to the queue technology (e.g. pgQueuer's QueueManager); the worker
+    is just a handler, and the composition root calls ``set_handler`` then ``run``.
+    Mechanics (claiming, retries, NOTIFY, dead-lettering) belong to the implementation."""
 
     @abstractmethod
     def set_handler(self, handler: JobHandler) -> None: ...
@@ -33,8 +43,8 @@ class JobQueue(ABC):
     async def run(self) -> None: ...
 
 
-class InMemoryJobQueue(JobQueue):
-    """In-process JobQueue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
+class InMemoryJobQueue(JobEnqueuer, JobConsumer):
+    """In-process job queue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
     at-least-once + requeue-on-raise semantics so tests reflect reality.
 
     ``requeue_on_error=True`` (default) re-queues a failing job up to ``max_attempts``
@@ -62,7 +72,7 @@ class InMemoryJobQueue(JobQueue):
         while not self._jobs.empty():
             job, attempts = await self._jobs.get()
             try:
-                await self._handler([job])
+                await self._handler(Batch([job]))  # one job per dispatch today
             except Exception:
                 if not self.requeue_on_error:
                     raise
@@ -72,8 +82,8 @@ class InMemoryJobQueue(JobQueue):
                     await self._jobs.put((job, attempts + 1))
 
 
-class PgQueuerJobQueue(JobQueue):
-    """JobQueue backed by pgQueuer — the only adapter that imports pgQueuer (lazily).
+class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
+    """Queue backed by pgQueuer — the only adapter that imports pgQueuer (lazily).
     pgQueuer owns claiming/retries/NOTIFY/dead-lettering; a handler that raises
     propagates so pgQueuer requeues the job (= recovery, D5)."""
 
@@ -101,7 +111,7 @@ class PgQueuerJobQueue(JobQueue):
 
         @self._qm.entrypoint(ENTRYPOINT)
         async def _run(pg_job: "Job") -> None:
-            await handler([IngestionJob.model_validate_json(pg_job.payload)])
+            await handler(Batch([IngestionJob.model_validate_json(pg_job.payload)]))
 
     async def run(self) -> None:
         await self._qm.run()

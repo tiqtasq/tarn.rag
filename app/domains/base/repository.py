@@ -172,8 +172,16 @@ class DocumentRepository(ABC):
     # ---------------- writes (shared Core) ----------------
 
     async def store_document(self, doc: Document) -> str:
+        # Atomic: upsert + chunk-delete share one engine.begin() transaction — if the
+        # delete fails, the upsert is rolled back too (commits only on clean exit).
         async with self.engine.begin() as conn:
-            return await self._upsert_document(conn, self._doc_values(doc))
+            doc_id = await self._upsert_document(conn, self._doc_values(doc))
+            # Re-storing a document REPLACES its derived data (idempotency): drop its
+            # chunks (ON DELETE CASCADE removes their embeddings). A new doc has none.
+            await conn.execute(
+                self.chunks.delete().where(self.chunks.c.parent_doc_id == doc_id)
+            )
+            return doc_id
 
     async def store_document_with_chunks(
         self, doc: Document, chunks: list[Chunk]

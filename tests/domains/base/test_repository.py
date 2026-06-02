@@ -103,3 +103,19 @@ async def test_document_status_and_jobs(repo):
     jobs = await repo.document_jobs("s1")
     assert len(jobs) == 2
     assert any(j["status"] == "failed" and j["error"] == "boom" for j in jobs)
+
+
+async def test_store_document_is_atomic(repo, monkeypatch):
+    # Existing document with content "A".
+    doc_id = await repo.store_document(Document(content="A", metadata={"source_id": "s1"}))
+
+    # Force the chunk-delete (the second statement) to fail mid-transaction.
+    def boom(*args, **kwargs):
+        raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(repo.chunks, "delete", boom)
+    with pytest.raises(RuntimeError, match="delete failed"):
+        await repo.store_document(Document(content="B", metadata={"source_id": "s1"}))
+
+    # The upsert to "B" shared the same transaction, so it was rolled back: still "A".
+    assert (await repo.get_document(doc_id)).content == "A"
