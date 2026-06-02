@@ -791,11 +791,11 @@ else `None`) and thread it through `build_orchestrator` / `build_service` and in
 - [ ] (Future) Implement structured logging adapter
 
 ### Phase 6: Testing & Documentation
-- [ ] Unit tests for each stage
-- [ ] Integration tests for full pipeline
-- [ ] Test repository transactional behavior
-- [ ] Write API documentation
-- [ ] Write README with setup instructions
+- [x] Unit tests for each stage (`tests/domains/ingestion/test_stages.py`)
+- [x] Integration tests for full pipeline (`tests/integration/test_ingestion_e2e.py` + service/API e2e)
+- [x] Test repository transactional behavior (`test_store_document_is_atomic` + idempotency/cascade)
+- [x] Write API documentation (`doc/API_SPEC.md`, incl. local startup)
+- [ ] Write README with setup instructions (optional — setup lives in `doc/API_SPEC.md`)
 
 ---
 
