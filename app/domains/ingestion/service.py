@@ -40,7 +40,7 @@ class IngestionService:
         """Queue ingestion of documents loaded from file paths (LoadAndParse reads them)."""
         items = [
             self._item(
-                source_id := str(uuid.uuid4()),
+                source_id=str(uuid.uuid4()),
                 content="",  # loaded by LoadAndParseStage
                 extra={"source_path": path, "source_type": self._infer_source_type(path)},
             )
