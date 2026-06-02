@@ -57,10 +57,12 @@ class PipelineOrchestrator(BatchCoordinator):
         enqueuer: JobEnqueuer,
         repository: DocumentRepository,
         sink_registry: dict[str, type[ResultSink]],
+        observability: Any = None,  # lifecycle metrics (enqueue/status/persistence)
     ):
         self.dag = dag
         self.enqueuer = enqueuer
         self.repository = repository  # storage + job_status projection
+        self.obs = observability
         self.sink_registry = sink_registry
 
     async def ingest_documents(self, items: list[PipelineItem]) -> list[str]:
@@ -72,6 +74,8 @@ class PipelineOrchestrator(BatchCoordinator):
             job = self._make_job(item, first_stage)
             await self._enqueue(job)
             document_ids.append(job.document_id)
+        if self.obs:
+            self.obs.counter("ingest.documents", len(items))
         return document_ids
 
     def get_stage(self, stage_name: str):
@@ -109,6 +113,8 @@ class PipelineOrchestrator(BatchCoordinator):
             job.document_id, job.job_id, job.stage_name, "queued"
         )
         await self.enqueuer.enqueue(job)
+        if self.obs:
+            self.obs.counter("ingest.jobs_enqueued")
 
 
 class _OrchestratorBatchContext(BatchContext):
@@ -132,16 +138,27 @@ class _OrchestratorBatchContext(BatchContext):
 
     async def fail(self, error: BaseException) -> None:
         await self._orch._record(self._batch.jobs, "failed", str(error))
+        if self._orch.obs:
+            self._orch.obs.counter(f"stage.{self._batch.stage_name}.failed")
 
     async def complete(self) -> None:
+        obs = self._orch.obs
         self._sink.close()
         outcome = await self._sink.finalize()
         if not outcome.persisted:
             await self._orch._record(self._batch.jobs, "failed", f"persistence: {outcome.detail}")
+            if obs:
+                obs.counter(f"stage.{self._batch.stage_name}.persist_failed")
+                await obs.log(
+                    "error", "persistence failed",
+                    stage=self._batch.stage_name, detail=outcome.detail,
+                )
             raise IngestionError(
                 f"persistence failed for {self._batch.stage_name}: {outcome.detail}"
             )
         await self._orch._record(self._batch.jobs, "completed")
+        if obs:
+            obs.counter(f"stage.{self._batch.stage_name}.completed")
         # Fan-out (D1): one downstream job per produced item, per next stage.
         for next_stage in self._orch.dag.get_downstream_stages(self._batch.stage_name):
             for item in self._produced:
