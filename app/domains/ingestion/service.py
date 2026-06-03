@@ -36,26 +36,37 @@ class IngestionService:
         self.repository = repository  # persistence + document-status reads
         self.obs = observability
 
-    async def ingest_from_paths(self, file_paths: list[str]) -> dict[str, Any]:
-        """Queue ingestion of documents loaded from file paths (LoadAndParse reads them)."""
+    async def ingest_from_paths(
+        self, file_paths: list[str], parser: str | None = None
+    ) -> dict[str, Any]:
+        """Queue ingestion of documents loaded from file paths (LoadAndParse reads them).
+        ``parser`` selects the PDF backend for this request (None → default)."""
         items = [
             self._item(
                 source_id=str(uuid.uuid4()),
                 content="",  # loaded by LoadAndParseStage
-                extra={"source_path": path, "source_type": self._infer_source_type(path)},
+                extra={
+                    "source_path": path,
+                    "source_type": self._infer_source_type(path),
+                    **({"parser": parser} if parser else {}),
+                },
             )
             for path in file_paths
         ]
         return await self._queue(items)
 
-    async def ingest_from_content(self, documents: list[dict[str, str]]) -> dict[str, Any]:
+    async def ingest_from_content(
+        self, documents: list[dict[str, str]], parser: str | None = None
+    ) -> dict[str, Any]:
         """Queue ingestion of pre-loaded content. A client-supplied ``source_id`` becomes
-        the ``document_id``; otherwise one is assigned."""
+        the ``document_id``; otherwise one is assigned. ``parser`` as in ingest_from_paths."""
         items = []
         for doc in documents:
             doc = dict(doc)  # don't mutate the caller's dict
             content = doc.pop("content")
             source_id = doc.pop("source_id", None) or str(uuid.uuid4())
+            if parser:
+                doc.setdefault("parser", parser)
             items.append(self._item(source_id, content=content, extra=doc))
         return await self._queue(items)
 

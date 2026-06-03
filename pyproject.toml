@@ -17,6 +17,7 @@ postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
 api = ["fastapi", "uvicorn"]
 embed = ["sentence-transformers"]
+parsers = ["pypdf", "pdfplumber"]  # PDF text-extraction backends (permissive)
 dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [build-system]

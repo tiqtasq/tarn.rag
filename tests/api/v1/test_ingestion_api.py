@@ -122,3 +122,21 @@ async def test_ingest_from_paths_queues_one_job_per_path(api):
     )
     assert resp.status_code == 200
     assert resp.json()["documents_queued"] == 2
+
+
+async def test_known_parser_is_accepted(api):
+    client, _ = api
+    resp = await client.post(
+        "/v1/ingest/content",
+        json={"documents": [{"content": "x", "source_id": "s1"}], "parser": "pdfplumber"},
+    )
+    assert resp.status_code == 200
+
+
+async def test_unknown_parser_is_rejected_422(api):
+    client, _ = api
+    resp = await client.post(
+        "/v1/ingest/content",
+        json={"documents": [{"content": "x", "source_id": "s1"}], "parser": "bogus"},
+    )
+    assert resp.status_code == 422  # rejected at the edge, nothing queued

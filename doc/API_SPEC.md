@@ -22,7 +22,7 @@ Dev runs in the conda env `tarn.rag` (Python 3.12).
    storage backends are optional extras):
 
    ```bash
-   conda run -n tarn.rag pip install -e ".[api,queue,postgres,embed]"
+   conda run -n tarn.rag pip install -e ".[api,queue,postgres,embed,parsers]"
    ```
 
 2. **Configure the environment** — copy `.env.example` to `.env` and set the two database
@@ -57,13 +57,18 @@ Dev runs in the conda env `tarn.rag` (Python 3.12).
 
 Base path: `/v1/ingest`.
 
+Both ingest endpoints accept an optional **`parser`** field that selects the PDF
+text-extraction backend for the whole request — `"pypdf"` (default) or `"pdfplumber"` (better
+tables/layout). It applies to PDFs only; omit it for the default. An unknown value is rejected
+with **422**.
+
 ### `POST /v1/ingest/` — ingest from file paths
 
 The worker's load stage reads the files.
 
 ```jsonc
 // request
-{ "file_paths": ["/data/doc1.pdf", "/data/doc2.txt"] }
+{ "file_paths": ["/data/doc1.pdf", "/data/doc2.txt"], "parser": "pdfplumber" }
 ```
 
 ### `POST /v1/ingest/content` — ingest pre-loaded content

@@ -23,7 +23,7 @@ async def ingest(
     service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestResponse:
     """Ingest documents from file paths. Returns a ``document_id`` per document."""
-    return IngestResponse(**await service.ingest_from_paths(req.file_paths))
+    return IngestResponse(**await service.ingest_from_paths(req.file_paths, req.parser))
 
 
 @router.post("/content", response_model=IngestResponse)
@@ -32,7 +32,7 @@ async def ingest_content(
     service: IngestionService = Depends(get_ingestion_service),
 ) -> IngestResponse:
     """Ingest pre-loaded document content. Returns a ``document_id`` per document."""
-    return IngestResponse(**await service.ingest_from_content(req.documents))
+    return IngestResponse(**await service.ingest_from_content(req.documents, req.parser))
 
 
 @router.get("/documents/{document_id}/status", response_model=DocumentStatusResponse)

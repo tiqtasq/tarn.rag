@@ -197,6 +197,7 @@ rag-ingestion/
 │   │   │   ├── stages/
 │   │   │   │   ├── __init__.py
 │   │   │   │   ├── load_parse.py                # LoadAndParseStage
+│   │   │   │   ├── parsers.py                    # PDF backend registry (pypdf, pdfplumber)
 │   │   │   │   ├── clean_normalize.py           # CleanAndNormalizeStage
 │   │   │   │   ├── chunk.py                     # ChunkStage
 │   │   │   │   ├── enrich.py                    # EnrichMetadataStage
@@ -500,9 +501,12 @@ no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → Resu
 
 Names below are the `stage.name` values (and the sink-registry keys):
 
-- **LoadAndParse** (`MapperStage`) — loads `metadata['source_path']` (txt; pdf via
-  `pypdf`; html via `html2text`, both lazily imported) or uses the given content;
-  assigns a provisional `doc_id`.
+- **LoadAndParse** (`MapperStage`) — loads `metadata['source_path']` (txt; html via
+  `html2text`; pdf via a **pluggable backend registry**) or uses the given content; assigns a
+  provisional `doc_id`. The PDF backends live in `stages/parsers.py` (`pypdf` default,
+  `pdfplumber`; lazily imported). The set of backends is **stage config** (built once); a
+  request picks one per call via `metadata['parser']` (**item data**, flows inline — *not* the
+  per-job `stage_config` we dropped). The API validates `parser` against the registry (422).
 - **CleanAndNormalize** (`MapperStage`) — strips control chars, collapses whitespace.
 - **Chunk** (`ChunkerStage`) — recursive character splitting on coarse→fine separators,
   packed into `chunk_size` windows with `overlap`.

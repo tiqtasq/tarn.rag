@@ -152,6 +152,13 @@ Concepts that span multiple files and are easy to get wrong:
   `chunk()`), `FilterStage` (1→{0,1}, override `should_keep()`). These base
   classes handle metadata merging automatically — subclasses return *updates* to
   metadata, never mutate the incoming dict.
+- **Pluggable PDF parsers (per-request strategy).** `LoadAndParseStage` holds a registry of
+  PDF backends (`stages/parsers.py`: `pypdf` default, `pdfplumber`; in the `parsers` extra).
+  The *available set* is stage config (built once); a request picks one via the API's optional
+  `parser` field, which the service writes to `metadata['parser']` and the stage reads — **item
+  data flowing inline (D1), not the per-job `stage_config` we dropped**. The API validates
+  `parser` against the registry (422). Add a backend (incl. OCR/cloud later) by registering a
+  `(path) -> str` loader; selection is bounded by what the worker has installed.
 - **`ResultSink`** (not the spec's `BatchingWrapper`) is how results leave a
   worker. The worker `submit()`s produced results and `close()`s; the sink owns
   persistence and write-batching; the orchestrator calls `finalize()`. See the
