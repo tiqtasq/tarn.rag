@@ -34,6 +34,7 @@ Dev runs in the conda env `tarn.rag` (Python 3.12).
    DOCUMENT_DB_URL=sqlite:///./rag_docs.db        # or postgresql://…/rag_docs
    EMBEDDING_MODEL=sentence-transformers/all-minilm-l6-v2
    EMBEDDING_DIMENSION=384                          # must match the model
+   UPLOAD_DIR=./uploads                             # shared by API + workers (for /file)
    ```
 
    Install pgQueuer's tables in the queue DB once (see pgQueuer's CLI/docs).
@@ -80,6 +81,21 @@ flow into the document metadata.
 // request
 { "documents": [ { "content": "full text…", "source_id": "doc-1" } ] }
 ```
+
+### `POST /v1/ingest/file` — upload files (multipart)
+
+Upload one or more files directly. The API stages the bytes to `UPLOAD_DIR` and ingests them
+by path — parsing happens in the worker. Form fields: `files` (one or more) and optional
+`parser`. One `document_id` per file.
+
+```bash
+curl -s localhost:8000/v1/ingest/file \
+  -F 'files=@/path/to/doc.pdf' -F 'parser=pdfplumber'
+```
+
+> **Deployment note:** `UPLOAD_DIR` must be a location **both the API and the worker** can read
+> (e.g. a shared volume) — the API writes the staged file, the worker reads it. An object store
+> (S3/blob) would replace local staging behind the same seam.
 
 Both endpoints return the same shape (HTTP 200):
 

@@ -15,7 +15,7 @@ dependencies = [
 # Postgres/pgQueuer backends — not needed for the SQLite test path.
 postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
-api = ["fastapi", "uvicorn"]
+api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
 embed = ["sentence-transformers"]
 parsers = ["pypdf", "pdfplumber"]  # PDF text-extraction backends (permissive)
 dev = ["pytest", "pytest-asyncio", "httpx"]

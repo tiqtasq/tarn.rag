@@ -3,6 +3,8 @@
 Uses a fake 3-d encoder so no sentence-transformers is needed (matches the e2e test).
 """
 
+import pytest
+
 from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from app.domains.ingestion.pipeline import Pipeline
 from app.domains.ingestion.queue import InMemoryJobQueue, JobEnqueuer
@@ -115,3 +117,32 @@ async def test_parser_choice_rides_in_item_metadata(repo):
     enq.jobs.clear()
     await service.ingest_from_content([{"content": "x", "source_id": "s2"}])
     assert "parser" not in enq.jobs[0].item.metadata
+
+
+async def test_ingest_from_uploads_stages_bytes_and_queues_by_path(repo, tmp_path):
+    enq = _RecordingEnqueuer()
+    stages = _stages()
+    orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
+    service = IngestionService(
+        Pipeline(stages), orch, repo, staging_dir=str(tmp_path / "uploads")
+    )
+
+    result = await service.ingest_from_uploads(
+        [("report.pdf", b"%PDF-fake-bytes")], parser="pdfplumber"
+    )
+    assert result["documents_queued"] == 1
+
+    meta = enq.jobs[0].item.metadata
+    staged = meta["source_path"]
+    assert staged.endswith(".pdf")  # extension preserved so the loader dispatches
+    assert open(staged, "rb").read() == b"%PDF-fake-bytes"  # bytes were written
+    assert meta["source_type"] == "pdf"
+    assert meta["parser"] == "pdfplumber"
+
+
+async def test_ingest_from_uploads_requires_staging_dir(repo):
+    stages = _stages()
+    orch = PipelineOrchestrator(PipelineDAG(stages), InMemoryJobQueue(), repo, create_sink_registry())
+    service = IngestionService(Pipeline(stages), orch, repo)  # no staging_dir
+    with pytest.raises(RuntimeError, match="not configured"):
+        await service.ingest_from_uploads([("x.txt", b"hi")])

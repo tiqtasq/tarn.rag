@@ -33,6 +33,16 @@ earlier ones (models → repository → stages → orchestration → service/API
   ASGITransport over `InMemoryJobQueue` + SQLite (`tests/api/v1/test_ingestion_api.py`,
   `tests/domains/ingestion/test_service.py`). **`fastapi` + `httpx` are now installed** in
   the env (httpx added to the `dev` extra).
+- PDF ingest: **per-request parser** (`stages/parsers.py` registry: `pypdf`/`pdfplumber`, in the
+  `parsers` extra; API `parser` field → `metadata['parser']`, see Stage taxonomy below) and
+  **file upload** — `POST /v1/ingest/file` (multipart; `python-multipart` in the `api` extra)
+  stages bytes to `UPLOAD_DIR` via `IngestionService._stage_upload`, then reuses the path-based
+  flow (parsing in the worker). `UPLOAD_DIR` must be shared by API + worker; an object store
+  would replace local staging behind `_stage_upload`. `pypdf`/`pdfplumber`/`python-multipart`
+  installed in the env + `requirements.txt`. A committed `tests/fixtures/sample.pdf` (text
+  "Quokka …", generated once with fpdf2 — not a dep) drives a **real-PDF-over-REST** integration
+  test (`test_real_pdf_upload_is_parsed_and_ingested`, parametrized pypdf/pdfplumber) and the
+  unit `test_real_pdf_backends_extract_text`; both run real extraction (FakeEmbed avoids the model).
 - Phase 5: `core/observability.py` (`Observability` ABC — abstract `log`/`counter`/`gauge` +
   concrete `timer` contextmanager — + `NoOpObservability`). Obs is held by the **worker**
   (per-stage `timer`/throughput counters + error counter/`log`) and the **orchestrator**

@@ -8,8 +8,9 @@ from pydantic import BaseModel, field_validator
 from app.domains.ingestion.stages.parsers import AVAILABLE_PDF_PARSERS
 
 
-def _validate_parser(value: str | None) -> str | None:
-    """Reject unknown parser names at the API edge (→ 422), before anything is queued."""
+def validate_parser(value: str | None) -> str | None:
+    """Reject unknown parser names at the API edge (→ 422), before anything is queued.
+    Reused by the multipart upload endpoint (which has no Pydantic body)."""
     if value is not None and value not in AVAILABLE_PDF_PARSERS:
         raise ValueError(
             f"unknown parser {value!r}; available: {sorted(AVAILABLE_PDF_PARSERS)}"
@@ -24,7 +25,7 @@ class IngestRequest(BaseModel):
     file_paths: list[str]
     parser: str | None = None
 
-    _check_parser = field_validator("parser")(_validate_parser)
+    _check_parser = field_validator("parser")(validate_parser)
 
 
 class IngestFromContentRequest(BaseModel):
@@ -34,7 +35,7 @@ class IngestFromContentRequest(BaseModel):
     documents: list[dict[str, str]]
     parser: str | None = None
 
-    _check_parser = field_validator("parser")(_validate_parser)
+    _check_parser = field_validator("parser")(validate_parser)
 
 
 class DocumentRef(BaseModel):

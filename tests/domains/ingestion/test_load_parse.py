@@ -1,9 +1,14 @@
 """LoadAndParseStage: per-request PDF backend selection via metadata['parser']."""
 
+from pathlib import Path
+
 import pytest
 
 from app.domains.base.models import PipelineItem
 from app.domains.ingestion.stages.load_parse import LoadAndParseStage
+
+# A tiny real PDF whose only text is "Quokka ingestion smoke 7" (committed fixture).
+SAMPLE_PDF = Path(__file__).parents[2] / "fixtures" / "sample.pdf"
 
 
 def _stage():
@@ -54,16 +59,8 @@ def test_default_registry_has_pypdf_and_pdfplumber():
     assert stage.default_pdf_parser == "pypdf"
 
 
-def test_real_pypdf_loader_extracts_text(tmp_path):
-    """Smoke test the real pypdf backend end-to-end on a generated PDF (skipped if the
-    optional deps aren't installed)."""
-    pytest.importorskip("pypdf")
-    rl = pytest.importorskip("reportlab.pdfgen.canvas", reason="reportlab needed to build a PDF")
-
-    pdf = tmp_path / "real.pdf"
-    c = rl.Canvas(str(pdf))
-    c.drawString(72, 720, "hello pdf world")
-    c.save()
-
-    text = _run(LoadAndParseStage(), str(pdf))  # default = pypdf
-    assert "hello pdf world" in text
+@pytest.mark.parametrize("parser", [None, "pypdf", "pdfplumber"])
+def test_real_pdf_backends_extract_text(parser):
+    """Each real backend extracts text from the committed sample PDF (None → default pypdf)."""
+    text = _run(LoadAndParseStage(), str(SAMPLE_PDF), parser=parser)
+    assert "Quokka" in text

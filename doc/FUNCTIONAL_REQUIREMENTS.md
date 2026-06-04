@@ -170,7 +170,7 @@ rag-ingestion/
 │   │       ├── __init__.py
 │   │       ├── endpoints/
 │   │       │   ├── __init__.py
-│   │       │   └── ingestion.py                 # POST /v1/ingest(/content), GET /v1/ingest/documents/{id}/status
+│   │       │   └── ingestion.py                 # POST /v1/ingest(/content,/file), GET /v1/ingest/documents/{id}/status
 │   │       ├── schemas.py                       # Pydantic request/response models
 │   │       └── dependencies.py                  # FastAPI dependency injection
 │   │
@@ -631,12 +631,16 @@ repository (status reads); `observability` is optional (typed `Any`, Phase 5).
 
 ## API Layer (`app/api/v1/`)
 
-FastAPI, document-centric. Three routes under `APIRouter(prefix="/v1/ingest")`
+FastAPI, document-centric. Four routes under `APIRouter(prefix="/v1/ingest")`
 (`endpoints/ingestion.py`):
 
 - `POST /v1/ingest/` (`IngestRequest{file_paths}`) and `POST /v1/ingest/content`
   (`IngestFromContentRequest{documents}`) → `IngestResponse{documents: [DocumentRef
-  {document_id, status}], documents_queued}`.
+  {document_id, status}], documents_queued}`. Both take an optional `parser` (PDF backend).
+- `POST /v1/ingest/file` (multipart: `files` + optional `parser`) — the API **stages** the
+  uploaded bytes to `UPLOAD_DIR` and ingests them by path (parsing runs in the worker, which
+  must share that volume); same `IngestResponse`. An object store would replace local staging
+  behind `IngestionService._stage_upload`.
 - `GET /v1/ingest/documents/{document_id}/status?verbose=` →
   `DocumentStatusResponse{document_id, status, chunk_count, embedding_count, jobs?}`
   (`jobs` is `list[dict] | None`, present only under `?verbose=true`); **404** when unknown.

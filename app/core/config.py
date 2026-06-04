@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 50
     EMBEDDING_BATCH_SIZE: int = 32
 
+    # Uploads: where the API stages uploaded bytes so workers can read them by path.
+    # Must be a location both the API and worker processes can access (shared volume).
+    UPLOAD_DIR: str = "./uploads"
+
     # Workers
     WORKER_QUEUE_TIMEOUT_SECONDS: int = 30
     WORKER_CONCURRENCY: int = 4
