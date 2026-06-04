@@ -16,6 +16,7 @@ from app.domains.ingestion.pipeline import MapperStage
 from app.domains.ingestion.stages.parsers import (
     DEFAULT_PDF_PARSER,
     DEFAULT_PDF_PARSERS,
+    load_html,
 )
 
 
@@ -53,10 +54,7 @@ class LoadAndParseStage(MapperStage):
         if ext == "pdf":
             return self._pdf_loader(parser)(path)
         if ext in ("html", "htm"):
-            import html2text
-
-            with open(path, encoding="utf-8", errors="replace") as f:
-                return html2text.html2text(f.read())
+            return load_html(path)
         raise ValueError(f"Unsupported file type: {ext!r}")
 
     def _pdf_loader(self, parser: str | None) -> Callable[[str], str]:

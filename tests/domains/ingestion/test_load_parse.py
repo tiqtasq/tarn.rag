@@ -48,6 +48,15 @@ def test_txt_ignores_parser_and_reads_text(tmp_path):
     assert _run(_stage(), str(f), parser="b") == "hello world"
 
 
+def test_html_is_extracted_with_tags_stripped(tmp_path):
+    f = tmp_path / "page.html"
+    f.write_text("<h1>Hello</h1><p>World &amp; more</p>", encoding="utf-8")
+    out = _run(LoadAndParseStage(), str(f))  # real bs4 loader
+    assert "Hello" in out and "World" in out
+    assert "<h1>" not in out  # tags stripped
+    assert "&" in out and "&amp;" not in out  # entities decoded
+
+
 def test_invalid_default_parser_fails_validation():
     with pytest.raises(ValueError, match="default_pdf_parser"):
         LoadAndParseStage(pdf_parsers={"a": lambda p: p}, default_pdf_parser="missing")

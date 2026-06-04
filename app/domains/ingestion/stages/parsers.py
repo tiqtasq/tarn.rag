@@ -27,6 +27,14 @@ def load_pdfplumber(path: str) -> str:
         return "\n".join((page.extract_text() or "") for page in pdf.pages)
 
 
+def load_html(path: str) -> str:
+    """Extract visible text from HTML with BeautifulSoup (MIT; stdlib ``html.parser``)."""
+    from bs4 import BeautifulSoup
+
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return BeautifulSoup(f.read(), "html.parser").get_text(separator="\n").strip()
+
+
 # Registry of PDF backends by name (the choice rides in metadata['parser']).
 DEFAULT_PDF_PARSERS: dict[str, Callable[[str], str]] = {
     "pypdf": load_pypdf,
