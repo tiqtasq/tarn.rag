@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository Status
 
-Implementation is **underway** (Phases 1–3 done). The authoritative design is
-`doc/FUNCTIONAL_REQUIREMENTS.md` ("RAG Ingestion Pipeline" spec) — treat it as the
-source of truth for structure, models, interfaces, and behavior, and follow its
-phased **Implementation Checklist** (Phases 1–6), since later layers depend on
-earlier ones (models → repository → stages → orchestration → service/API).
+Implementation is **underway**. Two authoritative specs: `doc/FUNCTIONAL_REQUIREMENTS.md`
+(the RAG ingestion pipeline, Phases 1–6 done) and **`doc/ModusQ_RetrievalSubsystemSpec.md`**
+(the retrieval subsystem now being built). **The project is pivoting to the ModusQ retrieval
+stack** — SQLite + sqlite-vec + FTS5 + ONNX embeddings, eventually a C++ port — which largely
+does NOT reuse the SQLAlchemy/pgvector/sentence-transformers pieces (accepted). See the
+[[modusq-retrieval-pivot]] memory. **Current step:** ingestion now produces the §8 SQLite index
+via a shared ONNX embedder (see "Retrieval (ModusQ)" below); the retrieval read engine is next.
 
 **Done (Phases 1–5, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
@@ -79,9 +81,47 @@ connection) so the cascade actually removes the chunks' embeddings; schema creat
 uses two hooks (`_before_create_schema`/`_after_create_schema`) so pgvector's extension
 is made before tables and indexes after; stages run `validate()` inside
 `super().__init__()`, so a stage must set any attrs `validate()` reads **before** super;
-`EmbedStage` lazy-loads sentence-transformers (tests set `stage._model` to a fake
-`encode`; e2e uses a `FakeEmbedStage` in the registry). Use `datetime.now(UTC)`, not the
-spec's `datetime.utcnow()` (deprecated on 3.12).
+`EmbedStage` lazy-loads the shared **`OnnxEmbedder`** (tests override `stage._get_embedder`
+with a fake exposing `embed_passages`; e2e uses a `FakeEmbedStage`). Use `datetime.now(UTC)`,
+not the spec's `datetime.utcnow()` (deprecated on 3.12).
+
+## Retrieval (ModusQ) — in progress
+
+Building `doc/ModusQ_RetrievalSubsystemSpec.md`. **Step 1 (done): ingestion produces the §8
+index.** Pieces:
+- **`app/domains/base/embedder.py`** — `Embedder` ABC + `OnnxEmbedder` (tokenize → ONNX CPU →
+  mean-pool(mask) → L2; lazy `onnxruntime`/`tokenizers`). The **same** embedder embeds passages
+  (ingestion) and queries (retrieval), guaranteeing pipeline identity (§5.3).
+  `config_fingerprint()`/`embed_meta()` feed `index_meta`; retrieval will refuse to `open()` on
+  fingerprint mismatch. Model is configurable (`Settings.EMBEDDING_MODEL`/`MODEL_DIR`, default
+  all-MiniLM-L6-v2); fetch artifacts with `scripts/fetch_model.py` (→ `MODEL_DIR`, git-ignored).
+- **`app/domains/base/chunk_store.py`** — `ChunkStore` ABC = the persistence surface the sinks
+  use (`store_document/store_chunks/store_embeddings/update_chunk_metadata`). `DocumentRepository`
+  conforms (existing path unchanged); the index store is the new target.
+- **`app/domains/base/index_store.py`** — `SqliteIndexStore(ChunkStore)`: the §8 SQLite file
+  (`index_meta`, `documents`, `chunks`, `vec_chunks` via **sqlite-vec** vec0, `fts_chunks` via
+  **FTS5**, `method_chunks`) over **sync `sqlite3`** (loadable extensions; the C++ port is sync
+  too). Domain fields (license_class/methods) use **safe defaults** for now
+  (`DEFAULT_LICENSE_CLASS`, `ai_grounding_allowed=1`, `available=1`, `method_chunks` empty →
+  only `scope=ALL`). `write_index_meta(embedder)` once; `counts()` for status.
+- **Wiring:** `PipelineOrchestrator` gained `chunk_store` (defaults to `repository`; sinks build
+  from it, `record_job` stays on `repository`). The index-build path passes a `SqliteIndexStore`;
+  `DocumentRepository` is kept only for `job_status`.
+- **Status read model:** `app/domains/base/status.py` — `DocumentStatusReader` composes a
+  `JobStatusSource` (the repo's `job_status`) with a `DocumentFactsSource` (presence + counts:
+  the repo in classic mode, the index in retrieval mode) and owns the rollup. Kept as **two
+  narrow ports**, not a fat combined store (ISP); only this read model sees both. The service
+  takes an optional `facts_source` (defaults to the repo); `DocumentRepository.document_status`
+  now delegates to a reader over itself.
+- **Deps:** `sqlite-vec` is a core dep; ONNX stack in the `onnx` extra. Tests: `test_index_store`
+  + `test_index_e2e` (fake embedder, no download); `test_status` (rollup); `test_embedder`
+  (real, gated on `MODEL_DIR`).
+
+**Not yet built (next):** the retrieval read engine (`SqliteIndexStore.dense_knn/sparse_bm25/
+hydrate`, dense+sparse retrievers, RRF + tie-break, default `LicensePolicy`, identity reranker,
+`RetrievalEngine.search`); index-mode DI/API wiring (build the `SqliteIndexStore` + pass
+`facts_source` in `app/main.py`/`dependencies.py`); the C++ port + parity harness; the real
+license/method domain.
 
 ## What This System Is
 
@@ -238,13 +278,15 @@ conda run -n tarn.rag python -m pytest tests/test_repository.py::test_name # sin
 conda run -n tarn.rag python -m py_compile $(find app -name "*.py")
 ```
 
-Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy`, `aiosqlite`, `numpy`,
-`pytest`, `pytest-asyncio`) plus **`fastapi` + `httpx`** (Phase 4) are installed in the env.
-The Postgres/pgQueuer/embed backends are optional extras in `pyproject.toml` (`postgres`,
-`queue`, `embed`) and are **NOT installed** — keep the SQLite test path free of those imports
-(the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily, and
-`api/v1/dependencies.py` imports the Postgres repo / pgQueuer adapter lazily inside the
-`make_*` builders). The API tests run on `InMemoryJobQueue` + SQLite (DI overridden).
+Installed in the env: Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy`, `aiosqlite`,
+`numpy`), `pytest`/`pytest-asyncio`, **`fastapi` + `httpx`**, the **`parsers`** stack
+(`pypdf`/`pdfplumber`/`beautifulsoup4`), **`sqlite-vec`** (core dep), and the **`onnx`** stack
+(`onnxruntime`/`tokenizers`/`huggingface_hub`). The Postgres/pgQueuer backends are optional
+extras (`postgres`, `queue`) and are **NOT installed** — keep the SQLite test path free of those
+imports (the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily,
+and `api/v1/dependencies.py` imports the Postgres repo / pgQueuer adapter lazily inside the
+`make_*` builders). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
+fake embedder); the real ONNX embedder test is gated on `MODEL_DIR`.
 
 Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`, `tests/api/v1/`); the
 suite runs entirely on SQLite + InMemory queue (no Postgres/pgQueuer needed).

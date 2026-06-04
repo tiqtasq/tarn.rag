@@ -22,7 +22,7 @@ Dev runs in the conda env `tarn.rag` (Python 3.12).
    storage backends are optional extras):
 
    ```bash
-   conda run -n tarn.rag pip install -e ".[api,queue,postgres,embed,parsers]"
+   conda run -n tarn.rag pip install -e ".[api,queue,postgres,parsers,onnx]"
    ```
 
 2. **Configure the environment** — copy `.env.example` to `.env` and set the two database

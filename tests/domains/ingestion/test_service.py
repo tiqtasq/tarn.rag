@@ -20,14 +20,14 @@ from app.domains.ingestion.stages.load_parse import LoadAndParseStage
 from app.domains.ingestion.worker import IngestionWorker
 
 
-class _FakeEncoder:
-    def encode(self, texts, convert_to_tensor=False):
+class _FakeEmbedder:
+    def embed_passages(self, texts):
         return [[float(len(t)), 1.0, 0.0] for t in texts]
 
 
 class FakeEmbedStage(EmbedStage):
-    def _get_model(self):
-        return _FakeEncoder()
+    def _get_embedder(self):
+        return _FakeEmbedder()
 
 
 def _stages():

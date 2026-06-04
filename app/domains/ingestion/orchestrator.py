@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.exceptions import IngestionError
+from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import PipelineItem
 from app.domains.base.repository import DocumentRepository
 from app.domains.ingestion.batch import BatchContext, BatchCoordinator
@@ -58,12 +59,16 @@ class PipelineOrchestrator(BatchCoordinator):
         repository: DocumentRepository,
         sink_registry: dict[str, type[ResultSink]],
         observability: Any = None,  # lifecycle metrics (enqueue/status/persistence)
+        chunk_store: ChunkStore | None = None,  # sink target; defaults to the repository
     ):
         self.dag = dag
         self.enqueuer = enqueuer
-        self.repository = repository  # storage + job_status projection
+        self.repository = repository  # job_status projection (record_job)
         self.obs = observability
         self.sink_registry = sink_registry
+        # Where sinks persist document/chunk/embedding data. Defaults to the repository
+        # (unchanged Postgres/SQLite path); the §8 index build passes a SqliteIndexStore.
+        self.chunk_store = chunk_store or repository
 
     async def ingest_documents(self, items: list[PipelineItem]) -> list[str]:
         """Enqueue one root job per document for the first stage. Returns the public
@@ -86,7 +91,7 @@ class PipelineOrchestrator(BatchCoordinator):
         """Start a unit of work for a dispatched batch: record 'processing', pick the
         per-stage sink, and return the context the worker reports to."""
         await self._record(batch.jobs, "processing")
-        sink = self.sink_registry[batch.stage_name](self.repository)
+        sink = self.sink_registry[batch.stage_name](self.chunk_store)
         return _OrchestratorBatchContext(self, batch, sink)
 
     # ----- internals shared by ingest_documents and the BatchContext -----

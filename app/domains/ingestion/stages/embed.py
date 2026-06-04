@@ -1,4 +1,10 @@
-"""EmbedStage — vectorize chunks into Embeddings (terminal stage)."""
+"""EmbedStage — vectorize chunks into Embeddings (terminal stage).
+
+Uses the shared ONNX ``OnnxEmbedder`` (passage side), so ingestion embeds with exactly the
+pipeline retrieval will replay for queries (§5.3). The embedder is lazy-loaded via
+``_get_embedder``; tests inject a fake by overriding it (anything with
+``embed_passages(list[str]) -> list[list[float]]``).
+"""
 
 from __future__ import annotations
 
@@ -10,56 +16,68 @@ from app.domains.ingestion.pipeline import PipelineStage
 
 
 class EmbedStage(PipelineStage):
-    """Real embedding compute lives here. ``process_batch`` groups items into
-    ``model_batch_size``-sized ``encode`` calls; ``chunk_id`` comes from
-    ``metadata['chunk_id']`` (set by ChunkResultSink). Terminal stage: yields
-    ``Embedding``s (not ``PipelineItem``s), so nothing runs downstream.
-
-    The model is lazy-loaded (sentence-transformers); tests may inject a fake by
-    setting ``stage._model`` to anything with ``encode(list[str]) -> list[vector]``.
-    """
+    """Terminal stage: yields ``Embedding``s (not ``PipelineItem``s). ``process_batch`` groups
+    items into ``model_batch_size``-sized embed calls; ``chunk_id`` comes from
+    ``metadata['chunk_id']`` (set by ChunkResultSink)."""
 
     def __init__(
         self,
-        embedding_model: str = "sentence-transformers/all-minilm-l6-v2",
+        *,
+        model_dir: str = "",
+        model_id: str = "sentence-transformers/all-MiniLM-L6-v2",
+        revision: str = "",
+        embedding_dim: int = 384,
+        max_length: int = 512,
+        query_prefix: str = "",
+        passage_prefix: str = "",
         model_batch_size: int = 32,
         **config: Any,
     ):
         # Set before super().__init__(), which runs validate().
-        self.embedding_model = embedding_model
+        self.model_dir = model_dir
+        self.model_id = model_id
+        self.revision = revision
+        self.embedding_dim = embedding_dim
+        self.max_length = max_length
+        self.query_prefix = query_prefix
+        self.passage_prefix = passage_prefix
         self.model_batch_size = model_batch_size
-        self._model = None  # lazy; not part of ``config`` (not serializable)
+        self._embedder = None  # lazy; not serializable config
         super().__init__(
-            name="Embed",
-            embedding_model=embedding_model,
-            model_batch_size=model_batch_size,
-            **config,
+            name="Embed", model_id=model_id, model_batch_size=model_batch_size, **config
         )
 
     def process(self, item: PipelineItem) -> Iterator[Embedding]:
         yield from self.process_batch([item])
 
     def process_batch(self, items: list[PipelineItem]) -> Iterator[Embedding]:
-        model = self._get_model()
+        embedder = self._get_embedder()
         for i in range(0, len(items), self.model_batch_size):
             sub = items[i : i + self.model_batch_size]
-            vectors = model.encode([it.content for it in sub], convert_to_tensor=False)
+            vectors = embedder.embed_passages([it.content for it in sub])
             for it, vec in zip(sub, vectors):
-                vector = vec.tolist() if hasattr(vec, "tolist") else list(vec)
                 yield Embedding(
                     chunk_id=it.metadata["chunk_id"],
-                    vector=vector,
-                    model=self.embedding_model,
-                    dimension=len(vector),
+                    vector=list(vec),
+                    model=self.model_id,
+                    dimension=len(vec),
                     metadata={"source_id": it.metadata.get("source_id")},
                 )
 
-    def _get_model(self):
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
+    def _get_embedder(self):
+        if self._embedder is None:
+            from app.domains.base.embedder import OnnxEmbedder
 
-            self._model = SentenceTransformer(self.embedding_model)
-        return self._model
+            self._embedder = OnnxEmbedder(
+                self.model_dir,
+                model_id=self.model_id,
+                revision=self.revision,
+                embedding_dim=self.embedding_dim,
+                max_length=self.max_length,
+                query_prefix=self.query_prefix,
+                passage_prefix=self.passage_prefix,
+            )
+        return self._embedder
 
     def validate(self) -> None:
         if self.model_batch_size <= 0:

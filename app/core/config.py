@@ -24,12 +24,22 @@ class Settings(BaseSettings):
     QUEUE_DB_URL: str  # pgQueuer job queue
     DOCUMENT_DB_URL: str  # document / chunk / embedding storage
 
-    # Ingestion
-    EMBEDDING_MODEL: str = "sentence-transformers/all-minilm-l6-v2"
-    EMBEDDING_DIMENSION: int = 384  # MUST match the model; sets the pgvector column width
+    # Ingestion / embedding (ONNX). The model is configurable; ingestion and retrieval MUST
+    # share it — enforced by the embedding_config_fingerprint recorded in the index.
+    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"  # model id (recorded in index_meta)
+    EMBEDDING_MODEL_REVISION: str = ""
+    MODEL_DIR: str = "./models/all-MiniLM-L6-v2"  # local model.onnx + tokenizer.json (offline)
+    EMBEDDING_DIMENSION: int = 384  # MUST match the model
+    MAX_SEQ_LENGTH: int = 512
+    EMBEDDING_QUERY_PREFIX: str = ""  # non-empty for asymmetric models (BGE/E5)
+    EMBEDDING_PASSAGE_PREFIX: str = ""
     CHUNK_SIZE: int = 512
     CHUNK_OVERLAP: int = 50
     EMBEDDING_BATCH_SIZE: int = 32
+
+    # §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled.
+    INDEX_DB_PATH: str = "./index.db"
+    DEFAULT_LICENSE_CLASS: str = "public_domain"
 
     # Uploads: where the API stages uploaded bytes so workers can read them by path.
     # Must be a location both the API and worker processes can access (shared volume).

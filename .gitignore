@@ -1,3 +1,9 @@
+# ModusQ: bundled embedding model artifacts + built retrieval index + uploads
+models/
+*.db
+index.db
+uploads/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

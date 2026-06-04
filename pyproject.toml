@@ -9,6 +9,7 @@ dependencies = [
     "sqlalchemy>=2",
     "aiosqlite",
     "numpy",
+    "sqlite-vec",  # §8 retrieval index (dense KNN); also used by the build/tests
 ]
 
 [project.optional-dependencies]
@@ -16,7 +17,7 @@ dependencies = [
 postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
 api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
-embed = ["sentence-transformers"]
+onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # ONNX embedding pipeline (R4)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 dev = ["pytest", "pytest-asyncio", "httpx"]
 

@@ -16,8 +16,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import Chunk, Document
-from app.domains.base.repository import DocumentRepository
 
 
 @dataclass
@@ -43,7 +43,7 @@ class _BufferingSink(ResultSink):
     """Shared buffering: submit() appends, close() marks done, finalize() persists the
     whole buffer via _persist() and reports the outcome."""
 
-    def __init__(self, repository: DocumentRepository):
+    def __init__(self, repository: ChunkStore):
         self.repo = repository
         self._buffer: list[Any] = []
         self._closed = False
@@ -121,7 +121,7 @@ class EmbeddingResultSink(_BufferingSink):
     """After Embed: bulk-persist Embedding results in persistence-batch-sized writes
     (independent of the worker's compute batch, D4)."""
 
-    def __init__(self, repository: DocumentRepository, persist_batch_size: int = 128):
+    def __init__(self, repository: ChunkStore, persist_batch_size: int = 128):
         super().__init__(repository)
         self.persist_batch_size = persist_batch_size
 
