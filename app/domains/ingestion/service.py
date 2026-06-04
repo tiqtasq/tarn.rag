@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.domains.base.models import PipelineItem
@@ -30,34 +31,58 @@ class IngestionService:
         orchestrator: PipelineOrchestrator,
         repository: DocumentRepository,
         observability: Any = None,  # Phase 5 Observability plugs in here
+        staging_dir: str | None = None,  # where uploaded bytes are staged for the worker
     ):
         self.pipeline = pipeline
         self.orchestrator = orchestrator
         self.repository = repository  # persistence + document-status reads
         self.obs = observability
+        self.staging_dir = staging_dir
 
-    async def ingest_from_paths(self, file_paths: list[str]) -> dict[str, Any]:
-        """Queue ingestion of documents loaded from file paths (LoadAndParse reads them)."""
+    async def ingest_from_paths(
+        self, file_paths: list[str], parser: str | None = None
+    ) -> dict[str, Any]:
+        """Queue ingestion of documents loaded from file paths (LoadAndParse reads them).
+        ``parser`` selects the PDF backend for this request (None → default)."""
         items = [
             self._item(
                 source_id=str(uuid.uuid4()),
                 content="",  # loaded by LoadAndParseStage
-                extra={"source_path": path, "source_type": self._infer_source_type(path)},
+                extra={
+                    "source_path": path,
+                    "source_type": self._infer_source_type(path),
+                    **({"parser": parser} if parser else {}),
+                },
             )
             for path in file_paths
         ]
         return await self._queue(items)
 
-    async def ingest_from_content(self, documents: list[dict[str, str]]) -> dict[str, Any]:
+    async def ingest_from_content(
+        self, documents: list[dict[str, str]], parser: str | None = None
+    ) -> dict[str, Any]:
         """Queue ingestion of pre-loaded content. A client-supplied ``source_id`` becomes
-        the ``document_id``; otherwise one is assigned."""
+        the ``document_id``; otherwise one is assigned. ``parser`` as in ingest_from_paths."""
         items = []
         for doc in documents:
             doc = dict(doc)  # don't mutate the caller's dict
             content = doc.pop("content")
             source_id = doc.pop("source_id", None) or str(uuid.uuid4())
+            if parser:
+                doc.setdefault("parser", parser)
             items.append(self._item(source_id, content=content, extra=doc))
         return await self._queue(items)
+
+    async def ingest_from_uploads(
+        self, uploads: list[tuple[str, bytes]], parser: str | None = None
+    ) -> dict[str, Any]:
+        """Queue ingestion of uploaded files: stage each ``(filename, data)`` to the shared
+        upload dir, then ingest by path (parsing happens in the worker). ``parser`` as
+        elsewhere. Requires ``staging_dir`` to be configured."""
+        if not self.staging_dir:
+            raise RuntimeError("uploads are not configured (no staging_dir / UPLOAD_DIR)")
+        paths = [self._stage_upload(filename, data) for filename, data in uploads]
+        return await self.ingest_from_paths(paths, parser)
 
     async def get_document_status(
         self, document_id: str, verbose: bool = False
@@ -97,3 +122,13 @@ class IngestionService:
 
     def _infer_source_type(self, path: str) -> str:
         return _SOURCE_TYPES.get(path.lower().rsplit(".", 1)[-1], "unknown")
+
+    def _stage_upload(self, filename: str, data: bytes) -> str:
+        """Persist uploaded bytes under a unique name (extension preserved so the loader
+        dispatches correctly) and return the path. Local-filesystem staging — an object
+        store (S3/blob) would plug in behind this same method."""
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in (filename or "") else "bin"
+        dest = Path(self.staging_dir) / f"{uuid.uuid4()}.{ext}"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
+        return str(dest)

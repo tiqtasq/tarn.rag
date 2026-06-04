@@ -5,8 +5,12 @@ transport doesn't emit lifespan events); we override ``get_ingestion_service`` t
 test wiring and drive the same queue to drain the DAG.
 """
 
+from pathlib import Path
+
+import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
 from app.api.v1.dependencies import get_ingestion_service
 from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -44,13 +48,15 @@ def _stages():
 
 
 @pytest_asyncio.fixture
-async def api(repo):
+async def api(repo, tmp_path):
     """Yield (client, queue): an httpx client bound to the app (with the service dependency
     overridden to InMemory+SQLite) plus the queue so tests can drain the DAG."""
     queue = InMemoryJobQueue()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), queue, repo, create_sink_registry())
-    service = IngestionService(Pipeline(stages), orch, repo)
+    service = IngestionService(
+        Pipeline(stages), orch, repo, staging_dir=str(tmp_path / "uploads")
+    )
     worker = IngestionWorker(orch)
     queue.set_handler(worker.handle_batch)
 
@@ -122,3 +128,80 @@ async def test_ingest_from_paths_queues_one_job_per_path(api):
     )
     assert resp.status_code == 200
     assert resp.json()["documents_queued"] == 2
+
+
+async def test_known_parser_is_accepted(api):
+    client, _ = api
+    resp = await client.post(
+        "/v1/ingest/content",
+        json={"documents": [{"content": "x", "source_id": "s1"}], "parser": "pdfplumber"},
+    )
+    assert resp.status_code == 200
+
+
+async def test_unknown_parser_is_rejected_422(api):
+    client, _ = api
+    resp = await client.post(
+        "/v1/ingest/content",
+        json={"documents": [{"content": "x", "source_id": "s1"}], "parser": "bogus"},
+    )
+    assert resp.status_code == 422  # rejected at the edge, nothing queued
+
+
+async def test_file_upload_stages_and_ingests_end_to_end(api):
+    client, queue = api
+    # Upload a .txt so LoadAndParse reads it from the staged path (no real PDF needed).
+    resp = await client.post(
+        "/v1/ingest/file",
+        files={"files": ("note.txt", b"hello world. " * 10, "text/plain")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["documents_queued"] == 1
+    doc_id = body["documents"][0]["document_id"]
+
+    await queue.run()  # worker reads the staged file and runs the whole DAG
+
+    status = (await client.get(f"/v1/ingest/documents/{doc_id}/status")).json()
+    assert status["status"] == "complete"
+    assert status["embedding_count"] == status["chunk_count"] > 0
+
+
+async def test_file_upload_rejects_unknown_parser_422(api):
+    client, _ = api
+    resp = await client.post(
+        "/v1/ingest/file",
+        files={"files": ("note.txt", b"hi", "text/plain")},
+        data={"parser": "bogus"},
+    )
+    assert resp.status_code == 422
+
+
+# A tiny real PDF whose only text is "Quokka ingestion smoke 7" (generated with fpdf2).
+SAMPLE_PDF = Path(__file__).parents[2] / "fixtures" / "sample.pdf"
+
+
+@pytest.mark.parametrize("parser", [None, "pdfplumber"])
+async def test_real_pdf_upload_is_parsed_and_ingested(api, repo, parser):
+    """A real PDF, uploaded over REST, is extracted by the selected backend (pypdf default,
+    pdfplumber on request), chunked, embedded, and persisted — proving the whole path."""
+    client, queue = api
+    data = {"parser": parser} if parser else None
+    resp = await client.post(
+        "/v1/ingest/file",
+        files={"files": ("sample.pdf", SAMPLE_PDF.read_bytes(), "application/pdf")},
+        data=data,
+    )
+    assert resp.status_code == 200
+    doc_id = resp.json()["documents"][0]["document_id"]
+
+    await queue.run()  # worker reads the staged PDF, runs the real parser + DAG
+
+    status = (await client.get(f"/v1/ingest/documents/{doc_id}/status")).json()
+    assert status["status"] == "complete"
+    assert status["embedding_count"] == status["chunk_count"] > 0
+
+    # The extracted PDF text actually landed in the stored chunks.
+    async with repo.engine.connect() as conn:
+        contents = (await conn.execute(select(repo.chunks.c.content))).scalars().all()
+    assert any("Quokka" in c for c in contents)

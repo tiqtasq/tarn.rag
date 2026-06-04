@@ -89,7 +89,9 @@ def build_service(
         PipelineDAG(pipeline.stages), enqueuer, repository, create_sink_registry(),
         observability=observability,
     )
-    return IngestionService(pipeline, orchestrator, repository, observability)
+    return IngestionService(
+        pipeline, orchestrator, repository, observability, staging_dir=settings.UPLOAD_DIR
+    )
 
 
 def get_ingestion_service(request: Request) -> IngestionService:

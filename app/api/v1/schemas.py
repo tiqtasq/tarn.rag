@@ -3,20 +3,39 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.domains.ingestion.stages.parsers import AVAILABLE_PDF_PARSERS
+
+
+def validate_parser(value: str | None) -> str | None:
+    """Reject unknown parser names at the API edge (→ 422), before anything is queued.
+    Reused by the multipart upload endpoint (which has no Pydantic body)."""
+    if value is not None and value not in AVAILABLE_PDF_PARSERS:
+        raise ValueError(
+            f"unknown parser {value!r}; available: {sorted(AVAILABLE_PDF_PARSERS)}"
+        )
+    return value
 
 
 class IngestRequest(BaseModel):
-    """Ingest documents from file paths."""
+    """Ingest documents from file paths. ``parser`` (optional) selects the PDF backend for
+    the whole request; omit it for the default (applies to PDFs only)."""
 
     file_paths: list[str]
+    parser: str | None = None
+
+    _check_parser = field_validator("parser")(validate_parser)
 
 
 class IngestFromContentRequest(BaseModel):
     """Ingest pre-loaded content: ``[{"content": "...", "source_id": "..."}]`` (source_id
-    optional; extra keys flow into the document metadata)."""
+    optional; extra keys flow into the document metadata). ``parser`` as in IngestRequest."""
 
     documents: list[dict[str, str]]
+    parser: str | None = None
+
+    _check_parser = field_validator("parser")(validate_parser)
 
 
 class DocumentRef(BaseModel):
