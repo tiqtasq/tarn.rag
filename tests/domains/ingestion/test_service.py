@@ -3,6 +3,8 @@
 Uses a fake 3-d encoder so no sentence-transformers is needed (matches the e2e test).
 """
 
+import io
+
 import pytest
 
 from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -128,14 +130,14 @@ async def test_ingest_from_uploads_stages_bytes_and_queues_by_path(repo, tmp_pat
     )
 
     result = await service.ingest_from_uploads(
-        [("report.pdf", b"%PDF-fake-bytes")], parser="pdfplumber"
+        [("report.pdf", io.BytesIO(b"%PDF-fake-bytes"))], parser="pdfplumber"
     )
     assert result["documents_queued"] == 1
 
     meta = enq.jobs[0].item.metadata
     staged = meta["source_path"]
     assert staged.endswith(".pdf")  # extension preserved so the loader dispatches
-    assert open(staged, "rb").read() == b"%PDF-fake-bytes"  # bytes were written
+    assert open(staged, "rb").read() == b"%PDF-fake-bytes"  # streamed to disk
     assert meta["source_type"] == "pdf"
     assert meta["parser"] == "pdfplumber"
 
@@ -145,4 +147,4 @@ async def test_ingest_from_uploads_requires_staging_dir(repo):
     orch = PipelineOrchestrator(PipelineDAG(stages), InMemoryJobQueue(), repo, create_sink_registry())
     service = IngestionService(Pipeline(stages), orch, repo)  # no staging_dir
     with pytest.raises(RuntimeError, match="not configured"):
-        await service.ingest_from_uploads([("x.txt", b"hi")])
+        await service.ingest_from_uploads([("x.txt", io.BytesIO(b"hi"))])

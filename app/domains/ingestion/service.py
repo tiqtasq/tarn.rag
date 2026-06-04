@@ -9,10 +9,12 @@ persisted data via the repository.
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from app.domains.base.models import PipelineItem
 from app.domains.base.repository import DocumentRepository
@@ -74,14 +76,19 @@ class IngestionService:
         return await self._queue(items)
 
     async def ingest_from_uploads(
-        self, uploads: list[tuple[str, bytes]], parser: str | None = None
+        self, uploads: list[tuple[str, BinaryIO]], parser: str | None = None
     ) -> dict[str, Any]:
-        """Queue ingestion of uploaded files: stage each ``(filename, data)`` to the shared
-        upload dir, then ingest by path (parsing happens in the worker). ``parser`` as
-        elsewhere. Requires ``staging_dir`` to be configured."""
+        """Queue ingestion of uploaded files: **stream** each ``(filename, source)`` to the
+        shared upload dir, then ingest by path (parsing happens in the worker). ``source`` is
+        any binary file-like; it is copied in chunks (never fully held in memory). ``parser``
+        as elsewhere. Requires ``staging_dir`` to be configured."""
         if not self.staging_dir:
             raise RuntimeError("uploads are not configured (no staging_dir / UPLOAD_DIR)")
-        paths = [self._stage_upload(filename, data) for filename, data in uploads]
+        # Offload the blocking disk copy so the event loop isn't stalled on large files.
+        paths = [
+            await asyncio.to_thread(self._stage_upload, filename, source)
+            for filename, source in uploads
+        ]
         return await self.ingest_from_paths(paths, parser)
 
     async def get_document_status(
@@ -123,12 +130,14 @@ class IngestionService:
     def _infer_source_type(self, path: str) -> str:
         return _SOURCE_TYPES.get(path.lower().rsplit(".", 1)[-1], "unknown")
 
-    def _stage_upload(self, filename: str, data: bytes) -> str:
-        """Persist uploaded bytes under a unique name (extension preserved so the loader
-        dispatches correctly) and return the path. Local-filesystem staging — an object
-        store (S3/blob) would plug in behind this same method."""
+    def _stage_upload(self, filename: str, source: BinaryIO) -> str:
+        """Stream an uploaded file-like under a unique name (extension preserved so the
+        loader dispatches correctly) and return the path. ``copyfileobj`` copies in chunks —
+        no full-memory load. Local-filesystem staging — an object store (S3/blob) would plug
+        in behind this same method."""
         ext = filename.rsplit(".", 1)[-1].lower() if "." in (filename or "") else "bin"
         dest = Path(self.staging_dir) / f"{uuid.uuid4()}.{ext}"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        with open(dest, "wb") as out:
+            shutil.copyfileobj(source, out)
         return str(dest)

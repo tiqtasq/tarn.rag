@@ -43,6 +43,10 @@ earlier ones (models → repository → stages → orchestration → service/API
   "Quokka …", generated once with fpdf2 — not a dep) drives a **real-PDF-over-REST** integration
   test (`test_real_pdf_upload_is_parsed_and_ingested`, parametrized pypdf/pdfplumber) and the
   unit `test_real_pdf_backends_extract_text`; both run real extraction (FakeEmbed avoids the model).
+  HTML uses `load_html` (BeautifulSoup, MIT — `beautifulsoup4` in the `parsers` extra; html2text
+  dropped as GPLv3). Uploads are **streamed** to `UPLOAD_DIR`: `_stage_upload(filename, source)`
+  takes a binary file-like and `shutil.copyfileobj`s it (run via `asyncio.to_thread`); the
+  endpoint passes Starlette's spooled `f.file`, so large files never sit fully in memory.
 - Phase 5: `core/observability.py` (`Observability` ABC — abstract `log`/`counter`/`gauge` +
   concrete `timer` contextmanager — + `NoOpObservability`). Obs is held by the **worker**
   (per-stage `timer`/throughput counters + error counter/`log`) and the **orchestrator**
