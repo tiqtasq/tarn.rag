@@ -1,9 +1,16 @@
 """Composition builders: index-mode vs classic-mode wiring of the data store + status facts."""
 
-from app.api.v1.dependencies import build_service
+from app.api.v1.dependencies import (
+    build_service,
+    make_embedder,
+    make_index_store,
+    make_repository,
+)
 from app.core.config import Settings
+from app.domains.base.embedder import Embedder
 from app.domains.base.index_store import SqliteIndexStore
 from app.domains.base.models import Chunk, Document, Embedding
+from app.domains.base.repository import DocumentRepository
 from app.domains.ingestion.queue import InMemoryJobQueue
 
 
@@ -50,3 +57,30 @@ async def test_classic_mode_defaults_to_repo(repo, tmp_path):
     # No index_store -> data + status facts both come from the repository (unchanged path).
     service = build_service(_settings(tmp_path), InMemoryJobQueue(), repo)
     assert service.orchestrator.chunk_store is repo
+
+
+# --- builder smoke tests: each runs and returns without error ---
+
+
+def test_make_embedder_returns_an_embedder(tmp_path):
+    embedder = make_embedder(_settings(tmp_path))  # construction only; no model load
+    assert isinstance(embedder, Embedder)
+    assert embedder.dim() == 3
+
+
+def test_make_index_store_connects_and_returns(tmp_path):
+    store = make_index_store(_settings(tmp_path))  # no embedder -> schema only, no model
+    try:
+        assert isinstance(store, SqliteIndexStore)
+        assert store.index_meta() == {}  # schema present, meta not written yet
+    finally:
+        store.close()
+
+
+async def test_make_repository_connects_and_returns(tmp_path):
+    repo = await make_repository(_settings(tmp_path))  # sqlite URL -> SqliteRepository
+    try:
+        assert isinstance(repo, DocumentRepository)
+        assert await repo.health_check() is True
+    finally:
+        await repo.disconnect()
