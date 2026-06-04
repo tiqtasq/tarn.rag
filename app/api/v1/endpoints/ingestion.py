@@ -49,7 +49,8 @@ async def ingest_file(
         validate_parser(parser)  # 422 on an unknown parser, before anything is staged
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    uploads = [(f.filename or "upload.bin", await f.read()) for f in files]
+    # Pass the spooled file object (Starlette spills large uploads to disk) — streamed, not read.
+    uploads = [(f.filename or "upload.bin", f.file) for f in files]
     return IngestResponse(**await service.ingest_from_uploads(uploads, parser))
 
 

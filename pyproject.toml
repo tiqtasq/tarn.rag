@@ -17,7 +17,7 @@ postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
 api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
 embed = ["sentence-transformers"]
-parsers = ["pypdf", "pdfplumber"]  # PDF text-extraction backends (permissive)
+parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [build-system]

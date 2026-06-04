@@ -84,9 +84,10 @@ flow into the document metadata.
 
 ### `POST /v1/ingest/file` — upload files (multipart)
 
-Upload one or more files directly. The API stages the bytes to `UPLOAD_DIR` and ingests them
-by path — parsing happens in the worker. Form fields: `files` (one or more) and optional
-`parser`. One `document_id` per file.
+Upload one or more files directly (txt, pdf, or html). The API **streams** the bytes to
+`UPLOAD_DIR` (large files never sit in memory) and ingests them by path — parsing happens in
+the worker. Form fields: `files` (one or more) and optional `parser`. One `document_id` per
+file.
 
 ```bash
 curl -s localhost:8000/v1/ingest/file \
