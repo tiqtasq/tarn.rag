@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from app.api.v1.dependencies import (
     build_service,
     get_observability,
+    make_index_store,
     make_queue,
     make_repository,
 )
@@ -31,14 +32,18 @@ async def lifespan(app: FastAPI):
     repository = await make_repository(settings)
     enqueuer = await make_queue(settings)
     observability = get_observability(settings)
+    # The API opens the §8 index read-only (status facts); the worker is the producer/writer.
+    index_store = make_index_store(settings)
+    app.state.index_store = index_store
     app.state.ingestion_service = build_service(
-        settings, enqueuer, repository, observability
+        settings, enqueuer, repository, observability, index_store=index_store
     )
     logger.info("Ingestion API ready (%s v%s)", settings.APP_NAME, settings.APP_VERSION)
     try:
         yield
     finally:
         await repository.engine.dispose()
+        index_store.close()
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:

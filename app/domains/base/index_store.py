@@ -58,6 +58,8 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         sqlite_vec.load(conn)
         conn.enable_load_extension(False)
         conn.execute("PRAGMA foreign_keys=ON")
+        # WAL so API readers (status facts) don't block the worker writer on the same file.
+        conn.execute("PRAGMA journal_mode=WAL")
         self._conn = conn
         self._create_schema()
         return self
