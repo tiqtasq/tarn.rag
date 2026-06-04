@@ -113,15 +113,22 @@ index.** Pieces:
   narrow ports**, not a fat combined store (ISP); only this read model sees both. The service
   takes an optional `facts_source` (defaults to the repo); `DocumentRepository.document_status`
   now delegates to a reader over itself.
+- **App wiring (index mode):** `dependencies.make_embedder`/`make_index_store` +
+  `build_orchestrator`/`build_service` take an optional `index_store`. The **worker**
+  (`run_worker.py`) is the producer — `make_index_store(settings, embedder=make_embedder(...))`
+  writes `index_meta` and the sinks persist into the index; the **API** (`app/main.py` lifespan)
+  opens it **read-only** (no embedder/model needed) for status facts. Both share `INDEX_DB_PATH`
+  (the store opens WAL so readers don't block the writer). With `index_store=None` the builders
+  preserve the classic repo-only path (back-compat).
 - **Deps:** `sqlite-vec` is a core dep; ONNX stack in the `onnx` extra. Tests: `test_index_store`
-  + `test_index_e2e` (fake embedder, no download); `test_status` (rollup); `test_embedder`
-  (real, gated on `MODEL_DIR`).
+  + `test_index_e2e` (fake embedder, no download); `test_status` (rollup); `test_dependencies`
+  (index-mode vs classic wiring); `test_embedder` (real, gated on `MODEL_DIR`).
 
 **Not yet built (next):** the retrieval read engine (`SqliteIndexStore.dense_knn/sparse_bm25/
 hydrate`, dense+sparse retrievers, RRF + tie-break, default `LicensePolicy`, identity reranker,
-`RetrievalEngine.search`); index-mode DI/API wiring (build the `SqliteIndexStore` + pass
-`facts_source` in `app/main.py`/`dependencies.py`); the C++ port + parity harness; the real
-license/method domain.
+`RetrievalEngine.search`); the C++ port + parity harness; the real license/method domain. (The
+live API/worker index path needs Postgres+pgQueuer to run, so it's covered by the `build_service`
+DI test + the InMemory index e2e, not an end-to-end app smoke.)
 
 ## What This System Is
 
