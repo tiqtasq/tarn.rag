@@ -7,7 +7,7 @@ subclasses supply only the Postgres/SQLite specifics via a small set of hooks.
 from __future__ import annotations
 
 import uuid
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from typing import Any
 
 from sqlalchemy import (
@@ -30,10 +30,17 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from app.core.exceptions import ChunkNotFoundError
+from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import Chunk, Document, Embedding
+from app.domains.base.status import (
+    DocumentFacts,
+    DocumentFactsSource,
+    DocumentStatusReader,
+    JobStatusSource,
+)
 
 
-class DocumentRepository(ABC):
+class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     """SQLAlchemy Core repository shared by ingestion and retrieval.
 
     Subclasses supply only the dialect specifics: the async driver URL, the vector
@@ -326,60 +333,37 @@ class DocumentRepository(ABC):
             ).mappings().all()
         return [dict(r) for r in rows]
 
-    async def document_status(self, document_id: str) -> dict[str, Any] | None:
-        """Document-level status derived from persisted data, rolled up to 'failed' if
-        any of the document's jobs failed. None if the document_id is unknown."""
+    async def document_facts(self, document_id: str) -> DocumentFacts:
+        """Persisted-data facts (presence + chunk/embedding counts) for this document."""
         src = self.documents.c.metadata["source_id"].as_string()
         async with self.engine.connect() as conn:
             doc = (
-                await conn.execute(
-                    select(self.documents.c.id).where(src == document_id)
-                )
+                await conn.execute(select(self.documents.c.id).where(src == document_id))
             ).first()
-            job_states = (
+            if doc is None:
+                return DocumentFacts(present=False, chunk_count=0, embedding_count=0)
+            doc_id = doc[0]
+            chunk_count = (
                 await conn.execute(
-                    select(self.job_status.c.status).where(
-                        self.job_status.c.document_id == document_id
-                    )
+                    select(func.count())
+                    .select_from(self.chunks)
+                    .where(self.chunks.c.parent_doc_id == doc_id)
                 )
-            ).scalars().all()
-            if doc is None and not job_states:
-                return None
-            doc_id = doc[0] if doc else None
-            chunk_count = embedding_count = 0
-            if doc_id is not None:
-                chunk_count = (
-                    await conn.execute(
-                        select(func.count())
-                        .select_from(self.chunks)
-                        .where(self.chunks.c.parent_doc_id == doc_id)
-                    )
-                ).scalar_one()
-                embedding_count = (
-                    await conn.execute(
-                        select(func.count())
-                        .select_from(self.embeddings)
-                        .join(
-                            self.chunks,
-                            self.embeddings.c.chunk_id == self.chunks.c.id,
-                        )
-                        .where(self.chunks.c.parent_doc_id == doc_id)
-                    )
-                ).scalar_one()
-        if "failed" in job_states:
-            status = "failed"
-        elif doc_id is None:
-            status = "pending"
-        elif chunk_count and embedding_count >= chunk_count:
-            status = "complete"
-        else:
-            status = "in_progress"
-        return {
-            "document_id": document_id,
-            "status": status,
-            "chunk_count": chunk_count,
-            "embedding_count": embedding_count,
-        }
+            ).scalar_one()
+            embedding_count = (
+                await conn.execute(
+                    select(func.count())
+                    .select_from(self.embeddings)
+                    .join(self.chunks, self.embeddings.c.chunk_id == self.chunks.c.id)
+                    .where(self.chunks.c.parent_doc_id == doc_id)
+                )
+            ).scalar_one()
+        return DocumentFacts(True, chunk_count, embedding_count)
+
+    async def document_status(self, document_id: str) -> dict[str, Any] | None:
+        """Convenience: status over this repo alone (job_status + data both here). The
+        retrieval path composes a reader over the repo (jobs) + the index store (facts)."""
+        return await DocumentStatusReader(self, self).document_status(document_id)
 
     # ---------------- shared helpers ----------------
 

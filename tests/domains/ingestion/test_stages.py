@@ -57,28 +57,28 @@ def test_enrich_counts():
     assert out[0].metadata["char_count"] == len("one two three")
 
 
-class _FakeEncoder:
-    """Deterministic 3-d encoder that records its batch calls."""
+class _FakeEmbedder:
+    """Deterministic 3-d embedder that records its batch calls."""
 
     def __init__(self):
         self.calls: list[list[str]] = []
 
-    def encode(self, texts, convert_to_tensor=False):
+    def embed_passages(self, texts):
         self.calls.append(list(texts))
         return [[float(len(t)), 1.0, 0.0] for t in texts]
 
 
 def test_embed_produces_embeddings_with_model_batching():
     stage = EmbedStage(model_batch_size=2)
-    stage._model = _FakeEncoder()
+    stage._embedder = _FakeEmbedder()
     items = [
         _item(f"chunk {i}", chunk_id=f"c{i}", source_id="s1") for i in range(3)
     ]
     embs = list(stage.process_batch(items))
     assert [e.chunk_id for e in embs] == ["c0", "c1", "c2"]
-    assert all(e.dimension == 3 and e.model.endswith("all-minilm-l6-v2") for e in embs)
-    # model_batch_size=2 over 3 items -> two encode() calls (two-tier batching)
-    assert len(stage._model.calls) == 2
+    assert all(e.dimension == 3 and e.model.endswith("all-MiniLM-L6-v2") for e in embs)
+    # model_batch_size=2 over 3 items -> two embed calls (two-tier batching)
+    assert len(stage._embedder.calls) == 2
 
 
 def test_pipeline_composition_doc_to_chunks():

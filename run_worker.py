@@ -17,6 +17,8 @@ import logging
 from app.api.v1.dependencies import (
     build_orchestrator,
     get_observability,
+    make_embedder,
+    make_index_store,
     make_queue,
     make_repository,
 )
@@ -32,7 +34,12 @@ async def main() -> None:
     repository = await make_repository(settings)
     queue = await make_queue(settings)
     observability = get_observability(settings)
-    orchestrator = build_orchestrator(settings, queue, repository, observability)
+    # The worker is the index producer: it writes index_meta (embedding fingerprint) and the
+    # sinks persist documents/chunks/vectors into the §8 index. job_status stays on the repo.
+    index_store = make_index_store(settings, embedder=make_embedder(settings))
+    orchestrator = build_orchestrator(
+        settings, queue, repository, observability, index_store=index_store
+    )
 
     # pure handler; coordinator = orchestrator. Worker observes compute; orchestrator the lifecycle.
     worker = IngestionWorker(orchestrator, observability=observability)
@@ -42,6 +49,7 @@ async def main() -> None:
         await queue.run()  # consumer loop (pgQueuer owns claiming/retries/NOTIFY)
     finally:
         await repository.engine.dispose()
+        index_store.close()
 
 
 if __name__ == "__main__":

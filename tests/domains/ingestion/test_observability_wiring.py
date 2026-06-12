@@ -40,14 +40,14 @@ class _RecordingObs(Observability):
         return {n for n, _ in self.counters}
 
 
-class _FakeEncoder:
-    def encode(self, texts, convert_to_tensor=False):
+class _FakeEmbedder:
+    def embed_passages(self, texts):
         return [[float(len(t)), 1.0, 0.0] for t in texts]
 
 
 class FakeEmbedStage(EmbedStage):
-    def _get_model(self):
-        return _FakeEncoder()
+    def _get_embedder(self):
+        return _FakeEmbedder()
 
 
 def _stages():
