@@ -15,13 +15,14 @@ This document specifies the **retrieval engine**. Given a fully-built index (an 
 ### In scope
 
 - Query-time embedding, hybrid (dense + sparse) candidate generation, fusion, license/scope filtering, result assembly with provenance.
+- An optional **local response-synthesis** stage for in-field Q&A: when a field tech asks a free-form question whose answer must be *synthesized* rather than read off one clause, the engine can generate that answer **locally** from the retrieved grounding (§5.10). This is the *answer* path — sharply distinct from content generation (below), and the reason it lives here is that it runs as part of answering the query. The synthesizer is a pluggable seam; the on-device model behind it is deferred (§14).
 - Two ports with **identical functionality**: Python (Linux only, prototyping) and C++ (cross-platform, ships with ModusQ).
 - A modular pipeline that can later accept a graph-based retriever without a rewrite.
 
 ### Out of scope (defined as contracts only)
 
 - **Ingestion**: chunking, build-time embedding, index/FTS construction, license tagging, reference-bundle construction. See §8 for what retrieval **requires** ingestion to produce.
-- **Generation** (LLMs, SOP conversion, in-field generative Q&A). Retrieval supplies grounding chunks; what happens to them is elsewhere.
+- **Content generation** — the creation-side generation that *produces content the retrieval component later consumes*: SOP-to-method conversion, method/Commons authoring, model-assisted verification. It runs upstream, behind point 10's generation backend (cloud / BYO / bundled-local). This is **not** the in-field answer synthesis listed under "In scope": content generation feeds *into* the index (generation → ingestion → retrieval), whereas response synthesis consumes *from* retrieval to answer a live question (retrieval → synthesis → answer). See §5.10 for the full distinction. Only content generation is out of scope.
 - **Field Sync / slice distribution.** Retrieval reads whatever SQLite database it is handed (a scoped slice on a device, or the full corpus on a creation node) — identical code path.
 - **Graph retrieval** and **reranking** — interfaces only (see §7).
 
@@ -62,6 +63,8 @@ flowchart LR
   RR --> TK[Truncate to top_k]
   TK --> HY[Hydrate + attach provenance]
   HY --> R[RetrievalResult list]
+  R -. answer mode only .-> SYN[Local ResponseSynthesizer<br/>on-device offline / on-prem connected]
+  SYN --> A[SynthesizedAnswer with citations]
 ```
 
 ### Why this guarantees R1 (identical functionality)
@@ -108,6 +111,10 @@ Query {
   top_k:       int               # final result count (default 8)
   dense_k:     int               # dense candidate pool (default 50)
   sparse_k:    int               # sparse candidate pool (default 50)
+  synthesize:  bool              # default false. If true, answer() runs §5.10 local response
+                                 # synthesis and returns a SynthesizedAnswer. When true, the
+                                 # license filter is forced to GENERATION_GROUNDING semantics
+                                 # (chunks are fed to a model), regardless of `purpose`.
 }
 
 MethodRef { method_id: string, method_version: string }   # version optional; if omitted, latest in DB
@@ -203,11 +210,43 @@ RetrievalEngine.open(db_path: string, model_dir: string, config: EngineConfig) -
     # validates embedding config_fingerprint == index_meta (refuses on mismatch),
     # validates schema_version. No network.
 
-RetrievalEngine.search(query: Query) -> RetrievalResult[]
+RetrievalEngine.search(query: Query) -> RetrievalResult[]      # retrieve mode (grounding only)
+RetrievalEngine.answer(query: Query) -> SynthesizedAnswer      # answer mode: search() + §5.10 local synthesis
 RetrievalEngine.close()
+
+SynthesizedAnswer {
+  text:      string             # the locally-synthesized answer (advisory; never a verdict)
+  citations: RetrievalResult[]  # the grounding the answer was synthesized from
+}
 ```
 
-`open()` is the only place compatibility is validated; `search()` is hot-path and assumes a validated engine. The engine is **read-only** with respect to the index.
+`open()` is the only place compatibility is validated; `search()` and `answer()` are hot-path and assume a validated engine. `answer()` is exactly `search()` (with the license filter forced to `GENERATION_GROUNDING`) followed by the local `ResponseSynthesizer` (§5.10); with the default `ExtractiveSynthesizer` it needs no generation model. The engine is **read-only** with respect to the index.
+
+### 5.10 Local response synthesis for in-field Q&A (the answer path)
+
+A field tech's question has two modes, and the engine serves both:
+
+- **Retrieve mode** (`search`, default) — return the ranked grounding chunks. When the answer *is* a specific clause, this is the whole job: surface it (`EXECUTION` purpose), the tech reads it, **no model runs**.
+- **Answer mode** (`answer`, `synthesize = true`) — when the answer must be *synthesized* across several chunks rather than read off one, the engine retrieves the grounding (forced to `GENERATION_GROUNDING` licensing, because the chunks are fed to a model) and then runs a **local response synthesizer** to generate the answer, with citations back to the grounding.
+
+**This is response generation, and it is deliberately not content generation.** The distinction is directional, and it is the reason this stage belongs in the retrieval subsystem rather than behind the generation backend:
+
+| | Content generation (out of scope, §14) | Response synthesis (this stage, in scope) |
+|---|---|---|
+| Produces | durable methods / content | an ephemeral answer to a live question |
+| Direction | generation → ingestion → **into** the index | retrieval → synthesis → answer **out** to the tech |
+| Consumed by | the retrieval component (indexed, later retrieved) | the field tech, immediately; nothing is written to the index |
+| Runs | upstream, behind point 10's backend (cloud / BYO / bundled-local) | **locally**, as part of answering the query |
+
+Because the field is offline-first, response synthesis **must be able to run locally** — on the device when there is no connectivity, on the on-prem node when connected. It is **never** a call out to a content-generation service. Composing retrieval and synthesis into one local operation is precisely what "synthesis as part of the retrieval question" means.
+
+**Pipeline placement and contract.** Answer mode is `search` (retrieve + fuse + filter + hydrate, exactly as specified) followed by one stage: `ResponseSynthesizer.synthesize(question, grounding) -> SynthesizedAnswer` (§7). The synthesizer:
+
+- consumes **only** the already-filtered `RetrievalResult[]` grounding — it never re-queries and never reaches outside the permitted, AI-groundable set, so the license guarantees of §5.6 hold unchanged;
+- returns the answer text **plus** the `RetrievalResult[]` it used, as citations, so every synthesized answer is traceable to its sources (consistent with the provenance rule, and with point 1's advisory posture — the answer is advisory, never a verdict);
+- runs entirely locally and offline.
+
+**What this spec implements vs. defers.** In scope here: the `answer()` entry point, the `ResponseSynthesizer` seam, the local-execution and citation contracts, and a default **`ExtractiveSynthesizer`** (no model — returns the top grounding spans, so answer mode is functional with zero LLM). The **`LocalModelSynthesizer`** — the small on-device generation model that produces fluent synthesized prose — is the real implementation behind the seam; it is pluggable and **deferred / build-to-demand** (§14, §15), mirroring how the reranker model is left as a seam. The model choice and its runtime are a generation concern, not a retrieval one; the retrieval subsystem owns only the seam and the guarantee that synthesis stays local and grounded.
 
 ---
 
@@ -257,6 +296,12 @@ interface Fuser:
 interface Reranker:
     rerank(ctx: QueryContext, scored: Scored[]) -> Scored[]   # v1: identity
 
+interface ResponseSynthesizer:                # §5.10 answer path; runs LOCALLY only
+    synthesize(question: string, grounding: RetrievalResult[]) -> SynthesizedAnswer
+    # default impl: ExtractiveSynthesizer (no model). Real impl: LocalModelSynthesizer
+    # (small on-device generation model) — pluggable, deferred (§14). Never re-queries;
+    # never reaches outside the supplied (already permitted, AI-groundable) grounding.
+
 interface LicensePolicy:
     permitted_predicate(purpose: Purpose) -> SqlPredicate     # license-class set + ai_grounding + available
 
@@ -276,12 +321,23 @@ interface Store:                           # all SQLite access lives here
 
 ```text
 EngineConfig {
-  retrievers: [ {name:"dense", weight:1.0, k:50}, {name:"sparse", weight:1.0, k:50} ]
-  fuser:      {type:"rrf", rrf_k:60}
-  reranker:   {type:"identity"}
-  defaults:   {top_k:8, overfetch_factor:4}
+  retrievers:  [ {name:"dense", weight:1.0, k:50}, {name:"sparse", weight:1.0, k:50} ]
+  fuser:       {type:"rrf", rrf_k:60}
+  reranker:    {type:"identity"}
+  synthesizer: {type:"extractive"}   # answer mode (§5.10). {type:"local_model", ...} when built (§14); always local
+  defaults:    {top_k:8, overfetch_factor:4}
 }
 ```
+
+### 7.1 C++ ABI: string and ownership conventions
+
+The C++ port's public interface uses C-style strings at the boundary, so it binds cleanly from .NET (WinUI 3), JNI (Android), and other FFI callers.
+
+- **String inputs** are passed as `const char* str`, where `str` points to a **UTF-8 encoded, NUL-terminated** string. The **caller owns** the string and is responsible for its lifetime and cleanup. The **callee must not assume the string persists after the call returns** — if it needs to retain the contents, it copies them into its own storage during the call. This applies to every string-typed input on the public surface, including the fields of input structs (`Query.text`, `MethodRef.method_id`, `MethodRef.method_version`) and the `open()` paths (`db_path`, `model_dir`).
+- **String outputs** (e.g. `RetrievalResult.text`, `RetrievalResult.locator`, `SynthesizedAnswer.text`) are returned as owning `std::string` inside the returned result objects, so ownership is unambiguous and released by RAII when the result goes out of scope. No output string aliases caller-provided memory.
+- **Encoding is UTF-8 throughout** on both sides of the boundary; no other encoding crosses the interface.
+
+The Python port mirrors the same logical interface using native `str` (Python owns its strings). This convention governs the C++ surface specifically and does not change cross-port behavior (§9).
 
 ---
 
@@ -439,13 +495,15 @@ Keep the interface names, config keys, default values, and the RRF/tie-break/fil
 
 ## 13. Acceptance criteria (definition of done)
 
-- [ ] Both ports build and run **offline** (no network at `open()`/`search()`), CPU-only.
+- [ ] Both ports build and run **offline** (no network at `open()`, `search()`, or `answer()` — including local response synthesis), CPU-only.
 - [ ] C++ port builds on Linux, Windows, macOS, and Android (CMake).
 - [ ] `open()` validates embedding fingerprint and `schema_version` and refuses on mismatch.
 - [ ] Hybrid dense+sparse retrieval with RRF fusion and the mandatory tie-break.
 - [ ] License/scope pre-filtering enforced **inside** both retrievers; `GENERATION_GROUNDING` excludes `ai_grounding_allowed = 0`; `third_party_copyrighted` and `available = 0` never returned.
 - [ ] Results carry full provenance (document, locator, license class, method associations) and component + fused scores.
 - [ ] Pipeline is interface-driven; a stub `GraphRetriever` can be registered via config and runs through fusion without core changes (a no-op stub demonstrating R5 is sufficient here).
+- [ ] Answer mode works end to end with the default `ExtractiveSynthesizer` (no model): `answer()` retrieves under `GENERATION_GROUNDING`, runs the **local** synthesizer, and returns an answer with citations; the `LocalModelSynthesizer` seam is present but may be unimplemented.
+- [ ] C++ public surface follows §7.1 (inputs `const char*` UTF-8 NUL-terminated, caller-owned, non-retained; outputs owning `std::string`).
 - [ ] Parity harness passes: identical ranked `chunk_id` lists across ports on fixed query vectors; embedding tolerance met; CI wired.
 - [ ] All §10 edge cases covered by tests.
 
@@ -453,12 +511,14 @@ Keep the interface names, config keys, default values, and the RRF/tie-break/fil
 
 ## 14. Out of scope (explicit)
 
-Ingestion; generation and any LLM; Field Sync/slice distribution; graph retrieval implementation; model-based reranking; ANN indexing; model selection/training/export (a public model is assumed available as ONNX). These are referenced only as contracts or seams.
+Ingestion; **content generation and its backend** (SOP-to-method conversion, method/Commons authoring, model-assisted verification, and point 10's cloud / BYO / bundled-local generation backend); Field Sync/slice distribution; graph retrieval implementation; model-based reranking; ANN indexing; embedding-model selection/training/export (a public model is assumed available as ONNX).
+
+The in-field **response synthesizer's model** (`LocalModelSynthesizer`, §5.10) is out of scope **as an implementation** and is deferred / build-to-demand — but, unlike content generation, its *seam, local-execution contract, citation contract, and the `answer()` path are in scope and specified here*, with the no-model `ExtractiveSynthesizer` shipping as the default. All items above are referenced only as contracts or seams.
 
 ## 15. Future extensions (seams left open, not built)
 
 - **Graph/ontology retriever** — new `Retriever` impl + ingestion extension (out of scope) + config entry.
 - **Cross-encoder reranker** — replace the identity `Reranker`.
+- **Local model response synthesizer** — replace the default `ExtractiveSynthesizer` with a small on-device generation model (`LocalModelSynthesizer`, §5.10) for fluent in-field answers; runs locally and offline, behind the existing seam.
 - **ANN dense index** — behind `Store.dense_knn` for whole-corpus retrieval on roomy nodes.
 - **Shared C++ core with Python bindings** — possible later consolidation if maintaining two ports proves costly; the identical-interface discipline here makes that migration low-risk.
-

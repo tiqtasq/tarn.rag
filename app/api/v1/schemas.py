@@ -60,3 +60,30 @@ class DocumentStatusResponse(BaseModel):
     chunk_count: int
     embedding_count: int
     jobs: list[dict] | None = None  # debug-only, present when ?verbose=true
+
+
+class QueryRequest(BaseModel):
+    """A retrieval query (dense-only in Step A; purpose/scope land in Step B)."""
+
+    text: str
+    top_k: int = 8
+    dense_k: int = 50
+
+
+class RetrievalResultOut(BaseModel):
+    """A ranked, provenance-bearing chunk."""
+
+    chunk_id: str
+    text: str
+    score: float
+    component_scores: dict[str, float]
+    document_id: str
+    source_kind: str
+    standard_id: str | None = None
+    locator: str | None = None
+    license_class: str
+    methods: list[dict[str, str | None]] = []  # [{method_id, method_version}]
+
+
+class QueryResponse(BaseModel):
+    results: list[RetrievalResultOut]

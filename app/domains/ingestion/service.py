@@ -18,6 +18,7 @@ from typing import Any, BinaryIO
 
 from app.domains.base.models import PipelineItem
 from app.domains.base.repository import DocumentRepository
+from app.domains.base.status import DocumentFactsSource, DocumentStatusReader
 from app.domains.ingestion.orchestrator import PipelineOrchestrator
 from app.domains.ingestion.pipeline import Pipeline
 
@@ -34,12 +35,16 @@ class IngestionService:
         repository: DocumentRepository,
         observability: Any = None,  # Phase 5 Observability plugs in here
         staging_dir: str | None = None,  # where uploaded bytes are staged for the worker
+        facts_source: DocumentFactsSource | None = None,  # data store for status counts
     ):
         self.pipeline = pipeline
         self.orchestrator = orchestrator
-        self.repository = repository  # persistence + document-status reads
+        self.repository = repository  # persistence + job_status projection
         self.obs = observability
         self.staging_dir = staging_dir
+        # Status composes the repo's job_status with the data facts. In the classic path the
+        # repo is both; in retrieval mode the §8 index store supplies the facts (counts).
+        self._status = DocumentStatusReader(repository, facts_source or repository)
 
     async def ingest_from_paths(
         self, file_paths: list[str], parser: str | None = None
@@ -97,12 +102,7 @@ class IngestionService:
         """Document-level status derived from persisted data (pending | in_progress |
         complete | failed). ``None`` if the document is unknown. ``verbose=True`` adds a
         debug-only ``jobs`` breakdown — the only place per-job state is exposed."""
-        status = await self.repository.document_status(document_id)
-        if status is None:
-            return None
-        if verbose:
-            status["jobs"] = await self.repository.document_jobs(document_id)
-        return status
+        return await self._status.document_status(document_id, verbose=verbose)
 
     # ----- internals -----
 
