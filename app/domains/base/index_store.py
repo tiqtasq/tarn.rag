@@ -18,6 +18,7 @@ import hashlib
 import sqlite3
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 import sqlite_vec
@@ -29,6 +30,30 @@ from app.domains.base.status import DocumentFacts, DocumentFactsSource
 SCHEMA_VERSION = "1"
 INGESTION_VERSION = "0.1.0"
 FTS_TOKENIZER = "unicode61"
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A ranked candidate from a retriever (rank is 1-based; raw_score is engine-specific:
+    distance for dense KNN, bm25 for sparse)."""
+
+    chunk_id: str
+    rank: int
+    raw_score: float
+
+
+@dataclass(frozen=True)
+class ChunkRecord:
+    """A hydrated chunk: canonical text + provenance + license, for result assembly."""
+
+    chunk_id: str
+    text: str
+    document_id: str
+    source_kind: str
+    standard_id: str | None
+    locator: str | None
+    license_class: str
+    methods: list[tuple[str, str]] = field(default_factory=list)  # (method_id, method_version)
 
 
 class SqliteIndexStore(ChunkStore, DocumentFactsSource):
@@ -239,3 +264,50 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         ).fetchone() is not None
         chunk_count, embedding_count = self.counts(document_id)
         return DocumentFacts(present, chunk_count, embedding_count)
+
+    # ---------------- read side (retrieval) ----------------
+
+    def dense_knn(
+        self, query_vec: list[float], k: int, filter: str | None = None
+    ) -> list[Candidate]:
+        """Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first. ``filter`` is a permitted-
+        chunk SQL predicate (Step B / license policy); unused in the dense-only slice."""
+        rows = self.conn.execute(
+            "SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? "
+            "ORDER BY distance LIMIT ?",
+            (sqlite_vec.serialize_float32(query_vec), k),
+        ).fetchall()
+        return [
+            Candidate(chunk_id=cid, rank=i + 1, raw_score=dist)
+            for i, (cid, dist) in enumerate(rows)
+        ]
+
+    def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
+        """Fetch canonical text + provenance for the given chunk ids, preserving input order."""
+        if not chunk_ids:
+            return []
+        marks = ",".join("?" * len(chunk_ids))
+        rows = self.conn.execute(
+            "SELECT c.chunk_id, c.text, c.document_id, d.source_kind, d.standard_id, "
+            "c.locator, c.license_class "
+            "FROM chunks c JOIN documents d ON c.document_id = d.document_id "
+            f"WHERE c.chunk_id IN ({marks})",
+            chunk_ids,
+        ).fetchall()
+        by_id = {r[0]: r for r in rows}
+        records: list[ChunkRecord] = []
+        for cid in chunk_ids:
+            r = by_id.get(cid)
+            if r is None:
+                continue
+            methods = self.conn.execute(
+                "SELECT method_id, method_version FROM method_chunks WHERE chunk_id=?", (cid,)
+            ).fetchall()
+            records.append(
+                ChunkRecord(
+                    chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
+                    standard_id=r[4], locator=r[5], license_class=r[6],
+                    methods=[(m, v) for m, v in methods],
+                )
+            )
+        return records
