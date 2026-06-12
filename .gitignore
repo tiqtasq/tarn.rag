@@ -4,6 +4,7 @@ __pycache__/
 *$py.class
 
 index.db
+models/all-MiniLM-L6-v2/model.onnx
 
 # C extensions
 *.so
