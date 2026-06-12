@@ -120,15 +120,25 @@ index.** Pieces:
   opens it **read-only** (no embedder/model needed) for status facts. Both share `INDEX_DB_PATH`
   (the store opens WAL so readers don't block the writer). With `index_store=None` the builders
   preserve the classic repo-only path (back-compat).
+- **Read engine (Step A: dense-only):** `app/domains/base/index_store.py` gained `dense_knn`
+  (sqlite-vec) + `hydrate` (text + provenance) returning base `Candidate`/`ChunkRecord`.
+  `app/domains/retrieval/` — `types.py` (`Query`, `Purpose`, `MethodRef`, `RetrievalResult`) +
+  `engine.py` (`RetrievalEngine`). The engine is **sync** (matches the future C++ port); the API
+  bridges via `asyncio.to_thread`. `open()` **validates** `index_meta.schema_version` +
+  `embedding_config_fingerprint == embedder.config_fingerprint()` and raises `RetrievalError` on
+  mismatch. `search` = embed query → `dense_knn` → truncate `top_k` → `hydrate` → assemble
+  (`score=-distance`). **`POST /v1/query`** (`endpoints/retrieval.py`); the lifespan opens the
+  engine (tolerant — 503 until the index is built). **Step B (next):** sparse FTS5/BM25 + RRF
+  fusion (tie-break `(score desc, chunk_id asc)`) + `LicensePolicy` purpose/scope pre-filter,
+  behind the `Retriever`/`Fuser` seams (not built yet — `dense_knn` already takes a `filter` arg).
 - **Deps:** `sqlite-vec` is a core dep; ONNX stack in the `onnx` extra. Tests: `test_index_store`
   + `test_index_e2e` (fake embedder, no download); `test_status` (rollup); `test_dependencies`
-  (index-mode vs classic wiring); `test_embedder` (real, gated on `MODEL_DIR`).
+  (index-mode vs classic wiring); `retrieval/test_engine` + `test_retrieval_api` (dense search,
+  fingerprint validation, 503); `test_embedder` (real, gated on `MODEL_DIR`).
 
-**Not yet built (next):** the retrieval read engine (`SqliteIndexStore.dense_knn/sparse_bm25/
-hydrate`, dense+sparse retrievers, RRF + tie-break, default `LicensePolicy`, identity reranker,
-`RetrievalEngine.search`); the C++ port + parity harness; the real license/method domain. (The
-live API/worker index path needs Postgres+pgQueuer to run, so it's covered by the `build_service`
-DI test + the InMemory index e2e, not an end-to-end app smoke.)
+**Not yet built (next):** retrieval **Step B** (sparse + RRF + license/scope filter, reranker
+seam); the C++ port + parity harness; the real license/method domain. (The live API/worker index
+path needs Postgres+pgQueuer to run, so it's covered by DI + InMemory tests, not an app smoke.)
 
 ## What This System Is
 

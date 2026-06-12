@@ -132,6 +132,29 @@ document is unknown.
 | `complete` | every chunk has an embedding |
 | `failed` | at least one of the document's jobs failed |
 
+### `POST /v1/query` — retrieve (dense, Step A)
+
+Embed the query and return ranked, provenance-bearing chunks from the retrieval index.
+Returns **503** if the index hasn't been built yet (worker hasn't produced it). *Sparse +
+RRF fusion + license/scope filtering land in Step B.*
+
+```jsonc
+// request
+{ "text": "how do I inspect a storage tank?", "top_k": 8, "dense_k": 50 }
+// 200
+{
+  "results": [
+    {
+      "chunk_id": "...", "text": "…", "score": -0.13,
+      "component_scores": { "dense": 0.13 },
+      "document_id": "doc-1", "source_kind": "document",
+      "standard_id": null, "locator": "§6.4.2",
+      "license_class": "public_domain", "methods": []
+    }
+  ]
+}
+```
+
 ## Example
 
 ```bash
