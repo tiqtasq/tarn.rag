@@ -1,15 +1,11 @@
-"""Dependency injection + composition builders.
+"""Composition builders — the process composition root.
 
-The wiring is built **once per process** (the API's lifespan in ``app/main.py`` and
-``run_worker.py``) via the ``make_*`` / ``build_*`` helpers — NOT per request. (The repo
-owns a connection pool; rebuilding it per request would reconnect every call and lose a
-SQLite in-memory DB.) The request-scoped dependency just reads the singleton off
-``app.state``; tests override it with an InMemory + SQLite wiring.
+The wiring is built **once per process** in ``run_worker.py`` via the ``make_*`` / ``build_*``
+helpers — NOT per request. (The repo owns a connection pool; rebuilding it per request would
+reconnect every call and lose a SQLite in-memory DB.)
 """
 
 from __future__ import annotations
-
-from fastapi import HTTPException, Request
 
 from app.core.config import Settings, get_settings
 from app.core.observability import NoOpObservability, Observability
@@ -31,7 +27,6 @@ __all__ = [
     "get_observability",
     "build_orchestrator",
     "build_service",
-    "get_ingestion_service",
 ]
 
 
@@ -137,17 +132,3 @@ def build_retrieval_engine(
     """Open a query-ready engine over the index. Validates the embedding fingerprint +
     schema against ``index_meta`` (raises ``RetrievalError`` on mismatch / unbuilt index)."""
     return RetrievalEngine.open(index_store, embedder, config=settings)
-
-
-def get_ingestion_service(request: Request) -> IngestionService:
-    """Request-scoped dependency: the process-wide service built in the app lifespan."""
-    return request.app.state.ingestion_service
-
-
-def get_retrieval_engine(request: Request) -> RetrievalEngine:
-    """The process-wide retrieval engine (opened in the lifespan). 503 if the index isn't
-    built/compatible yet."""
-    engine = getattr(request.app.state, "retrieval_engine", None)
-    if engine is None:
-        raise HTTPException(status_code=503, detail="retrieval engine not available")
-    return engine

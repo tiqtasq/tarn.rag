@@ -12,6 +12,17 @@ does NOT reuse the SQLAlchemy/pgvector/sentence-transformers pieces (accepted). 
 [[modusq-retrieval-pivot]] memory. **Current step:** ingestion now produces the §8 SQLite index
 via a shared ONNX embedder (see "Retrieval (ModusQ)" below); the retrieval read engine is next.
 
+> **⚠️ REST API removed — extracted to the `tiqtasq.backend` repo.** The FastAPI HTTP layer that
+> used to live here (`app/api/` endpoints + schemas, `app/main.py`, `tests/api/`) has been
+> **deleted**; the HTTP API now lives in **tiqtasq.backend** (`app/api/v1/rag/`, currently over a
+> no-op stub service layer). The shared composition builders (`make_*` / `build_*`) the worker
+> uses moved **within this repo** from `app/api/v1/dependencies.py` to **`app/composition.py`**,
+> and **`run_worker.py`** is now the only process entry point. `fastapi` / `httpx` /
+> `python-multipart` were dropped from `requirements.txt`. The phase log and notes below predate
+> this and still mention `app/main.py`, `api/v1/…`, `/v1/…` routes and the API tests — treat those
+> as **historical**: the wiring they describe now lives in `app/composition.py` (here) or in the
+> tiqtasq.backend API.
+
 **Done (Phases 1–5, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
   SQLAlchemy Core repository (`base/repository.py` + `sqlite_repository.py` tested,
@@ -65,7 +76,7 @@ work behind the ABC; `get_observability` returns `NoOpObservability` when enable
 composition *factories* live in **`app/factories.py`** (they're wiring, not config). **Wire once,
 not per request** — the API `lifespan` and `run_worker.py` build the repo/queue/orchestrator
 **once** via shared `make_repository`/`make_queue`/`build_*` helpers in
-`api/v1/dependencies.py` and store the service on `app.state`; the request dep
+`app/composition.py` and store the service on `app.state`; the request dep
 `get_ingestion_service(request)` just returns it (tests override it). This intentionally
 replaces the spec's illustrative per-request DI (which would reconnect the DB each call).
 The API process only *enqueues* root jobs; downstream fan-out runs in the worker process's
@@ -301,9 +312,9 @@ Installed in the env: Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy
 (`onnxruntime`/`tokenizers`/`huggingface_hub`). The Postgres/pgQueuer backends are optional
 extras (`postgres`, `queue`) and are **NOT installed** — keep the SQLite test path free of those
 imports (the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily,
-and `api/v1/dependencies.py` imports the Postgres repo / pgQueuer adapter lazily inside the
+and `app/composition.py` imports the Postgres repo / pgQueuer adapter lazily inside the
 `make_*` builders). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
 fake embedder); the real ONNX embedder test is gated on `MODEL_DIR`.
 
-Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`, `tests/api/v1/`); the
+Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`); the
 suite runs entirely on SQLite + InMemory queue (no Postgres/pgQueuer needed).
