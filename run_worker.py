@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.api.v1.dependencies import (
+from app.composition import (
     build_orchestrator,
     get_observability,
     make_embedder,
