@@ -18,6 +18,15 @@ from typing import Literal
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# How document ids (== source_id) are assigned. The policy is strict — a mismatch fails
+# ingestion — so an instance never mixes id schemes; either way the id is **stable** (it never
+# changes when a document's content is replaced):
+#   'caller' — the caller supplies every source_id (fails if any is missing).
+#   'uuid'   — the engine assigns a random uuid4 (fails if the caller supplies any).
+# Content dedup is independent of identity: every document also stores a ``content_hash``
+# (sha256 of its submitted bytes/text), queryable to detect duplicate or unchanged content.
+IdPolicy = Literal["caller", "uuid"]
+
 
 class AppSettings(BaseModel):
     """Process metadata (largely vestigial since the FastAPI layer moved out)."""
@@ -95,6 +104,10 @@ class Settings(BaseSettings):
 
     # Where streamed bytes are staged for the worker (a shared volume in distributed mode).
     UPLOAD_DIR: str = "./uploads"
+
+    # How document ids (== source_id) are assigned/validated — see ``IdPolicy``. Default
+    # 'uuid' keeps zero-config ingestion working without the caller managing ids.
+    ID_POLICY: IdPolicy = "uuid"
 
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()

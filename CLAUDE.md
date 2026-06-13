@@ -35,6 +35,10 @@ from tarnrag import IngestionEngine, RetrievalEngine
 # Ingestion (MODE='embedded' default → runs the whole pipeline in-process):
 engine = await IngestionEngine.create()              # or .create(settings)
 ids = await engine.ingest_paths(["/data/spec.pdf"])  # -> list[str]; also ingest_content / ingest_streams
+# Identity vs content are separate. ID_POLICY pins the (stable) document id: 'uuid' (engine-
+# assigned, default) or 'caller' (you pass source_ids=[...]). Content dedup is its own query:
+#   if await engine.find_by_content_hash(engine.content_hash_of_file(path)):
+#       ...                                          # these exact bytes are already ingested
 st = await engine.status(ids[0])                     # -> DocumentStatus
 await engine.aclose()                                # or: async with await IngestionEngine.create() as engine: ...
 
@@ -127,9 +131,11 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   (dev/small-scale). Selection is driven by `settings.database.document_url` (a `postgres` substring
   → Postgres, else SQLite). Put shared logic in the base, dialect specifics in the hooks.
 - **Transactional guarantees & idempotency.** `store_document_with_chunks` / `store_chunks` /
-  `store_embeddings` are atomic. Documents are keyed by `metadata['source_id']` (UNIQUE); re-ingesting
-  upserts the document and replaces its chunks/embeddings (delete chunks → cascade removes
-  embeddings) — re-runs never duplicate.
+  `store_embeddings` are atomic. Documents are keyed by `metadata['source_id']` (UNIQUE, **stable** —
+  set per `ID_POLICY` = `uuid` | `caller`); re-ingesting upserts the document and replaces its
+  chunks/embeddings (delete chunks → cascade removes embeddings) — re-runs never duplicate. Each
+  document also stores a `content_hash` column (sha256 of submitted content); `find_by_content_hash`
+  queries it for content dedup, independent of identity.
 - **Two databases.** `settings.database.queue_url` (pgQueuer) is separate from
   `settings.database.document_url` (document/chunk/embedding storage). Never conflate them.
 - **Observability is optional.** Core logic must work with `observability=None`; `NoOpObservability`
@@ -144,8 +150,8 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
 - **Config** (`core/config.py`). `Settings` (pydantic-settings) nests per-component sub-models —
   `settings.embedding`, `settings.chunking`, `settings.index`, `settings.database`, `settings.worker`,
   `settings.observability` — read from env via the `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`,
-  `DATABASE__DOCUMENT_URL`). Cross-cutting `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR` stay
-  top-level/flat. A `model_validator` pins the backend: `distributed` requires Postgres +
+  `DATABASE__DOCUMENT_URL`). Cross-cutting `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR`, `ID_POLICY`
+  stay top-level/flat. A `model_validator` pins the backend: `distributed` requires Postgres +
   `DATABASE__QUEUE_URL`; `embedded` requires SQLite. See `.env.example`. Each component is built via a
   `create()` classmethod from its config slice (`OnnxEmbedder.create`, `SqliteIndexStore.create`,
   `DocumentRepository.create`).

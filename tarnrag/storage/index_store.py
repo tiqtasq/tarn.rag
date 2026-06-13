@@ -128,8 +128,10 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
               source_kind   TEXT NOT NULL,
               standard_id   TEXT,
               doc_version   TEXT,
-              license_class TEXT NOT NULL
+              license_class TEXT NOT NULL,
+              content_hash  TEXT
             );
+            CREATE INDEX IF NOT EXISTS idx_documents_content_hash ON documents(content_hash);
             CREATE TABLE IF NOT EXISTS chunks (
               chunk_id             TEXT PRIMARY KEY,
               document_id          TEXT NOT NULL REFERENCES documents(document_id),
@@ -199,8 +201,8 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
             self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
         self.conn.execute(
             "INSERT OR REPLACE INTO documents"
-            "(document_id, title, source_kind, standard_id, doc_version, license_class)"
-            " VALUES (?, ?, ?, ?, ?, ?)",
+            "(document_id, title, source_kind, standard_id, doc_version, license_class, content_hash)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 document_id,
                 md.get("title"),
@@ -208,6 +210,7 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
                 md.get("standard_id"),
                 md.get("doc_version"),
                 md.get("license_class") or self.default_license_class,
+                md.get("content_hash"),
             ),
         )
         self.conn.commit()
@@ -285,6 +288,13 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         ).fetchone() is not None
         chunk_count, embedding_count = self.counts(document_id)
         return DocumentFacts(present, chunk_count, embedding_count)
+
+    async def documents_by_content_hash(self, content_hash: str) -> list[str]:
+        """Document ids whose stored document-level ``content_hash`` matches — content dedup."""
+        rows = self.conn.execute(
+            "SELECT document_id FROM documents WHERE content_hash=?", (content_hash,)
+        ).fetchall()
+        return [r[0] for r in rows]
 
     # ---------------- read side (retrieval) ----------------
 

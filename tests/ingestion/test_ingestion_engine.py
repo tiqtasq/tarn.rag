@@ -42,7 +42,7 @@ def _stages():
     ]
 
 
-def _wire(repo, *, auto_drain=False, debug=False):
+def _wire(repo, *, auto_drain=False, debug=False, policy="caller"):
     """Build producer+consumer wiring around one repo; return (engine, queue)."""
     queue = InMemoryJobQueue()
     stages = _stages()
@@ -50,7 +50,8 @@ def _wire(repo, *, auto_drain=False, debug=False):
     worker = IngestionWorker(orch)
     queue.set_handler(worker.handle_batch)
     engine = IngestionEngine(
-        Pipeline(stages), orch, repo, queue=queue, auto_drain=auto_drain, debug=debug
+        Pipeline(stages), orch, repo, queue=queue, auto_drain=auto_drain, debug=debug,
+        id_policy=policy,
     )
     return engine, queue
 
@@ -102,8 +103,8 @@ async def test_document_jobs_is_debug_gated(repo):
     assert all(j["status"] == "completed" for j in jobs)
 
 
-async def test_missing_source_id_gets_assigned(repo):
-    engine, _ = _wire(repo)
+async def test_uuid_policy_assigns_ids(repo):
+    engine, _ = _wire(repo, policy="uuid")
     result = await engine.ingest_content([{"content": "x"}])
     assert len(result) == 1
     assert result[0]  # a uuid was assigned
@@ -122,7 +123,7 @@ async def test_parser_choice_rides_in_item_metadata(repo):
     enq = _RecordingEnqueuer()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
-    engine = IngestionEngine(Pipeline(stages), orch, repo)
+    engine = IngestionEngine(Pipeline(stages), orch, repo, id_policy="caller")
 
     await engine.ingest_content([{"content": "x", "source_id": "s1"}], parser="pdfplumber")
     assert enq.jobs[0].item.metadata["parser"] == "pdfplumber"
@@ -158,3 +159,117 @@ async def test_ingest_streams_requires_staging_dir(repo):
     engine = IngestionEngine(Pipeline(stages), orch, repo)  # no staging_dir
     with pytest.raises(RuntimeError, match="not configured"):
         await engine.ingest_streams([("x.txt", io.BytesIO(b"hi"))])
+
+
+async def test_ingest_paths_uses_supplied_source_ids(repo, tmp_path):
+    """source_ids set the document ids (== source_id) and align one-to-one with paths."""
+    enq = _RecordingEnqueuer()
+    stages = _stages()
+    orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
+    engine = IngestionEngine(Pipeline(stages), orch, repo, id_policy="caller")
+
+    a = tmp_path / "a.txt"
+    a.write_text("aaa", encoding="utf-8")
+    b = tmp_path / "b.txt"
+    b.write_text("bbb", encoding="utf-8")
+    result = await engine.ingest_paths([str(a), str(b)], source_ids=["id-a", "id-b"])
+    assert result == ["id-a", "id-b"]  # returned document ids are the supplied ones
+    # Each supplied id rides on its matching path's root job.
+    by_id = {j.item.metadata["source_id"]: j.item.metadata["source_path"] for j in enq.jobs}
+    assert by_id == {"id-a": str(a), "id-b": str(b)}
+
+
+async def test_ingest_streams_uses_supplied_source_ids(repo, tmp_path):
+    enq = _RecordingEnqueuer()
+    stages = _stages()
+    orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
+    engine = IngestionEngine(
+        Pipeline(stages), orch, repo, staging_dir=str(tmp_path / "up"), id_policy="caller"
+    )
+
+    result = await engine.ingest_streams(
+        [("a.pdf", io.BytesIO(b"%PDF-a")), ("b.pdf", io.BytesIO(b"%PDF-b"))],
+        source_ids=["sid-a", "sid-b"],
+    )
+    assert result == ["sid-a", "sid-b"]
+    assert [j.item.metadata["source_id"] for j in enq.jobs] == ["sid-a", "sid-b"]
+
+
+async def test_source_ids_length_must_match_items(repo):
+    engine, _ = _wire(repo, policy="caller")
+    with pytest.raises(ValueError, match="source_ids has 1 entries but 2 documents"):
+        await engine.ingest_paths(["/a.txt", "/b.txt"], source_ids=["only-one"])
+
+
+async def test_caller_policy_requires_ids(repo):
+    engine, _ = _wire(repo, policy="caller")
+    with pytest.raises(ValueError, match="requires a source_id"):
+        await engine.ingest_content([{"content": "x"}])
+    with pytest.raises(ValueError, match="requires a source_id"):
+        await engine.ingest_paths(["/a.txt"])
+
+
+async def test_uuid_policy_rejects_supplied_ids(repo):
+    engine, _ = _wire(repo, policy="uuid")
+    with pytest.raises(ValueError, match="assigns document ids automatically"):
+        await engine.ingest_content([{"content": "x", "source_id": "nope"}])
+    with pytest.raises(ValueError, match="assigns document ids automatically"):
+        await engine.ingest_paths(["/a.txt"], source_ids=["nope"])
+
+
+async def test_content_hash_enables_dedup_detection(repo):
+    """Every document stores a content_hash, queryable independent of the id policy."""
+    engine, _ = _wire(repo, auto_drain=True, policy="caller")
+    text = "Hello world. " * 10
+    h = engine.content_hash(text.encode("utf-8"))
+
+    assert await engine.find_by_content_hash(h) == []  # nothing ingested yet
+    await engine.ingest_content([{"content": text, "source_id": "doc-a"}])
+    assert await engine.find_by_content_hash(h) == ["doc-a"]
+
+    # Identical content under a different id -> both surface as duplicates.
+    await engine.ingest_content([{"content": text, "source_id": "doc-b"}])
+    assert sorted(await engine.find_by_content_hash(h)) == ["doc-a", "doc-b"]
+
+
+async def test_document_id_is_stable_when_content_changes(repo):
+    """Re-ingesting under the same id replaces content in place: the id never changes and the
+    stored content_hash tracks the new content."""
+    engine, _ = _wire(repo, auto_drain=True, policy="caller")
+    h1 = engine.content_hash(("alpha " * 20).encode("utf-8"))
+    h2 = engine.content_hash(("beta " * 20).encode("utf-8"))
+
+    await engine.ingest_content([{"content": "alpha " * 20, "source_id": "stable"}])
+    assert await engine.find_by_content_hash(h1) == ["stable"]
+
+    await engine.ingest_content([{"content": "beta " * 20, "source_id": "stable"}])
+    assert (await engine.status("stable")).status == "complete"
+    assert await engine.find_by_content_hash(h1) == []          # old content gone
+    assert await engine.find_by_content_hash(h2) == ["stable"]  # id stable, hash updated
+
+
+async def test_content_hash_of_file_matches_what_is_stored(repo, tmp_path):
+    engine, _ = _wire(repo, auto_drain=True, policy="caller")
+    doc = tmp_path / "note.txt"
+    doc.write_text("word " * 40, encoding="utf-8")
+    await engine.ingest_paths([str(doc)], source_ids=["f1"])
+    assert await engine.find_by_content_hash(engine.content_hash_of_file(str(doc))) == ["f1"]
+
+
+async def test_reingesting_same_source_id_replaces(repo, tmp_path):
+    """Re-ingesting under the same source_id upserts (dedup) — chunks are replaced, not appended."""
+    engine, _ = _wire(repo, auto_drain=True)
+    doc = tmp_path / "note.txt"
+    doc.write_text("word " * 40, encoding="utf-8")
+
+    [doc_id] = await engine.ingest_paths([str(doc)], source_ids=["dup-1"])
+    assert doc_id == "dup-1"
+    first = await engine.status("dup-1")
+    assert first.status == "complete" and first.chunk_count >= 1
+
+    # Same id again -> replace, not duplicate.
+    await engine.ingest_paths([str(doc)], source_ids=["dup-1"])
+    second = await engine.status("dup-1")
+    assert second.status == "complete"
+    assert second.chunk_count == first.chunk_count  # upsert replaced; no stale/duplicate chunks
+    assert second.embedding_count == second.chunk_count
