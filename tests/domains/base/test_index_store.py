@@ -40,6 +40,13 @@ def _knn(store, vec, k=2):
     ).fetchall()
 
 
+def test_connect_creates_missing_parent_dir(tmp_path):
+    nested = tmp_path / "does" / "not" / "exist"
+    store = SqliteIndexStore(str(nested / "index.db"), embedding_dim=3).connect()
+    assert nested.is_dir()  # SQLite won't create it; connect() does
+    store.close()
+
+
 def test_index_meta_records_schema_and_fingerprint(tmp_path):
     store = _store(tmp_path)
     meta = store.index_meta()

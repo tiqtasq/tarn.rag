@@ -12,16 +12,30 @@ does NOT reuse the SQLAlchemy/pgvector/sentence-transformers pieces (accepted). 
 [[modusq-retrieval-pivot]] memory. **Current step:** ingestion now produces the §8 SQLite index
 via a shared ONNX embedder (see "Retrieval (ModusQ)" below); the retrieval read engine is next.
 
-> **⚠️ REST API removed — extracted to the `tiqtasq.backend` repo.** The FastAPI HTTP layer that
-> used to live here (`app/api/` endpoints + schemas, `app/main.py`, `tests/api/`) has been
-> **deleted**; the HTTP API now lives in **tiqtasq.backend** (`app/api/v1/rag/`, currently over a
-> no-op stub service layer). The shared composition builders (`make_*` / `build_*`) the worker
-> uses moved **within this repo** from `app/api/v1/dependencies.py` to **`app/composition.py`**,
-> and **`run_worker.py`** is now the only process entry point. `fastapi` / `httpx` /
-> `python-multipart` were dropped from `requirements.txt`. The phase log and notes below predate
-> this and still mention `app/main.py`, `api/v1/…`, `/v1/…` routes and the API tests — treat those
-> as **historical**: the wiring they describe now lives in `app/composition.py` (here) or in the
-> tiqtasq.backend API.
+> **⚠️ Current architecture — three changes since the prose below was written.**
+>
+> 1. **REST API removed.** The FastAPI layer (`app/api/`, `app/main.py`, `tests/api/`) was
+>    extracted to the **tiqtasq.backend** repo (`app/api/v1/rag/`, over a no-op stub). This repo
+>    provides only the engine/worker implementations; `fastapi` / `httpx` / `python-multipart`
+>    were dropped from `requirements.txt`.
+> 2. **Engines are the public surface.** Ingestion and retrieval are used through two facades with
+>    `create()` factories — see "Using the engines" below — not by hand-wiring. `IngestionService`
+>    was renamed **`IngestionEngine`** (`ingestion/service.py` → `ingestion/engine.py`). The old
+>    `app/composition.py` and its freestanding `make_*` / `build_*` builders are **gone**: that
+>    wiring now lives in `create()` classmethods on the engines (`IngestionEngine` /
+>    `RetrievalEngine`) and the resource classes (`OnnxEmbedder` / `SqliteIndexStore` /
+>    `DocumentRepository`). `run_worker.py`
+>    is a thin wrapper over `IngestionEngine.create().run_worker()`.
+> 3. **Config is grouped.** `Settings` now nests per-component sub-models — `settings.embedding`,
+>    `settings.chunking`, `settings.index`, `settings.database`, `settings.worker`,
+>    `settings.observability` — with `GROUP__FIELD` env vars (e.g. `EMBEDDING__MODEL`,
+>    `DATABASE__DOCUMENT_URL`). Cross-cutting `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR` stay
+>    top-level/flat. A `model_validator` rejects a distributed deploy lacking a Postgres
+>    `DATABASE__DOCUMENT_URL` or a `DATABASE__QUEUE_URL`. See `.env.example`.
+>
+> Treat references below to `app/main.py`, `api/v1/…`, `/v1/…`, `app/composition.py`,
+> `IngestionService`, `make_*`/`build_*`, and flat config names (`EMBEDDING_MODEL`,
+> `DOCUMENT_DB_URL`, `CHUNK_SIZE`, …) as **historical**.
 
 **Done (Phases 1–5, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
@@ -96,6 +110,37 @@ is made before tables and indexes after; stages run `validate()` inside
 with a fake exposing `embed_passages`; e2e uses a `FakeEmbedStage`). Use `datetime.now(UTC)`,
 not the spec's `datetime.utcnow()` (deprecated on 3.12).
 
+## Using the engines
+
+Two facades, both built from `Settings` — no hand-wiring:
+
+```python
+from app.domains.ingestion import IngestionEngine
+from app.domains.retrieval import RetrievalEngine
+
+# Ingestion (MODE='embedded' default → runs the whole pipeline in-process):
+engine = await IngestionEngine.create()                 # or .create(settings)
+ids = await engine.ingest_paths(["/data/spec.pdf"])     # -> list[str]; also ingest_content / ingest_streams
+st = await engine.status(ids[0])                        # -> DocumentStatus
+await engine.aclose()                                   # or: async with await IngestionEngine.create() as engine: ...
+
+# Retrieval (sync; reads the §8 index ingestion built):
+with RetrievalEngine.create() as r:                     # validates schema + embedding fingerprint
+    hits = r.search_text("how do I inspect a tank?", top_k=8)
+```
+
+- **`create()` is the entry point** for both engines (reads `Settings`). The bare constructors and
+  `RetrievalEngine.open(...)` are low-level seams for tests / custom wiring.
+- **Async vs sync is deliberate.** Ingestion is **async** (genuine async I/O — async SQLAlchemy +
+  pgQueuer); retrieval is **sync** (sync `sqlite3`/sqlite-vec + ONNX, matching the planned C++ port).
+  For event-loop callers, retrieval also exposes `asearch` / `asearch_text`, which offload the sync
+  work to a thread. **Naming:** an `a`-prefix is the async variant of a sync method (`search` →
+  `asearch`); lifecycle follows the Python idiom — `aclose` + `async with` for the async engine,
+  `close` + `with` for the sync one.
+- `Settings.MODE='embedded'` (default) runs in-process (InMemory queue, SQLite) — each ingest call
+  processes to completion. `MODE='distributed'` enqueues to pgQueuer; run `python run_worker.py` as
+  separate consumer processes.
+
 ## Retrieval (ModusQ) — in progress
 
 Building `doc/ModusQ_RetrievalSubsystemSpec.md`. **Step 1 (done): ingestion produces the §8
@@ -104,8 +149,8 @@ index.** Pieces:
   mean-pool(mask) → L2; lazy `onnxruntime`/`tokenizers`). The **same** embedder embeds passages
   (ingestion) and queries (retrieval), guaranteeing pipeline identity (§5.3).
   `config_fingerprint()`/`embed_meta()` feed `index_meta`; retrieval will refuse to `open()` on
-  fingerprint mismatch. Model is configurable (`Settings.EMBEDDING_MODEL`/`MODEL_DIR`, default
-  all-MiniLM-L6-v2); fetch artifacts with `scripts/fetch_model.py` (→ `MODEL_DIR`, git-ignored).
+  fingerprint mismatch. Model is configurable (`settings.embedding.model`/`.model_dir`, default
+  all-MiniLM-L6-v2); fetch artifacts with `scripts/fetch_model.py` (→ the model dir, git-ignored).
 - **`app/domains/base/chunk_store.py`** — `ChunkStore` ABC = the persistence surface the sinks
   use (`store_document/store_chunks/store_embeddings/update_chunk_metadata`). `DocumentRepository`
   conforms (existing path unchanged); the index store is the new target.
@@ -128,7 +173,7 @@ index.** Pieces:
   `build_orchestrator`/`build_service` take an optional `index_store`. The **worker**
   (`run_worker.py`) is the producer — `make_index_store(settings, embedder=make_embedder(...))`
   writes `index_meta` and the sinks persist into the index; the **API** (`app/main.py` lifespan)
-  opens it **read-only** (no embedder/model needed) for status facts. Both share `INDEX_DB_PATH`
+  opens it **read-only** (no embedder/model needed) for status facts. Both share `settings.index.db_path`
   (the store opens WAL so readers don't block the writer). With `index_store=None` the builders
   preserve the classic repo-only path (back-compat).
 - **Read engine (Step A: dense-only):** `app/domains/base/index_store.py` gained `dense_knn`
@@ -209,7 +254,7 @@ Decisions" section (D1–D6) holds the full rationale; this is the summary.
 - **Public API is document-centric.** Clients get a `document_id` (== `source_id`)
   from `POST /v1/ingest` and poll `GET /v1/ingest/documents/{document_id}/status`
   (derived from persisted data). Jobs are internal — never in the contract, exposed
-  only under `?verbose=true` for debugging.
+  only via the debug-gated `IngestionEngine.document_jobs` (needs `APP__DEBUG`).
 
 ## Architecture & Key Concepts
 
@@ -254,7 +299,7 @@ Concepts that span multiple files and are easy to get wrong:
   pgvector (real `<=>` cosine search); SQLite stores vectors as JSON and does
   in-memory cosine (dev/small-scale only). When adding repo behavior, put shared
   logic in the base and dialect specifics in the hooks — don't fork a whole method
-  unless the SQL genuinely diverges. Selection is driven by `DOCUMENT_DB_URL` (a
+  unless the SQL genuinely diverges. Selection is driven by `settings.database.document_url` (a
   `postgres` substring picks Postgres, else SQLite).
 - **Transactional guarantees.** `store_document_with_chunks`, `store_chunks`,
   and `store_embeddings` must be atomic (all-or-nothing). These are explicitly
@@ -263,8 +308,8 @@ Concepts that span multiple files and are easy to get wrong:
   both backends). Re-ingesting a source **upserts** the document and **replaces**
   its chunks/embeddings (delete chunks → cascade removes embeddings → re-insert);
   re-runs never duplicate.
-- **Two databases.** `QUEUE_DB_URL` (pgQueuer job queue) is separate from
-  `DOCUMENT_DB_URL` (document/chunk/embedding storage). Don't conflate them.
+- **Two databases.** `settings.database.queue_url` (pgQueuer job queue) is separate from
+  `settings.database.document_url` (document/chunk/embedding storage). Don't conflate them.
 - **Observability is optional.** Core logic must work with `observability=None`.
   `NoOpObservability` exists for dev/test. Guard every `self.obs` call.
 - **Async throughout.** The repository, worker, orchestrator, and service are all
@@ -312,8 +357,8 @@ Installed in the env: Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy
 (`onnxruntime`/`tokenizers`/`huggingface_hub`). The Postgres/pgQueuer backends are optional
 extras (`postgres`, `queue`) and are **NOT installed** — keep the SQLite test path free of those
 imports (the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily,
-and `app/composition.py` imports the Postgres repo / pgQueuer adapter lazily inside the
-`make_*` builders). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
+and `DocumentRepository.create` imports the Postgres repo lazily; the queue, embedder
+and index store are built lazily by the engines' `create()`). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
 fake embedder); the real ONNX embedder test is gated on `MODEL_DIR`.
 
 Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`); the
