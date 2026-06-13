@@ -298,18 +298,20 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
 
     async def delete_document(self, document_id: str) -> bool:
         """Remove the document and its chunks + vec/fts/method rows (virtual tables don't
-        cascade). Returns True if the document existed."""
+        cascade). Atomic: the deletes run inside ``with self.conn`` — one transaction that
+        commits on success and **rolls back if any execute fails** (no partial delete left
+        pending on the shared connection). Returns True if the document existed."""
         old = [r[0] for r in self.conn.execute(
             "SELECT chunk_id FROM chunks WHERE document_id=?", (document_id,)
         )]
-        if old:
-            marks = ",".join("?" * len(old))
-            self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
-        cur = self.conn.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
-        self.conn.commit()
+        with self.conn:  # commit on clean exit, rollback on any exception
+            if old:
+                marks = ",".join("?" * len(old))
+                self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
+            cur = self.conn.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
         return cur.rowcount > 0
 
     async def list_documents(self) -> list[dict[str, Any]]:
