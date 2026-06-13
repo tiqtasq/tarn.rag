@@ -5,10 +5,11 @@
 > **⚠️ Status update — the REST API has moved.** The FastAPI HTTP layer described in §8
 > (**API Layer**) — `app/api/`, `app/main.py`, `tests/api/` — has been **removed from this repo
 > and extracted to the `tiqtasq.backend` repo** (`app/api/v1/rag/`, over a no-op stub service
-> layer; the contract now lives in that repo's `doc/RAG_API_SPEC.md`). The shared composition
-> builders moved **within this repo** to **`app/composition.py`**, and `run_worker.py` is now the
-> only process entry point. Treat §8 and other `app/main.py` / `/v1/…` references below as
-> historical.
+> layer; the contract now lives in that repo's `doc/RAG_API_SPEC.md`). Ingestion and retrieval are
+> now used through `IngestionEngine` / `RetrievalEngine` (`create()` factories); the old
+> composition builders are gone (folded into the engines + `from_settings` classmethods).
+> `run_worker.py` wraps `IngestionEngine.run_worker()`. Treat §8 and other `app/main.py` / `/v1/…`
+> references below as historical.
 
 ---
 
@@ -640,8 +641,8 @@ repository (status reads); `observability` is optional (typed `Any`, Phase 5).
 ## API Layer (`app/api/v1/`)
 
 > **⚠️ Removed from this repo — moved to `tiqtasq.backend`** (`app/api/v1/rag/`; contract in that
-> repo's `doc/RAG_API_SPEC.md`). Retained below for reference. The composition builders this layer
-> used now live in `app/composition.py` here, not under `app/api/`.
+> repo's `doc/RAG_API_SPEC.md`). Retained below for reference. The composition this layer
+> used now lives in the ingestion/retrieval engines (`create()`), not under `app/api/`.
 
 FastAPI, document-centric. Four routes under `APIRouter(prefix="/v1/ingest")`
 (`endpoints/ingestion.py`):

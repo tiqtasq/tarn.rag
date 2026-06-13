@@ -19,6 +19,8 @@ import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 
+from app.core.config import Settings
+
 
 class Embedder(ABC):
     @abstractmethod
@@ -70,6 +72,20 @@ class OnnxEmbedder(Embedder):
         self._session = None
         self._tokenizer = None
         self._input_names: set[str] | None = None
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> OnnxEmbedder:
+        """Build the shared ONNX embedder from ``Settings`` (model loads lazily on first
+        ``embed``). Ingestion and retrieval both go through here, so they share one pipeline."""
+        return cls(
+            settings.MODEL_DIR,
+            model_id=settings.EMBEDDING_MODEL,
+            revision=settings.EMBEDDING_MODEL_REVISION,
+            embedding_dim=settings.EMBEDDING_DIMENSION,
+            max_length=settings.MAX_SEQ_LENGTH,
+            query_prefix=settings.EMBEDDING_QUERY_PREFIX,
+            passage_prefix=settings.EMBEDDING_PASSAGE_PREFIX,
+        )
 
     # ---------------- identity (no model load needed) ----------------
 

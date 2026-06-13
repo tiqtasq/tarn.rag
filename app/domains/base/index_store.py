@@ -23,6 +23,7 @@ from typing import Any
 
 import sqlite_vec
 
+from app.core.config import Settings
 from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import Chunk, Document, Embedding
 from app.domains.base.status import DocumentFacts, DocumentFactsSource
@@ -70,6 +71,20 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         self.default_license_class = default_license_class
         self.default_ai_grounding = default_ai_grounding
         self._conn: sqlite3.Connection | None = None
+
+    @classmethod
+    def from_settings(cls, settings: Settings, embedder: Any = None) -> SqliteIndexStore:
+        """Open the §8 index from ``Settings`` (connects + ensures schema). Pass an
+        ``embedder`` (the ingestion/producer side) to record ``index_meta``; omit it for
+        read-only use (retrieval)."""
+        store = cls(
+            settings.INDEX_DB_PATH,
+            embedding_dim=settings.EMBEDDING_DIMENSION,
+            default_license_class=settings.DEFAULT_LICENSE_CLASS,
+        ).connect()
+        if embedder is not None:
+            store.write_index_meta(embedder)
+        return store
 
     @property
     def conn(self) -> sqlite3.Connection:

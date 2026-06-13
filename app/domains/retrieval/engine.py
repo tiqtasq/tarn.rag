@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.base.embedder import Embedder
+from app.core.config import Settings, get_settings
+from app.domains.base.embedder import Embedder, OnnxEmbedder
 from app.domains.base.index_store import SCHEMA_VERSION, SqliteIndexStore
 from app.domains.retrieval.types import MethodRef, Query, RetrievalResult
 
@@ -32,6 +33,8 @@ class RetrievalEngine:
     ) -> RetrievalEngine:
         """Validate compatibility, then return a query-ready engine. Refuses on mismatch."""
         meta = store.index_meta()
+        if not meta.get("schema_version"):
+            raise RetrievalError("retrieval index has not been built yet (no index_meta)")
         if meta.get("schema_version") != SCHEMA_VERSION:
             raise RetrievalError(
                 f"schema_version mismatch: index {meta.get('schema_version')!r} "
@@ -45,6 +48,16 @@ class RetrievalEngine:
                 f"embedding pipeline (index {index_fp!r} != engine {engine_fp!r})"
             )
         return cls(store, embedder, config)
+
+    @classmethod
+    def create(cls, settings: Settings | None = None) -> RetrievalEngine:
+        """Open a query-ready engine straight from ``Settings`` — builds the index store
+        (read-only) and the shared embedder, then validates compatibility via ``open``. The
+        easy entry point; ``open`` is the lower-level seam for injecting your own store/embedder."""
+        settings = settings or get_settings()
+        store = SqliteIndexStore.from_settings(settings)
+        embedder = OnnxEmbedder.from_settings(settings)
+        return cls.open(store, embedder, config=settings)
 
     def search(self, query: Query) -> list[RetrievalResult]:
         """Dense-only (Step A): embed → KNN → truncate top_k → hydrate → assemble."""
@@ -72,5 +85,15 @@ class RetrievalEngine:
             )
         return results
 
+    def search_text(self, text: str, *, top_k: int = 8, dense_k: int = 50) -> list[RetrievalResult]:
+        """Convenience over :meth:`search`: build a :class:`Query` from a raw string."""
+        return self.search(Query(text=text, top_k=top_k, dense_k=dense_k))
+
     def close(self) -> None:
         self.store.close()
+
+    def __enter__(self) -> RetrievalEngine:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()

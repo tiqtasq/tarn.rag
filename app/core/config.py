@@ -1,13 +1,14 @@
 """Application configuration (pydantic-settings) — env-driven.
 
-``Settings`` is the single source of runtime config; the composition roots (the API's
-lifespan in ``app/main.py`` and ``run_worker.py``) read it to build the wiring. The
-pipeline/sink *factories* live in the top-level ``config.py`` (they consume a ``Settings``).
+``Settings`` is the single source of runtime config; the engines (``IngestionEngine`` /
+``RetrievalEngine``) read it in their ``create()`` factories to build the wiring. The
+pipeline/sink *factories* live in ``app/factories.py`` (they consume a ``Settings``).
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,8 +21,13 @@ class Settings(BaseSettings):
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = False
 
+    # Execution mode for IngestionEngine. 'embedded' runs the whole pipeline in-process
+    # (InMemory queue — no Postgres/pgQueuer needed), the easy single-process path;
+    # 'distributed' enqueues to pgQueuer for separate worker processes to consume.
+    MODE: Literal["embedded", "distributed"] = "embedded"
+
     # Databases (two separate stores — never conflate them)
-    QUEUE_DB_URL: str  # pgQueuer job queue
+    QUEUE_DB_URL: str = ""  # pgQueuer job queue (required for MODE='distributed')
     DOCUMENT_DB_URL: str  # document / chunk / embedding storage
 
     # Ingestion / embedding (ONNX). The model is configurable; ingestion and retrieval MUST

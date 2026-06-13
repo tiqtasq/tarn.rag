@@ -12,16 +12,22 @@ does NOT reuse the SQLAlchemy/pgvector/sentence-transformers pieces (accepted). 
 [[modusq-retrieval-pivot]] memory. **Current step:** ingestion now produces the §8 SQLite index
 via a shared ONNX embedder (see "Retrieval (ModusQ)" below); the retrieval read engine is next.
 
-> **⚠️ REST API removed — extracted to the `tiqtasq.backend` repo.** The FastAPI HTTP layer that
-> used to live here (`app/api/` endpoints + schemas, `app/main.py`, `tests/api/`) has been
-> **deleted**; the HTTP API now lives in **tiqtasq.backend** (`app/api/v1/rag/`, currently over a
-> no-op stub service layer). The shared composition builders (`make_*` / `build_*`) the worker
-> uses moved **within this repo** from `app/api/v1/dependencies.py` to **`app/composition.py`**,
-> and **`run_worker.py`** is now the only process entry point. `fastapi` / `httpx` /
-> `python-multipart` were dropped from `requirements.txt`. The phase log and notes below predate
-> this and still mention `app/main.py`, `api/v1/…`, `/v1/…` routes and the API tests — treat those
-> as **historical**: the wiring they describe now lives in `app/composition.py` (here) or in the
-> tiqtasq.backend API.
+> **⚠️ Current architecture — two changes since the prose below was written.**
+>
+> 1. **REST API removed.** The FastAPI layer (`app/api/`, `app/main.py`, `tests/api/`) was
+>    extracted to the **tiqtasq.backend** repo (`app/api/v1/rag/`, over a no-op stub). This repo
+>    provides only the engine/worker implementations; `fastapi` / `httpx` / `python-multipart`
+>    were dropped from `requirements.txt`.
+> 2. **Engines are the public surface.** Ingestion and retrieval are used through two facades with
+>    `create()` factories — see "Using the engines" below — not by hand-wiring. `IngestionService`
+>    was renamed **`IngestionEngine`** (`ingestion/service.py` → `ingestion/engine.py`). The old
+>    `app/composition.py` and its freestanding `make_*` / `build_*` builders are **gone**: that
+>    wiring now lives in the engines' `create()` methods plus `from_settings` classmethods on the
+>    resource classes (`OnnxEmbedder` / `SqliteIndexStore` / `DocumentRepository`). `run_worker.py`
+>    is a thin wrapper over `IngestionEngine.create().run_worker()`.
+>
+> Treat references below to `app/main.py`, `api/v1/…`, `/v1/…`, `app/composition.py`,
+> `IngestionService`, and `make_*`/`build_*` as **historical**.
 
 **Done (Phases 1–5, tested on SQLite, all green):**
 - Phase 1: `pyproject.toml`; `base/models.py` (Pydantic v2); `core/exceptions.py`; the
@@ -95,6 +101,31 @@ is made before tables and indexes after; stages run `validate()` inside
 `EmbedStage` lazy-loads the shared **`OnnxEmbedder`** (tests override `stage._get_embedder`
 with a fake exposing `embed_passages`; e2e uses a `FakeEmbedStage`). Use `datetime.now(UTC)`,
 not the spec's `datetime.utcnow()` (deprecated on 3.12).
+
+## Using the engines
+
+Two facades, both built from `Settings` — no hand-wiring:
+
+```python
+from app.domains.ingestion import IngestionEngine
+from app.domains.retrieval import RetrievalEngine
+
+# Ingestion (MODE='embedded' default → runs the whole pipeline in-process):
+engine = await IngestionEngine.create()                 # or .create(settings)
+sub = await engine.ingest_paths(["/data/spec.pdf"])     # also ingest_content / ingest_streams
+st = await engine.status(sub.documents[0].document_id)  # -> DocumentStatus
+await engine.aclose()                                   # or: async with await IngestionEngine.create() as engine: ...
+
+# Retrieval (sync; reads the §8 index ingestion built):
+with RetrievalEngine.create() as r:                     # validates schema + embedding fingerprint
+    hits = r.search_text("how do I inspect a tank?", top_k=8)
+```
+
+- `Settings.MODE='embedded'` (default) runs in-process (InMemory queue, SQLite) — each ingest call
+  processes to completion. `MODE='distributed'` enqueues to pgQueuer; run `python run_worker.py` as
+  separate consumer processes. `create()` reads `MODE` from `Settings`.
+- The bare constructors (`IngestionEngine(...)`, `RetrievalEngine.open(...)`) are the low-level
+  seams for tests / custom wiring.
 
 ## Retrieval (ModusQ) — in progress
 
@@ -312,8 +343,8 @@ Installed in the env: Phase-1 deps (`pydantic`, `pydantic-settings`, `sqlalchemy
 (`onnxruntime`/`tokenizers`/`huggingface_hub`). The Postgres/pgQueuer backends are optional
 extras (`postgres`, `queue`) and are **NOT installed** — keep the SQLite test path free of those
 imports (the `postgres_repository` and `PgQueuerJobQueue` modules import their heavy deps lazily,
-and `app/composition.py` imports the Postgres repo / pgQueuer adapter lazily inside the
-`make_*` builders). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
+and `DocumentRepository.from_settings` imports the Postgres repo lazily; the queue, embedder
+and index store are built lazily by the engines' `create()`). The API + index tests run on `InMemoryJobQueue` + SQLite (DI overridden,
 fake embedder); the real ONNX embedder test is gated on `MODEL_DIR`.
 
 Tests mirror `app/` under `tests/` (e.g. `tests/domains/ingestion/`); the

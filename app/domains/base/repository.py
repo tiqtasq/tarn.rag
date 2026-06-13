@@ -29,6 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
+from app.core.config import Settings
 from app.core.exceptions import ChunkNotFoundError
 from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import Chunk, Document, Embedding
@@ -55,6 +56,25 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
       a source UPSERTS the document and REPLACES its chunks/embeddings (cascade);
       never duplicates.
     """
+
+    @classmethod
+    async def from_settings(cls, settings: Settings) -> DocumentRepository:
+        """Build and connect the repository selected by ``DOCUMENT_DB_URL`` (Postgres on a
+        ``postgres`` URL, else SQLite). Heavy backends are imported lazily."""
+        if "postgres" in settings.DOCUMENT_DB_URL:
+            from app.domains.base.postgres_repository import PostgresRepository
+
+            repo: DocumentRepository = PostgresRepository(
+                settings.DOCUMENT_DB_URL, embedding_dimension=settings.EMBEDDING_DIMENSION
+            )
+        else:
+            from app.domains.base.sqlite_repository import SqliteRepository
+
+            repo = SqliteRepository(
+                settings.DOCUMENT_DB_URL, embedding_dimension=settings.EMBEDDING_DIMENSION
+            )
+        await repo.connect()
+        return repo
 
     def __init__(self, connection_url: str, embedding_dimension: int = 384):
         self.embedding_dimension = embedding_dimension

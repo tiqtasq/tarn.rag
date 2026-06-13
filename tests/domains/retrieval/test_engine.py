@@ -88,3 +88,19 @@ async def test_empty_index_returns_empty(tmp_path):
     engine = RetrievalEngine.open(store, _FakeEmbedder())
     assert engine.search(Query(text="x")) == []
     store.close()
+
+
+async def test_search_text_convenience(tmp_path):
+    store, cids = await _index(tmp_path)
+    engine = RetrievalEngine.open(store, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
+    results = engine.search_text("tank inspection", top_k=2)
+    assert [r.chunk_id for r in results] == cids
+    store.close()
+
+
+async def test_open_refuses_unbuilt_index(tmp_path):
+    store = SqliteIndexStore(str(tmp_path / "fresh.db"), embedding_dim=3).connect()
+    # No write_index_meta -> the index has not been built yet.
+    with pytest.raises(RetrievalError, match="not been built"):
+        RetrievalEngine.open(store, _FakeEmbedder())
+    store.close()
