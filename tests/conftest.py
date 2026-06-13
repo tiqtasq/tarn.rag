@@ -1,6 +1,6 @@
 import pytest_asyncio
 
-from app.domains.base.sqlite_repository import SqliteRepository
+from tarnrag.storage.repository.sqlite import SqliteRepository
 
 
 @pytest_asyncio.fixture
