@@ -41,7 +41,7 @@ from tarnrag.ingestion.queue import (
     JobEnqueuer,
     PgQueuerJobQueue,
 )
-from tarnrag.ingestion.types import DocumentStatus
+from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 from tarnrag.ingestion.worker import IngestionWorker
 from tarnrag.ingestion.factories import create_ingestion_pipeline, create_sink_registry
 
@@ -238,6 +238,27 @@ class IngestionEngine:
     def content_hash_of_file(path: str) -> str:
         """:meth:`content_hash` for a file, read in chunks (constant memory)."""
         return _sha256_file(path)
+
+    async def list_documents(self) -> list[DocumentSummary]:
+        """Inventory of every ingested document — id, ``content_hash``, and chunk/embedding
+        counts. Order is unspecified; pair with :meth:`status` for per-document state."""
+        return [
+            DocumentSummary(
+                document_id=r["document_id"],
+                content_hash=r["content_hash"],
+                chunk_count=r["chunk_count"],
+                embedding_count=r["embedding_count"],
+            )
+            for r in await self._facts_source.list_documents()
+        ]
+
+    async def delete(self, document_id: str) -> bool:
+        """Delete a document and everything derived from it — chunks, embeddings, retrieval-index
+        rows, and its job-status records. Returns True if the document was known (had data or
+        in-flight jobs), False if there was nothing to delete. Idempotent."""
+        removed_data = await self._facts_source.delete_document(document_id)
+        removed_jobs = await self.repository.delete_document_jobs(document_id)
+        return removed_data or removed_jobs
 
     # ----- debug (gated on APP__DEBUG) -----
 

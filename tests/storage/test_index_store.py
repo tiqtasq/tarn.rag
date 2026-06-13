@@ -110,3 +110,46 @@ async def test_reingest_replaces_chunks_no_orphans(tmp_path):
     raw_fts = store.conn.execute("SELECT count(*) FROM fts_chunks").fetchone()[0]
     assert raw_vec == 0 and raw_fts == 0  # no orphaned vectors / fts rows
     store.close()
+
+
+async def test_delete_document_removes_all_rows(tmp_path):
+    store = _store(tmp_path)
+    await store.store_document(Document(content="d", metadata={"source_id": "s1", "content_hash": "h1"}))
+    cids = await store.store_chunks([
+        Chunk(parent_doc_id="s1", content="alpha", chunk_index=0, total_chunks=1, metadata={})
+    ])
+    await store.store_embeddings([
+        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0], model="fake", dimension=3)
+    ])
+    assert store.counts("s1") == (1, 1)
+
+    assert await store.delete_document("s1") is True
+    assert store.counts("s1") == (0, 0)
+    assert store.conn.execute("SELECT count(*) FROM documents").fetchone()[0] == 0
+    assert store.conn.execute("SELECT count(*) FROM vec_chunks").fetchone()[0] == 0
+    assert store.conn.execute("SELECT count(*) FROM fts_chunks").fetchone()[0] == 0
+    assert await store.delete_document("s1") is False  # already gone — idempotent
+    store.close()
+
+
+async def test_list_documents_with_counts(tmp_path):
+    store = _store(tmp_path)
+    await store.store_document(Document(content="d", metadata={"source_id": "s1", "content_hash": "h1"}))
+    cids = await store.store_chunks([
+        Chunk(parent_doc_id="s1", content="a", chunk_index=0, total_chunks=2, metadata={}),
+        Chunk(parent_doc_id="s1", content="b", chunk_index=1, total_chunks=2, metadata={}),
+    ])
+    await store.store_embeddings([
+        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0], model="fake", dimension=3),
+    ])
+    # A second document with no chunks/embeddings.
+    await store.store_document(Document(content="e", metadata={"source_id": "s2", "content_hash": "h2"}))
+
+    docs = {d["document_id"]: d for d in await store.list_documents()}
+    assert set(docs) == {"s1", "s2"}
+    assert docs["s1"] == {
+        "document_id": "s1", "content_hash": "h1", "chunk_count": 2, "embedding_count": 1,
+    }
+    assert docs["s2"]["content_hash"] == "h2"
+    assert docs["s2"]["chunk_count"] == 0 and docs["s2"]["embedding_count"] == 0
+    store.close()

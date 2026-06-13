@@ -296,6 +296,36 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         ).fetchall()
         return [r[0] for r in rows]
 
+    async def delete_document(self, document_id: str) -> bool:
+        """Remove the document and its chunks + vec/fts/method rows (virtual tables don't
+        cascade). Returns True if the document existed."""
+        old = [r[0] for r in self.conn.execute(
+            "SELECT chunk_id FROM chunks WHERE document_id=?", (document_id,)
+        )]
+        if old:
+            marks = ",".join("?" * len(old))
+            self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
+            self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
+            self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
+            self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
+        cur = self.conn.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
+        self.conn.commit()
+        return cur.rowcount > 0
+
+    async def list_documents(self) -> list[dict[str, Any]]:
+        """Inventory of indexed documents with chunk/embedding counts."""
+        rows = self.conn.execute(
+            "SELECT d.document_id, d.content_hash, "
+            "(SELECT count(*) FROM chunks c WHERE c.document_id = d.document_id) AS chunk_count, "
+            "(SELECT count(*) FROM vec_chunks v WHERE v.chunk_id IN "
+            "(SELECT chunk_id FROM chunks WHERE document_id = d.document_id)) AS embedding_count "
+            "FROM documents d"
+        ).fetchall()
+        return [
+            {"document_id": r[0], "content_hash": r[1], "chunk_count": r[2], "embedding_count": r[3]}
+            for r in rows
+        ]
+
     # ---------------- read side (retrieval) ----------------
 
     def dense_knn(
