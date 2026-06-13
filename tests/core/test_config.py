@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.core.config import Settings
+from tarnrag.core.config import Settings
 
 
 def test_defaults_and_groups():

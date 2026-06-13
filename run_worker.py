@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.domains.ingestion import run_worker
+from tarnrag.ingestion import run_worker
 
 logging.basicConfig(level=logging.INFO)
 

@@ -1,18 +1,4 @@
-# RAG Ingestion Pipeline - Comprehensive Software Specification
-
-**For Implementation with Claude Code**
-
-> **⚠️ Status update — the REST API has moved.** The FastAPI HTTP layer described in §8
-> (**API Layer**) — `app/api/`, `app/main.py`, `tests/api/` — has been **removed from this repo
-> and extracted to the `tiqtasq.backend` repo** (`app/api/v1/rag/`, over a no-op stub service
-> layer; the contract now lives in that repo's `doc/RAG_API_SPEC.md`). Ingestion and retrieval are
-> now used through `IngestionEngine` / `RetrievalEngine` (`create()` factories); the old
-> composition builders are gone (folded into the engines + `create()` classmethods).
-> `run_worker.py` wraps `IngestionEngine.run_worker()`. `Settings` is also now grouped into nested
-> sub-models (`settings.embedding`, `settings.database`, …) with `GROUP__FIELD` env vars (e.g.
-> `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`) — see `.env.example`. Treat §8 and other
-> `app/main.py` / `/v1/…` references, and flat config names (`EMBEDDING_MODEL`, `DOCUMENT_DB_URL`,
-> `CHUNK_SIZE`, …), below as historical.
+# RAG Ingestion & Retrieval — Software Specification
 
 ---
 
@@ -23,12 +9,10 @@
 4. [Database & Repository Layer](#database--repository-layer)
 5. [Pipeline & Stages](#pipeline--stages)
 6. [Orchestration & Workers](#orchestration--workers)
-7. [Services (Facade Pattern)](#services-facade-pattern)
-8. [API Layer](#api-layer)
-9. [Configuration](#configuration)
-10. [Observability](#observability)
-11. [Execution Flow](#execution-flow)
-12. [Implementation Checklist](#implementation-checklist)
+7. [Engines (Facade)](#engines-facade)
+8. [Configuration](#configuration)
+9. [Observability](#observability)
+10. [Execution Flow](#execution-flow)
 
 ---
 
@@ -49,25 +33,21 @@ Transform raw documents into queryable vector embeddings via a composable, DAG-b
 ### High-Level Data Flow
 
 ```
-Data Sources (files, APIs, DBs)
+Data Sources (files, content, streams)
     ↓
-API: POST /v1/ingest
-    ↓
-IngestionService (high-level facade)
+IngestionEngine.create() → ingest_paths / ingest_content / ingest_streams
     ↓
 PipelineOrchestrator (walks DAG, enqueues jobs, owns lifecycle)
     ↓
-JobEnqueuer / JobConsumer ports → pgQueuer (distributed job queue)
+JobEnqueuer / JobConsumer ports → InMemory (embedded) · pgQueuer (distributed)
     ↓
 IngestionWorker(s) (registered handlers; compute only, parallel)
     ↓
 PipelineStages (load → clean → chunk → enrich → embed)
     ↓
-DocumentRepository (stores documents, chunks, vectors)
+§8 SqliteIndexStore (vectors)  +  DocumentRepository (job_status)
     ↓
-PostgreSQL/SQLite (persistent storage)
-    ↓
-Online Retrieval (future pipeline, same repository)
+RetrievalEngine.create() → search → ranked, provenance-bearing results
 ```
 
 ---
@@ -174,127 +154,60 @@ read-model, not a queue).
 ## Project Structure
 
 ```
-rag-ingestion/
+tarn.rag/
 │
-├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       ├── __init__.py
-│   │       ├── endpoints/
-│   │       │   ├── __init__.py
-│   │       │   └── ingestion.py                 # POST /v1/ingest(/content,/file), GET /v1/ingest/documents/{id}/status
-│   │       ├── schemas.py                       # Pydantic request/response models
-│   │       └── dependencies.py                  # FastAPI dependency injection
+├── tarnrag/
+│   ├── __init__.py                              # public API re-exports (IngestionEngine, RetrievalEngine, …)
 │   │
-│   ├── core/
-│   │   ├── __init__.py
-│   │   ├── config.py                            # Settings, environment variables
-│   │   ├── exceptions.py                        # Custom exception classes
-│   │   └── observability.py                     # Observability interface & adapters
+│   ├── core/                                    # infra only
+│   │   ├── config.py                            # Settings (nested sub-models, GROUP__FIELD env)
+│   │   ├── exceptions.py
+│   │   └── observability.py                     # Observability ABC + NoOpObservability
 │   │
-│   ├── domains/
-│   │   │
-│   │   ├── base/
-│   │   │   ├── __init__.py
-│   │   │   ├── models.py                        # Shared data models (Document, Chunk, etc.)
-│   │   │   ├── repository.py                    # DocumentRepository interface (ABC)
-│   │   │   ├── postgres_repository.py           # PostgreSQL implementation
-│   │   │   └── sqlite_repository.py             # SQLite implementation
-│   │   │
-│   │   ├── ingestion/
-│   │   │   ├── __init__.py
-│   │   │   ├── models.py                        # IngestionJob + Batch (homogeneous dispatch unit)
-│   │   │   ├── pipeline.py                      # PipelineStage classes, Pipeline (BatchingWrapper superseded, see D4)
-│   │   │   ├── result_sink.py                   # ResultSink interface + per-stage sinks (D4)
-│   │   │   ├── stages/
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── load_parse.py                # LoadAndParseStage
-│   │   │   │   ├── parsers.py                    # Document loaders: PDF registry (pypdf/pdfplumber) + html (bs4)
-│   │   │   │   ├── clean_normalize.py           # CleanAndNormalizeStage
-│   │   │   │   ├── chunk.py                     # ChunkStage
-│   │   │   │   ├── enrich.py                    # EnrichMetadataStage
-│   │   │   │   └── embed.py                     # EmbedStage (simple 1-to-1, no batching)
-│   │   │   ├── batch.py                         # BatchContext + BatchCoordinator (worker↔orch handshake)
-│   │   │   ├── orchestrator.py                  # PipelineOrchestrator (BatchCoordinator), PipelineDAG
-│   │   │   ├── queue.py                         # JobEnqueuer + JobConsumer ports + PgQueuer/InMemory adapters (D2/D5)
-│   │   │   ├── worker.py                        # IngestionWorker (pure handler; compute only, reports to BatchContext)
-│   │   │   └── service.py                       # IngestionService (high-level facade)
-│   │   │
-│   │   └── retrieval/
-│   │       ├── __init__.py
-│   │       ├── models.py
-│   │       ├── retriever.py                     # Future: retrieval logic
-│   │       └── service.py                       # Future: RetrievalService
+│   ├── embedder.py                              # Embedder ABC + OnnxEmbedder (shared)
 │   │
-│   ├── factories.py                            # Composition factories (create_ingestion_pipeline, create_sink_registry)
-│   ├── main.py                                  # FastAPI app definition
-│   └── __init__.py
+│   ├── storage/                                 # persistence layer
+│   │   ├── models.py                            # Document, Chunk, Embedding, PipelineItem
+│   │   ├── chunk_store.py                       # ChunkStore ABC (repo + index implement it)
+│   │   ├── index_store.py                       # SqliteIndexStore (§8 index: sqlite-vec + FTS5)
+│   │   ├── status.py                            # DocumentStatusReader (job_status + facts ports)
+│   │   └── repository/
+│   │       ├── base.py                          # DocumentRepository (SQLAlchemy Core, async)
+│   │       ├── postgres.py                      # PostgreSQL (pgvector) dialect
+│   │       └── sqlite.py                        # SQLite dialect
+│   │
+│   ├── ingestion/
+│   │   ├── engine.py                            # IngestionEngine facade + run_worker()
+│   │   ├── worker.py                            # IngestionWorker (pure compute handler)
+│   │   ├── orchestrator.py                      # PipelineOrchestrator (BatchCoordinator), PipelineDAG
+│   │   ├── pipeline.py                          # PipelineStage classes, Pipeline
+│   │   ├── queue.py                             # JobEnqueuer/JobConsumer ports + PgQueuer/InMemory
+│   │   ├── batch.py                             # BatchContext + BatchCoordinator (worker↔orch handshake)
+│   │   ├── result_sink.py                       # ResultSink + per-stage sinks
+│   │   ├── models.py                            # IngestionJob + Batch (homogeneous dispatch unit)
+│   │   ├── types.py                             # DocumentStatus (public result type)
+│   │   ├── factories.py                         # create_ingestion_pipeline / create_sink_registry
+│   │   └── stages/                              # load_parse, parsers, clean_normalize, chunk, enrich, embed
+│   │
+│   └── retrieval/
+│       ├── engine.py                            # RetrievalEngine facade
+│       └── types.py                             # Query, RetrievalResult, MethodRef
 │
-├── tests/
-│   ├── conftest.py                              # Shared pytest fixtures
-│   │
-│   ├── unit/
-│   │   ├── core/
-│   │   │   ├── test_config.py
-│   │   │   └── test_observability.py
-│   │   │
-│   │   ├── domains/
-│   │   │   ├── base/
-│   │   │   │   ├── test_models.py
-│   │   │   │   └── test_repository.py
-│   │   │   │
-│   │   │   └── ingestion/
-│   │   │       ├── test_pipeline.py
-│   │   │       ├── test_stages/
-│   │   │       │   ├── test_chunk.py
-│   │   │       │   ├── test_embed.py
-│   │   │       │   └── test_clean_normalize.py
-│   │   │       ├── test_orchestrator.py
-│   │   │       ├── test_worker.py
-│   │   │       └── test_service.py
-│   │   │
-│   │   └── api/
-│   │       └── test_ingestion_endpoints.py
-│   │
-│   ├── integration/
-│   │   ├── test_ingestion_e2e.py                # Full pipeline test
-│   │   └── test_repository_transactional.py
-│   │
-│   └── fixtures/
-│       ├── sample_documents/
-│       │   ├── sample_1.txt
-│       │   └── sample_2.pdf
-│       └── mock_data.py
-│
-├── doc/
-│   ├── FUNCTIONAL_REQUIREMENTS.md               # What the system does
-│   ├── ARCHITECTURE.md                          # System design decisions
-│   ├── API_SPEC.md                              # API endpoints (future)
-│   └── DATABASE_SCHEMA.md                       # Full DB schema diagrams
-│
-├── docker/
-│   ├── Dockerfile                               # FastAPI app container
-│   ├── Dockerfile.worker                        # Ingestion worker container (optional)
-│   └── docker-compose.yml                       # Local dev setup
-│
-├── scripts/
-│   └── init_db.sh                               # Initialize databases (create tables)
-│
-├── run_worker.py                                # Worker process composition root (consumer side)
-├── .env.example                                 # Example environment variables
-├── requirements.txt                             # Python dependencies
-├── pyproject.toml                               # Project metadata
-└── README.md
+├── tests/                                       # mirrors the package; SQLite + InMemory queue
+├── scripts/fetch_model.py                       # fetch the ONNX model + tokenizer into the model dir
+├── run_worker.py                                # distributed consumer entry: asyncio.run(run_worker())
+├── .env.example  pyproject.toml  requirements.txt  README.md
+└── doc/                                         # FUNCTIONAL_REQUIREMENTS.md, ModusQ_RetrievalSubsystemSpec.md
 ```
 
 ### Folder Rationale
 
-- **`app/`** — All application code; mirrors typical FastAPI structure.
-- **`app/core/`** — Infrastructure: config, exceptions, observability. No business logic.
-- **`app/domains/base/`** — Shared by ingestion and retrieval. Repository interfaces, data models.
-- **`app/domains/ingestion/`** — Ingestion-specific: stages, orchestrator, worker, service.
-- **`app/domains/retrieval/`** — Retrieval-specific (future). Will reuse `base.repository`.
-- **`tests/`** — Mirrors `app/` structure for parallel test organization.
+- **`tarnrag/core/`** — Infrastructure: config, exceptions, observability. No business logic.
+- **`tarnrag/embedder.py`** — The shared ONNX embedding pipeline (ingestion passages + retrieval queries).
+- **`tarnrag/storage/`** — Persistence: data models, the chunk/index stores, the status read model, and `repository/` (Postgres/SQLite dialects).
+- **`tarnrag/ingestion/`** — Ingestion: stages, pipeline, orchestrator, worker, queue, and the `IngestionEngine` facade.
+- **`tarnrag/retrieval/`** — Retrieval: the `RetrievalEngine` facade + its types.
+- **`tests/`** — Mirrors the package; runs on SQLite + InMemory queue.
 
 ---
 
@@ -328,8 +241,8 @@ inheritance.
 
 ### Model contracts
 
-Pydantic v2 (`arbitrary_types_allowed=True`). → `app/domains/base/models.py`,
-`app/domains/ingestion/models.py`.
+Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/storage/models.py`,
+`tarnrag/ingestion/models.py`.
 
 - **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`.
 - **`Document`**: `id`, `content`, `metadata` (carries `source_id`, the idempotency key).
@@ -345,7 +258,7 @@ Pydantic v2 (`arbitrary_types_allowed=True`). → `app/domains/base/models.py`,
 `chunk_id` (set by ChunkResultSink), `created_at` (ISO); future NLP: `nlp_entities`,
 `nlp_noun_phrases`, `summary`.
 
-**Exceptions** (`app/core/exceptions.py`): `IngestionError` (base — results couldn't be
+**Exceptions** (`tarnrag/core/exceptions.py`): `IngestionError` (base — results couldn't be
 produced/persisted → the worker propagates so the queue requeues, D5), with subclasses
 `DocumentStorageError` and `ChunkNotFoundError`.
 
@@ -353,7 +266,7 @@ produced/persisted → the worker propagates so the queue requeues, D5), with su
 
 ## Database & Repository Layer
 
-### Repository (`app/domains/base/`)
+### Repository (`tarnrag/storage/`)
 
 The repository abstracts the database for both ingestion and retrieval. **SQLAlchemy 2.0
 Core (async).** A base `DocumentRepository` holds the shared table definitions and all
@@ -498,7 +411,7 @@ CREATE INDEX idx_job_status_document ON job_status (document_id);
 
 ## Pipeline & Stages
 
-### Stage base classes (`app/domains/ingestion/pipeline.py`)
+### Stage base classes (`tarnrag/ingestion/pipeline.py`)
 
 ABCs. `PipelineStage(name, **config)` runs `validate()` in `__init__` — so a subclass
 must set any attrs `validate()` reads **before** `super().__init__()`. A stage exposes
@@ -509,7 +422,7 @@ must set any attrs `validate()` reads **before** `super().__init__()`. A stage e
 for local testing; the distributed engine runs stages individually). Stages stay pure —
 no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → ResultSink).
 
-### Concrete stages (`app/domains/ingestion/stages/`)
+### Concrete stages (`tarnrag/ingestion/stages/`)
 
 Names below are the `stage.name` values (and the sink-registry keys):
 
@@ -539,7 +452,7 @@ propagate (they merge metadata): `DocumentResultSink` writes `metadata['doc_id']
 so the FK chain (chunk→doc, embedding→chunk) resolves without relying on `item.id`
 (stages create fresh items) or on the repository honoring caller-supplied ids.
 
-### Interface + sinks (`app/domains/ingestion/result_sink.py`)
+### Interface + sinks (`tarnrag/ingestion/result_sink.py`)
 
 `ResultSink` (ABC): `submit(results)` + `close()` are sync (buffer-only, called by the
 worker); `async finalize() -> FinalizationOutcome(persisted, detail)` is called by the
@@ -554,11 +467,11 @@ by stage name):
 - **EmbeddingResultSink** (Embed) — bulk `store_embeddings` in persistence-batch-sized writes.
 
 `create_sink_registry()` maps the five stage names → sink classes (lives in `result_sink.py`;
-re-exported from `app/factories.py`).
+re-exported from `tarnrag/ingestion/factories.py`).
 
 ---
 
-## Job Queue (`app/domains/ingestion/queue.py`)
+## Job Queue (`tarnrag/ingestion/queue.py`)
 
 pgQueuer owns the queue (claiming with `FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`,
 retries, dead-lettering, concurrency) — we hand-roll none of that. The surface is
@@ -595,7 +508,7 @@ implement both ports:
 ## Orchestration & Workers
 
 **Handshake (BatchContext).** The worker↔orchestration handshake is a per-batch **unit of
-work** (`app/domains/ingestion/batch.py`), not direct orchestrator calls. The worker
+work** (`tarnrag/ingestion/batch.py`), not direct orchestrator calls. The worker
 depends only on two ABCs: `BatchCoordinator.begin_batch(batch) -> BatchContext`
 (records 'processing', picks the per-stage sink by `batch.stage_name`) and `BatchContext` — `submit(results)`,
 `async fail(error)`, and `async complete()` (finalize + persist + record + fan-out;
@@ -622,81 +535,51 @@ inline items → `ctx.submit(produced)` → `ctx.complete()` (or `ctx.fail(e); r
 error). The worker holds no stage registry, queue, repo, or `ResultSink`, and never re-checks
 the batch's stage (the `Batch` already guarantees one). A raised exception propagates to the
 consumer → requeue (recovery, D5).
-## Services (Facade Pattern)
+## Engines (Facade)
 
-**`IngestionService`** (`app/domains/ingestion/service.py`) — the high-level facade used by
-the API (and any CLI). The public surface is **document-centric**: jobs never leak.
+The public surface is two engines, each built from `Settings` via a `create()` factory; jobs
+never leak into the contract.
 
-- `ingest_from_paths(file_paths)` and `ingest_from_content(documents)` shape `PipelineItem`s
-  (assigning a `source_id` == `document_id` when the caller doesn't supply one; a
-  client-supplied `source_id` is honored), then delegate to `orchestrator.ingest_documents`.
-  Both return `{"documents": [{"document_id", "status": "queued"}], "documents_queued": n}`.
-- `get_document_status(document_id, verbose=False)` returns the repository's derived status
-  (`pending | in_progress | complete | failed`), or `None` if unknown. `verbose=True` adds a
-  debug-only `jobs` breakdown (`repository.document_jobs`) — the only place per-job state is
-  exposed.
+**`IngestionEngine`** (`tarnrag/ingestion/engine.py`) — document-centric producer/query facade.
+- `await IngestionEngine.create(settings=None)` wires everything per `Settings.MODE`
+  (`embedded` → in-process InMemory queue; `distributed` → pgQueuer + a separate `run_worker()`).
+- `ingest_paths(paths)`, `ingest_content(documents)`, `ingest_streams(streams)` shape
+  `PipelineItem`s (a caller `source_id` becomes the `document_id`, else one is assigned), delegate
+  to `orchestrator.ingest_documents`, and **return the document IDs (`list[str]`)**. In embedded
+  mode the call also drains the pipeline to completion before returning.
+- `status(document_id)` → `DocumentStatus` (`pending | in_progress | complete | failed` + chunk /
+  embedding counts), or `None` if unknown — the single source of truth for state.
+- `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless
+  `APP__DEBUG`). Lifecycle: `aclose()` / `async with`.
 
-The facade is thin: it holds the pipeline (reference), the orchestrator (queueing), and the
-repository (status reads); `observability` is optional (typed `Any`, Phase 5).
-
----
-
-## API Layer (`app/api/v1/`)
-
-> **⚠️ Removed from this repo — moved to `tiqtasq.backend`** (`app/api/v1/rag/`; contract in that
-> repo's `doc/RAG_API_SPEC.md`). Retained below for reference. The composition this layer
-> used now lives in the ingestion/retrieval engines (`create()`), not under `app/api/`.
-
-FastAPI, document-centric. Four routes under `APIRouter(prefix="/v1/ingest")`
-(`endpoints/ingestion.py`):
-
-- `POST /v1/ingest/` (`IngestRequest{file_paths}`) and `POST /v1/ingest/content`
-  (`IngestFromContentRequest{documents}`) → `IngestResponse{documents: [DocumentRef
-  {document_id, status}], documents_queued}`. Both take an optional `parser` (PDF backend).
-- `POST /v1/ingest/file` (multipart: `files` + optional `parser`) — the API **streams** the
-  uploaded bytes to `UPLOAD_DIR` (`copyfileobj`, off-thread, no full-memory read) and ingests
-  them by path (parsing runs in the worker, which must share that volume); same
-  `IngestResponse`. An object store would replace local staging behind
-  `IngestionService._stage_upload`.
-- `GET /v1/ingest/documents/{document_id}/status?verbose=` →
-  `DocumentStatusResponse{document_id, status, chunk_count, embedding_count, jobs?}`
-  (`jobs` is `list[dict] | None`, present only under `?verbose=true`); **404** when unknown.
-
-Schemas live in `schemas.py`; jobs never appear in the contract except that debug `jobs`.
-
-**DI / composition (`dependencies.py`, `app/main.py`, `run_worker.py`).** The wiring is built
-**once per process**, not per request: `make_repository(settings)` (Postgres on a `postgres`
-URL, else SQLite; heavy backends imported lazily; connects the engine), `make_queue(settings)`
-(`PgQueuerJobQueue.connect`), and `build_service` / `build_orchestrator` (which use
-`create_ingestion_pipeline` + `create_sink_registry`). The API's `lifespan` (`create_app()` in
-`app/main.py`) builds the `IngestionService` once and stores it on `app.state`; the request
-dependency `get_ingestion_service(request)` just returns it (tests override it with an
-InMemory + SQLite wiring — the real lifespan does not run under httpx's ASGI transport).
-`run_worker.py` is the consumer composition root: the same builders, then
-`consumer.set_handler(worker.handle_batch)` + `await consumer.run()`. (This supersedes the
-earlier per-request DI sketch, which would have reconnected the DB on every call.) The API
-process only enqueues root jobs; downstream fan-out happens in the worker process's
-orchestrator — both share the same databases.
+**`RetrievalEngine`** (`tarnrag/retrieval/engine.py`) — sync query facade over the §8 index.
+- `RetrievalEngine.create(settings=None)` opens the index (read-only) + the shared embedder and
+  validates schema + embedding fingerprint (`RetrievalEngine.open(...)` is the lower-level seam).
+- `search(Query)` / `search_text(text, *, top_k, dense_k)` → ranked `RetrievalResult`s;
+  `asearch` / `asearch_text` are async (thread-offloaded) variants for event-loop callers.
+  Lifecycle: `close()` / `with`.
 
 ---
 
 ## Configuration
 
-**`Settings`** (`app/core/config.py`, pydantic-settings; cached `get_settings()`):
-`QUEUE_DB_URL` and `DOCUMENT_DB_URL` are required (two separate stores). Embedding
-(`EMBEDDING_MODEL`; `EMBEDDING_DIMENSION` — must match the model and sets the pgvector column
-width; `CHUNK_SIZE`, `CHUNK_OVERLAP`, `EMBEDDING_BATCH_SIZE`), worker, and observability fields
-have defaults. `model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)`. The
-composition **factories** live in **`app/factories.py`** (wiring, not config):
-`create_ingestion_pipeline(settings=None)` builds the five configured stages, and
-`create_sink_registry` is re-exported from `result_sink.py`. See **`.env.example`** at the
-repo root for the environment template.
+**`Settings`** (`tarnrag/core/config.py`, pydantic-settings; cached `get_settings()`). Config is
+**grouped into nested sub-models** — `settings.embedding`, `settings.chunking`, `settings.index`,
+`settings.database`, `settings.worker`, `settings.observability` — read from env via the
+`GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`). Cross-cutting
+`MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR` stay top-level/flat; `EMBEDDING_DIMENSION` must match
+the model (and sets the pgvector column width). A `model_validator` pins the backend to the mode:
+`distributed` requires a Postgres `DATABASE__DOCUMENT_URL` + `DATABASE__QUEUE_URL`; `embedded`
+requires SQLite. The composition **factories** live in **`tarnrag/ingestion/factories.py`**
+(wiring, not config): `create_ingestion_pipeline(settings=None)` builds the configured stages, and
+`create_sink_registry` is re-exported from `result_sink.py`. See **`.env.example`** for the
+environment template.
 
 ---
 
 ## Observability
 
-**Interface (`app/core/observability.py`).** `Observability` (ABC): abstract `async
+**Interface (`tarnrag/core/observability.py`).** `Observability` (ABC): abstract `async
 log(level, message, **context)`, `counter(name, value=1, tags=None)`, `gauge(name, value,
 tags=None)`, plus a **concrete** `timer(name, tags=None)` `@contextmanager` that records
 elapsed seconds as `{name}.seconds` via `gauge` (so every adapter — and the no-op — gets it
@@ -708,9 +591,9 @@ runs with `observability=None`, and every call site guards `self.obs`. It is hel
 compute failure) and the **orchestrator** (lifecycle: `ingest.documents` /
 `ingest.jobs_enqueued`, and per-stage `completed` / `failed` / `persist_failed` from the
 batch context). **Stages stay pure (D6)** — they take no obs; the worker observes them from
-the outside (it knows the stage name, item counts, and timing). The composition roots build it
-via `get_observability(settings)` (returns `NoOpObservability` when `OBSERVABILITY_ENABLED`,
-else `None`) and thread it through `build_orchestrator` / `build_service` and into the worker.
+the outside (it knows the stage name, item counts, and timing). `IngestionEngine.create()` builds
+it from `settings.observability` (a `NoOpObservability` when enabled, else `None`) and threads it
+through the orchestrator and the worker.
 
 > Real adapters (Prometheus, structured logging) are future work and plug in behind this ABC.
 
@@ -721,18 +604,17 @@ else `None`) and thread it through `build_orchestrator` / `build_service` and in
 ### Example: Ingesting 2 Documents
 
 ```
-1. API: POST /v1/ingest with ["doc1.pdf", "doc2.txt"]
+1. await IngestionEngine.create() → ingest_paths(["doc1.pdf", "doc2.txt"])
    ↓
-2. IngestionService.ingest_from_paths()
-   - Creates 2 PipelineItems
+2. ingest_paths shapes 2 PipelineItems (source_id == document_id)
    ↓
 3. PipelineOrchestrator.ingest_documents()
    - Creates 2 IngestionJob objects (stage=LoadAndParse)
    - Enqueues 2 root jobs via pgQueuer
    - Returns the document_ids (source_ids)
    ↓
-4. API returns: {"documents": [{"document_id": "src_1", "status": "queued"}, …],
-                 "documents_queued": 2}
+4. ingest_paths returns the document IDs: ["src_1", "src_2"]
+   - (embedded mode also drains the pipeline before returning; distributed returns immediately)
    ↓
 5. pgQueuer dispatches jobs to worker handlers (concurrently). Per D3/D5, workers do
    COMPUTE ONLY; the ORCHESTRATOR records status and enqueues downstream jobs after
@@ -767,61 +649,8 @@ else `None`) and thread it through `build_orchestrator` / `build_service` and in
    ↓
 6. All chunks and vectors stored in repository
    ↓
-7. Client polls GET /v1/ingest/documents/{document_id}/status (document-level; jobs
-   are internal, surfaced only via ?verbose=true for debugging)
+7. Caller polls engine.status(document_id) (document-level; jobs are internal,
+   surfaced only via the debug-gated engine.document_jobs)
 ```
-
----
-
-## Implementation Checklist
-
-### Phase 1: Core Infrastructure
-- [ ] Implement `PipelineItem`, storage models (Document, Chunk, Embedding)
-- [ ] Implement the SQLAlchemy Core `DocumentRepository` base (shared tables + CRUD)
-- [ ] Implement PostgreSQL + SQLite adapters (dialect hooks only)
-- [ ] Test transactional guarantees (store_document_with_chunks)
-- [ ] Test idempotent re-ingestion (upsert on source_id replaces chunks/embeddings)
-- [ ] Add the `job_status` projection table (document-keyed) — pgQueuer owns the queue (D6)
-
-### Phase 2: Pipeline & Stages
-- [ ] Implement base stage classes (PipelineStage, MapperStage, ChunkerStage, FilterStage) — stages stay pure (D6)
-- [ ] Implement the `ResultSink` interface + per-stage sinks (Document / Chunk / Embedding), with two-tier batching (D4)
-- [ ] Implement LoadAndParseStage
-- [ ] Implement CleanAndNormalizeStage
-- [ ] Implement ChunkStage
-- [ ] Implement EnrichMetadataStage
-- [ ] Implement EmbedStage (real `Embedding` output; `process_batch` model batching)
-- [ ] Wire `EMBEDDING_DIMENSION` through Settings → PostgresRepository DDL
-- [ ] Test pipeline composition and data flow
-
-### Phase 3: Orchestration & Workers
-- [ ] Implement PipelineDAG and PipelineOrchestrator (owns finalize / ack / downstream-enqueue / recovery — D3/D5)
-- [ ] Implement the `JobQueue` port + `PgQueuerJobQueue` and `InMemoryJobQueue` adapters; install pgQueuer's queue tables (D2)
-- [ ] Test the full ingestion flow end-to-end on `InMemoryJobQueue` + SQLite (no Postgres/pgQueuer)
-- [ ] Implement IngestionWorker as the pgQueuer handler — compute only: run pure stage, submit()/close() to ResultSink (D2/D3)
-- [ ] Test parallel execution with multiple workers
-- [ ] Test orchestrator finalize()/ack/downstream-enqueue and persistence-failure recovery (D5)
-
-### Phase 4: Services & API
-- [x] Implement IngestionService (facade) — document-centric; jobs never leak
-- [x] Implement API endpoints (POST /v1/ingest/ and /content, GET /v1/ingest/documents/{document_id}/status)
-- [x] Implement configuration (`Settings`, `app/core/config.py`) + composition factories (`app/factories.py`)
-- [x] Implement dependency injection + composition roots (`app/main.py` API, `run_worker.py` worker)
-- [x] Test end-to-end API flow (httpx ASGITransport over InMemoryJobQueue + SQLite)
-
-### Phase 5: Observability
-- [x] Implement observability interface and NoOpObservability
-- [x] Add observability calls to the worker (compute) and orchestrator (lifecycle) — stages stay pure (D6)
-- [ ] (Future) Implement Prometheus adapter
-- [ ] (Future) Implement structured logging adapter
-
-### Phase 6: Testing & Documentation
-- [x] Unit tests for each stage (`tests/domains/ingestion/test_stages.py`)
-- [x] Integration tests for full pipeline (`tests/integration/test_ingestion_e2e.py` + service/API e2e)
-- [x] Test repository transactional behavior (`test_store_document_is_atomic` + idempotency/cascade)
-- [x] Write API documentation (`doc/API_SPEC.md`, incl. local startup)
-- [ ] Write README with setup instructions (optional — setup lives in `doc/API_SPEC.md`)
-
----
 
 **End of Specification**

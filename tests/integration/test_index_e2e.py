@@ -6,18 +6,18 @@ job_status + a fake 3-d embedder. Proves ingestion produces a queryable retrieva
 
 import sqlite_vec
 
-from app.domains.base.index_store import SqliteIndexStore
-from app.domains.base.models import PipelineItem
-from app.domains.base.status import DocumentStatusReader
-from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
-from app.domains.ingestion.queue import InMemoryJobQueue
-from app.domains.ingestion.result_sink import create_sink_registry
-from app.domains.ingestion.stages.chunk import ChunkStage
-from app.domains.ingestion.stages.clean_normalize import CleanAndNormalizeStage
-from app.domains.ingestion.stages.embed import EmbedStage
-from app.domains.ingestion.stages.enrich import EnrichMetadataStage
-from app.domains.ingestion.stages.load_parse import LoadAndParseStage
-from app.domains.ingestion.worker import IngestionWorker
+from tarnrag.storage.index_store import SqliteIndexStore
+from tarnrag.storage.models import PipelineItem
+from tarnrag.storage.status import DocumentStatusReader
+from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
+from tarnrag.ingestion.queue import InMemoryJobQueue
+from tarnrag.ingestion.result_sink import create_sink_registry
+from tarnrag.ingestion.stages.chunk import ChunkStage
+from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
+from tarnrag.ingestion.stages.embed import EmbedStage
+from tarnrag.ingestion.stages.enrich import EnrichMetadataStage
+from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
+from tarnrag.ingestion.worker import IngestionWorker
 
 
 class _FakeEmbedder:
