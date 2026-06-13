@@ -9,6 +9,7 @@ RRF fusion, and the license/scope filter behind the ``Retriever``/``Fuser`` seam
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from app.core.config import Settings, get_settings
@@ -88,6 +89,17 @@ class RetrievalEngine:
     def search_text(self, text: str, *, top_k: int = 8, dense_k: int = 50) -> list[RetrievalResult]:
         """Convenience over :meth:`search`: build a :class:`Query` from a raw string."""
         return self.search(Query(text=text, top_k=top_k, dense_k=dense_k))
+
+    async def asearch(self, query: Query) -> list[RetrievalResult]:
+        """Async variant of :meth:`search` — offloads the sync work (sqlite-vec + ONNX both
+        release the GIL) to a thread so it doesn't block the event loop."""
+        return await asyncio.to_thread(self.search, query)
+
+    async def asearch_text(
+        self, text: str, *, top_k: int = 8, dense_k: int = 50
+    ) -> list[RetrievalResult]:
+        """Async variant of :meth:`search_text`."""
+        return await asyncio.to_thread(self.search_text, text, top_k=top_k, dense_k=dense_k)
 
     def close(self) -> None:
         self.store.close()

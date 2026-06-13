@@ -120,8 +120,8 @@ from app.domains.retrieval import RetrievalEngine
 
 # Ingestion (MODE='embedded' default → runs the whole pipeline in-process):
 engine = await IngestionEngine.create()                 # or .create(settings)
-sub = await engine.ingest_paths(["/data/spec.pdf"])     # also ingest_content / ingest_streams
-st = await engine.status(sub.documents[0].document_id)  # -> DocumentStatus
+ids = await engine.ingest_paths(["/data/spec.pdf"])     # -> list[str]; also ingest_content / ingest_streams
+st = await engine.status(ids[0])                        # -> DocumentStatus
 await engine.aclose()                                   # or: async with await IngestionEngine.create() as engine: ...
 
 # Retrieval (sync; reads the §8 index ingestion built):
@@ -129,11 +129,17 @@ with RetrievalEngine.create() as r:                     # validates schema + emb
     hits = r.search_text("how do I inspect a tank?", top_k=8)
 ```
 
+- **`create()` is the entry point** for both engines (reads `Settings`). The bare constructors and
+  `RetrievalEngine.open(...)` are low-level seams for tests / custom wiring.
+- **Async vs sync is deliberate.** Ingestion is **async** (genuine async I/O — async SQLAlchemy +
+  pgQueuer); retrieval is **sync** (sync `sqlite3`/sqlite-vec + ONNX, matching the planned C++ port).
+  For event-loop callers, retrieval also exposes `asearch` / `asearch_text`, which offload the sync
+  work to a thread. **Naming:** an `a`-prefix is the async variant of a sync method (`search` →
+  `asearch`); lifecycle follows the Python idiom — `aclose` + `async with` for the async engine,
+  `close` + `with` for the sync one.
 - `Settings.MODE='embedded'` (default) runs in-process (InMemory queue, SQLite) — each ingest call
   processes to completion. `MODE='distributed'` enqueues to pgQueuer; run `python run_worker.py` as
-  separate consumer processes. `create()` reads `MODE` from `Settings`.
-- The bare constructors (`IngestionEngine(...)`, `RetrievalEngine.open(...)`) are the low-level
-  seams for tests / custom wiring.
+  separate consumer processes.
 
 ## Retrieval (ModusQ) — in progress
 
@@ -248,7 +254,7 @@ Decisions" section (D1–D6) holds the full rationale; this is the summary.
 - **Public API is document-centric.** Clients get a `document_id` (== `source_id`)
   from `POST /v1/ingest` and poll `GET /v1/ingest/documents/{document_id}/status`
   (derived from persisted data). Jobs are internal — never in the contract, exposed
-  only under `?verbose=true` for debugging.
+  only via the debug-gated `IngestionEngine.document_jobs` (needs `APP__DEBUG`).
 
 ## Architecture & Key Concepts
 

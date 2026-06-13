@@ -2,7 +2,7 @@
 
 The public surface is **document-centric**: callers submit documents and poll by
 ``document_id`` (== ``source_id``). Jobs are an internal detail and never leak here — the
-only exception is the debug-only ``verbose`` breakdown on status reads.
+only window is the debug-gated :meth:`document_jobs` (raises unless ``APP__DEBUG``).
 
 Use :meth:`create` for ready-to-use wiring from ``Settings``:
 
@@ -40,7 +40,7 @@ from app.domains.ingestion.queue import (
     JobEnqueuer,
     PgQueuerJobQueue,
 )
-from app.domains.ingestion.types import DocumentRef, DocumentStatus, IngestSubmission
+from app.domains.ingestion.types import DocumentStatus
 from app.domains.ingestion.worker import IngestionWorker
 from app.factories import create_ingestion_pipeline, create_sink_registry
 
@@ -63,6 +63,7 @@ class IngestionEngine:
         *,
         queue: JobEnqueuer | None = None,  # held for embedded draining / the worker loop
         auto_drain: bool = False,  # embedded: process the whole DAG inline on each ingest
+        debug: bool = False,  # gates the debug-only methods (set from APP__DEBUG)
     ):
         self.pipeline = pipeline
         self.orchestrator = orchestrator
@@ -74,6 +75,7 @@ class IngestionEngine:
         self._status = DocumentStatusReader(repository, facts_source or repository)
         self._queue = queue
         self._auto_drain = auto_drain
+        self._debug = debug
         self._index_store: SqliteIndexStore | None = None  # set by create(), closed by aclose()
 
     # ----- construction -----
@@ -109,7 +111,7 @@ class IngestionEngine:
         engine = cls(
             pipeline, orchestrator, repository, observability=obs,
             staging_dir=settings.UPLOAD_DIR, facts_source=index_store,
-            queue=queue, auto_drain=auto_drain,
+            queue=queue, auto_drain=auto_drain, debug=settings.app.debug,
         )
         engine._index_store = index_store
         if auto_drain:  # register the in-process worker that ingest() will drive
@@ -121,9 +123,10 @@ class IngestionEngine:
 
     async def ingest_paths(
         self, paths: list[str], *, parser: str | None = None
-    ) -> IngestSubmission:
+    ) -> list[str]:
         """Ingest documents loaded from file paths (LoadAndParse reads them). ``parser``
-        selects the PDF backend for this request (None → default)."""
+        selects the PDF backend (None → default). Returns the document IDs (poll
+        :meth:`status` for progress)."""
         items = [
             self._item(
                 source_id=str(uuid.uuid4()),
@@ -140,9 +143,9 @@ class IngestionEngine:
 
     async def ingest_content(
         self, documents: list[dict[str, str]], *, parser: str | None = None
-    ) -> IngestSubmission:
+    ) -> list[str]:
         """Ingest pre-loaded content. A client-supplied ``source_id`` becomes the
-        ``document_id``; otherwise one is assigned."""
+        ``document_id``; otherwise one is assigned. Returns the document IDs."""
         items = []
         for doc in documents:
             doc = dict(doc)  # don't mutate the caller's dict
@@ -155,11 +158,12 @@ class IngestionEngine:
 
     async def ingest_streams(
         self, streams: list[tuple[str, BinaryIO]], *, parser: str | None = None
-    ) -> IngestSubmission:
+    ) -> list[str]:
         """Ingest binary streams (e.g. HTTP uploads): **stream** each ``(filename, source)``
         to the staging dir, then ingest by path (parsing happens in the worker). ``source`` is
         any binary file-like; it is copied in chunks (never fully held in memory). Requires
-        ``staging_dir``; in ``distributed`` mode that must be a volume the worker can read."""
+        ``staging_dir``; in ``distributed`` mode that must be a volume the worker can read.
+        Returns the document IDs."""
         if not self.staging_dir:
             raise RuntimeError("streams are not configured (no staging_dir / UPLOAD_DIR)")
         # Offload the blocking disk copy so the event loop isn't stalled on large files.
@@ -169,13 +173,10 @@ class IngestionEngine:
         ]
         return await self.ingest_paths(paths, parser=parser)
 
-    async def status(
-        self, document_id: str, verbose: bool = False
-    ) -> DocumentStatus | None:
+    async def status(self, document_id: str) -> DocumentStatus | None:
         """Document-level status derived from persisted data (pending | in_progress |
-        complete | failed). ``None`` if the document is unknown. ``verbose=True`` adds the
-        debug-only ``jobs`` breakdown — the only place per-job state is exposed."""
-        raw = await self._status.document_status(document_id, verbose=verbose)
+        complete | failed). ``None`` if the document is unknown."""
+        raw = await self._status.document_status(document_id)
         if raw is None:
             return None
         return DocumentStatus(
@@ -183,24 +184,15 @@ class IngestionEngine:
             status=raw["status"],
             chunk_count=raw["chunk_count"],
             embedding_count=raw["embedding_count"],
-            jobs=raw.get("jobs"),
         )
 
-    # ----- distributed worker loop -----
+    # ----- debug (gated on APP__DEBUG) -----
 
-    async def run_worker(self) -> None:
-        """Run the consumer loop — the worker-process entry for ``MODE='distributed'``.
-        Registers the compute worker on the queue and runs until it stops, then releases
-        resources. (In ``embedded`` mode the queue drains per ingest, so this isn't needed.)"""
-        if not isinstance(self._queue, JobConsumer):
-            raise RuntimeError("this engine has no consumable queue to run a worker on")
-        worker = IngestionWorker(self.orchestrator, observability=self.obs)
-        self._queue.set_handler(worker.handle_batch)
-        logger.info("Ingestion worker %s started", worker.worker_id)
-        try:
-            await self._queue.run()
-        finally:
-            await self.aclose()
+    async def document_jobs(self, document_id: str) -> list[dict]:
+        """Per-job breakdown for a document — the one window into the otherwise-internal job
+        state. **Debug only:** raises ``RuntimeError`` unless ``APP__DEBUG`` is set."""
+        self._require_debug()
+        return await self.repository.document_jobs(document_id)
 
     # ----- lifecycle -----
 
@@ -220,17 +212,18 @@ class IngestionEngine:
 
     # ----- internals -----
 
-    async def _submit(self, items: list[PipelineItem]) -> IngestSubmission:
+    def _require_debug(self) -> None:
+        if not self._debug:
+            raise RuntimeError("debug-only operation; set APP__DEBUG=true to enable")
+
+    async def _submit(self, items: list[PipelineItem]) -> list[str]:
         document_ids = await self.orchestrator.ingest_documents(items)
         if self.obs:
             self.obs.counter("ingestion.documents_queued", len(items))
             await self.obs.log("info", "documents queued", count=len(document_ids))
         if self._auto_drain and isinstance(self._queue, JobConsumer):
             await self._queue.run()  # embedded: process the whole DAG in-process
-        return IngestSubmission(
-            documents=[DocumentRef(document_id=d) for d in document_ids],
-            queued=len(document_ids),
-        )
+        return document_ids
 
     def _item(self, source_id: str, content: str, extra: dict[str, Any]) -> PipelineItem:
         return PipelineItem(
@@ -256,3 +249,19 @@ class IngestionEngine:
         with open(dest, "wb") as out:
             shutil.copyfileobj(source, out)
         return str(dest)
+
+
+async def run_worker(settings: Settings | None = None) -> None:
+    """Consumer entry point for ``MODE='distributed'`` — build the wiring via
+    :meth:`IngestionEngine.create` and run the consume loop until the queue stops, then release
+    resources. (In ``embedded`` mode ingestion runs in-process, so there is no separate worker.)"""
+    engine = await IngestionEngine.create(settings)
+    if not isinstance(engine._queue, JobConsumer):
+        raise RuntimeError("this engine has no consumable queue to run a worker on")
+    worker = IngestionWorker(engine.orchestrator, observability=engine.obs)
+    engine._queue.set_handler(worker.handle_batch)
+    logger.info("Ingestion worker %s started", worker.worker_id)
+    try:
+        await engine._queue.run()
+    finally:
+        await engine.aclose()

@@ -9,7 +9,7 @@ import io
 
 import pytest
 
-from app.domains.ingestion import DocumentRef, IngestionEngine
+from app.domains.ingestion import IngestionEngine
 from app.domains.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from app.domains.ingestion.pipeline import Pipeline
 from app.domains.ingestion.queue import InMemoryJobQueue, JobEnqueuer
@@ -42,14 +42,16 @@ def _stages():
     ]
 
 
-def _wire(repo, *, auto_drain=False):
+def _wire(repo, *, auto_drain=False, debug=False):
     """Build producer+consumer wiring around one repo; return (engine, queue)."""
     queue = InMemoryJobQueue()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), queue, repo, create_sink_registry())
     worker = IngestionWorker(orch)
     queue.set_handler(worker.handle_batch)
-    engine = IngestionEngine(Pipeline(stages), orch, repo, queue=queue, auto_drain=auto_drain)
+    engine = IngestionEngine(
+        Pipeline(stages), orch, repo, queue=queue, auto_drain=auto_drain, debug=debug
+    )
     return engine, queue
 
 
@@ -57,8 +59,7 @@ async def test_ingest_content_queues_then_completes(repo):
     engine, queue = _wire(repo)
 
     result = await engine.ingest_content([{"content": "Hello world. " * 10, "source_id": "s1"}])
-    assert result.queued == 1
-    assert result.documents == [DocumentRef("s1")]  # status defaults to "queued"
+    assert result == ["s1"]  # ingest returns the document IDs
     # Queued but not yet processed -> pending (no persisted data).
     assert (await engine.status("s1")).status == "pending"
 
@@ -68,7 +69,6 @@ async def test_ingest_content_queues_then_completes(repo):
     assert status.status == "complete"
     assert status.chunk_count >= 1
     assert status.embedding_count == status.chunk_count
-    assert status.jobs is None  # not verbose
 
 
 async def test_embedded_auto_drain_processes_inline(repo):
@@ -86,21 +86,27 @@ async def test_unknown_document_status_is_none(repo):
     assert await engine.status("does-not-exist") is None
 
 
-async def test_verbose_adds_jobs_breakdown(repo):
-    engine, queue = _wire(repo)
+async def test_document_jobs_is_debug_gated(repo):
+    engine, queue = _wire(repo)  # debug off (default)
     await engine.ingest_content([{"content": "alpha beta gamma. " * 8, "source_id": "s1"}])
     await queue.run()
 
-    status = await engine.status("s1", verbose=True)
-    assert isinstance(status.jobs, list) and status.jobs
-    assert all(j["status"] == "completed" for j in status.jobs)
+    # debug off -> the per-job breakdown is refused
+    with pytest.raises(RuntimeError, match="APP__DEBUG"):
+        await engine.document_jobs("s1")
+
+    # debug on (same repo) -> returns the breakdown
+    engine_dbg, _ = _wire(repo, debug=True)
+    jobs = await engine_dbg.document_jobs("s1")
+    assert isinstance(jobs, list) and jobs
+    assert all(j["status"] == "completed" for j in jobs)
 
 
 async def test_missing_source_id_gets_assigned(repo):
     engine, _ = _wire(repo)
     result = await engine.ingest_content([{"content": "x"}])
-    assert result.queued == 1
-    assert result.documents[0].document_id  # a uuid was assigned
+    assert len(result) == 1
+    assert result[0]  # a uuid was assigned
 
 
 class _RecordingEnqueuer(JobEnqueuer):
@@ -136,7 +142,7 @@ async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
     result = await engine.ingest_streams(
         [("report.pdf", io.BytesIO(b"%PDF-fake-bytes"))], parser="pdfplumber"
     )
-    assert result.queued == 1
+    assert len(result) == 1
 
     meta = enq.jobs[0].item.metadata
     staged = meta["source_path"]
