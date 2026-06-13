@@ -83,16 +83,20 @@ class IngestionEngine:
         """Build a ready-to-use engine from ``Settings`` (mode-driven). The easy entry point;
         the constructor is the lower-level seam for injecting your own wiring."""
         settings = settings or get_settings()
-        obs = NoOpObservability() if settings.OBSERVABILITY_ENABLED else None
-        repository = await DocumentRepository.from_settings(settings)
-        embedder = OnnxEmbedder.from_settings(settings)
+        obs = NoOpObservability() if settings.observability.enabled else None
+        repository = await DocumentRepository.create(
+            settings.database, settings.EMBEDDING_DIMENSION
+        )
+        embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         # The engine is the index producer: it records index_meta and the sinks persist into
         # the §8 index. job_status stays on the repository.
-        index_store = SqliteIndexStore.from_settings(settings, embedder=embedder)
+        index_store = SqliteIndexStore.create(
+            settings.index, settings.EMBEDDING_DIMENSION, embedder=embedder
+        )
         pipeline = create_ingestion_pipeline(settings)
 
         if settings.MODE == "distributed":
-            queue: JobEnqueuer = await PgQueuerJobQueue.connect(settings.QUEUE_DB_URL)
+            queue: JobEnqueuer = await PgQueuerJobQueue.connect(settings.database.queue_url)
             auto_drain = False
         else:  # embedded — run the whole pipeline in this process
             queue = InMemoryJobQueue()

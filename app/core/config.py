@@ -1,8 +1,13 @@
-"""Application configuration (pydantic-settings) — env-driven.
+"""Application configuration (pydantic-settings) — env-driven, grouped by component.
 
 ``Settings`` is the single source of runtime config; the engines (``IngestionEngine`` /
-``RetrievalEngine``) read it in their ``create()`` factories to build the wiring. The
-pipeline/sink *factories* live in ``app/factories.py`` (they consume a ``Settings``).
+``RetrievalEngine``) read it in their ``create()`` factories to build the wiring. Config is
+**grouped into nested sub-models** (``settings.embedding``, ``settings.index``,
+``settings.database`` …) so each component depends only on its slice — env vars use the
+``GROUP__FIELD`` convention (e.g. ``EMBEDDING__MODEL``). The few cross-cutting knobs
+(``MODE``, ``EMBEDDING_DIMENSION``, ``UPLOAD_DIR``) stay top-level.
+
+The pipeline/sink *factories* live in ``app/factories.py`` (they consume a ``Settings``).
 """
 
 from __future__ import annotations
@@ -10,56 +15,119 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    """Application configuration from environment variables (and an optional ``.env``)."""
+class AppSettings(BaseModel):
+    """Process metadata (largely vestigial since the FastAPI layer moved out)."""
 
-    # FastAPI
-    APP_NAME: str = "RAG Ingestion"
-    APP_VERSION: str = "0.1.0"
-    DEBUG: bool = False
+    name: str = "RAG Ingestion"
+    version: str = "0.1.0"
+    debug: bool = False
+
+
+class EmbeddingSettings(BaseModel):
+    """The shared ONNX embedding pipeline (ingestion passages + retrieval queries). Its
+    identity (model/revision/prefixes/…) feeds the index fingerprint. ``EMBEDDING_DIMENSION``
+    is top-level — it's cross-cutting (index + repo must match it)."""
+
+    model: str = "sentence-transformers/all-MiniLM-L6-v2"  # model id (recorded in index_meta)
+    revision: str = ""
+    model_dir: str = "./models/all-MiniLM-L6-v2"  # local model.onnx + tokenizer.json (offline)
+    max_seq_length: int = 512
+    query_prefix: str = ""  # non-empty for asymmetric models (BGE/E5)
+    passage_prefix: str = ""
+    batch_size: int = 32  # embed-stage batching
+
+
+class ChunkingSettings(BaseModel):
+    """Text chunking for the ingestion pipeline."""
+
+    size: int = 512
+    overlap: int = 50
+
+
+class IndexSettings(BaseModel):
+    """The §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled."""
+
+    db_path: str = "./index.db"
+    default_license_class: str = "public_domain"
+
+
+class DatabaseSettings(BaseModel):
+    """The two stores — never conflate them. ``document_url`` defaults to local SQLite so
+    embedded mode is zero-config; ``queue_url`` (pgQueuer) is only used in distributed mode."""
+
+    document_url: str = "sqlite:///./rag_docs.db"  # document / chunk / embedding storage
+    queue_url: str = ""  # pgQueuer job queue (required for MODE='distributed')
+
+
+class WorkerSettings(BaseModel):
+    """Distributed-mode worker tuning."""
+
+    queue_timeout_seconds: int = 30
+    concurrency: int = 4
+
+
+class ObservabilitySettings(BaseModel):
+    """Observability toggle (Phase 5). Real adapters plug in behind the ABC."""
+
+    enabled: bool = False
+    type: str | None = None  # "prometheus" | "structured_logging"
+
+
+class Settings(BaseSettings):
+    """Application configuration from environment variables (and an optional ``.env``).
+
+    Grouped fields use the ``GROUP__FIELD`` env convention, e.g. ``EMBEDDING__MODEL``,
+    ``DATABASE__DOCUMENT_URL``. The top-level fields keep their flat names.
+    """
+
+    model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__")
 
     # Execution mode for IngestionEngine. 'embedded' runs the whole pipeline in-process
-    # (InMemory queue — no Postgres/pgQueuer needed), the easy single-process path;
-    # 'distributed' enqueues to pgQueuer for separate worker processes to consume.
+    # (InMemory queue — no Postgres/pgQueuer needed); 'distributed' enqueues to pgQueuer.
     MODE: Literal["embedded", "distributed"] = "embedded"
 
-    # Databases (two separate stores — never conflate them)
-    QUEUE_DB_URL: str = ""  # pgQueuer job queue (required for MODE='distributed')
-    DOCUMENT_DB_URL: str  # document / chunk / embedding storage
+    # Cross-cutting: the embedder's output dim — the index and repo MUST match it.
+    EMBEDDING_DIMENSION: int = 384
 
-    # Ingestion / embedding (ONNX). The model is configurable; ingestion and retrieval MUST
-    # share it — enforced by the embedding_config_fingerprint recorded in the index.
-    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"  # model id (recorded in index_meta)
-    EMBEDDING_MODEL_REVISION: str = ""
-    MODEL_DIR: str = "./models/all-MiniLM-L6-v2"  # local model.onnx + tokenizer.json (offline)
-    EMBEDDING_DIMENSION: int = 384  # MUST match the model
-    MAX_SEQ_LENGTH: int = 512
-    EMBEDDING_QUERY_PREFIX: str = ""  # non-empty for asymmetric models (BGE/E5)
-    EMBEDDING_PASSAGE_PREFIX: str = ""
-    CHUNK_SIZE: int = 512
-    CHUNK_OVERLAP: int = 50
-    EMBEDDING_BATCH_SIZE: int = 32
-
-    # §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled.
-    INDEX_DB_PATH: str = "./index.db"
-    DEFAULT_LICENSE_CLASS: str = "public_domain"
-
-    # Uploads: where the API stages uploaded bytes so workers can read them by path.
-    # Must be a location both the API and worker processes can access (shared volume).
+    # Where streamed bytes are staged for the worker (a shared volume in distributed mode).
     UPLOAD_DIR: str = "./uploads"
 
-    # Workers
-    WORKER_QUEUE_TIMEOUT_SECONDS: int = 30
-    WORKER_CONCURRENCY: int = 4
+    app: AppSettings = AppSettings()
+    embedding: EmbeddingSettings = EmbeddingSettings()
+    chunking: ChunkingSettings = ChunkingSettings()
+    index: IndexSettings = IndexSettings()
+    database: DatabaseSettings = DatabaseSettings()
+    worker: WorkerSettings = WorkerSettings()
+    observability: ObservabilitySettings = ObservabilitySettings()
 
-    # Observability (Phase 5)
-    OBSERVABILITY_ENABLED: bool = False
-    OBSERVABILITY_TYPE: str | None = None  # "prometheus" | "structured_logging"
-
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    @model_validator(mode="after")
+    def _check_database_for_mode(self) -> Settings:
+        """Fail fast on a MODE / document-store mismatch — ``MODE`` pins the backend:
+        distributed needs Postgres (+ pgQueuer); embedded needs SQLite (single-process). This
+        catches both a distributed deploy that forgot to point at Postgres (would silently use
+        the SQLite default) and an embedded run aimed at Postgres (probably a leftover/typo)."""
+        is_postgres = "postgres" in self.database.document_url
+        if self.MODE == "distributed":
+            if not self.database.queue_url:
+                raise ValueError(
+                    "MODE='distributed' requires DATABASE__QUEUE_URL (the pgQueuer job queue)"
+                )
+            if not is_postgres:
+                raise ValueError(
+                    "MODE='distributed' requires a Postgres DATABASE__DOCUMENT_URL; got "
+                    f"{self.database.document_url!r} (SQLite is single-process — embedded only)"
+                )
+        elif is_postgres:  # embedded
+            raise ValueError(
+                "MODE='embedded' must not use a Postgres DATABASE__DOCUMENT_URL; got "
+                f"{self.database.document_url!r} (use SQLite, e.g. 'sqlite:///./rag_docs.db', "
+                "or switch to MODE='distributed')"
+            )
+        return self
 
 
 @lru_cache

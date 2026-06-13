@@ -55,8 +55,8 @@ class RetrievalEngine:
         (read-only) and the shared embedder, then validates compatibility via ``open``. The
         easy entry point; ``open`` is the lower-level seam for injecting your own store/embedder."""
         settings = settings or get_settings()
-        store = SqliteIndexStore.from_settings(settings)
-        embedder = OnnxEmbedder.from_settings(settings)
+        store = SqliteIndexStore.create(settings.index, settings.EMBEDDING_DIMENSION)
+        embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         return cls.open(store, embedder, config=settings)
 
     def search(self, query: Query) -> list[RetrievalResult]:

@@ -7,6 +7,7 @@ fine for development and small-scale use, not for production-scale retrieval.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -29,6 +30,13 @@ class SqliteRepository(DocumentRepository):
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.close()
+
+    async def connect(self) -> None:
+        # SQLite won't create the parent directory — ensure it exists (no-op for in-memory).
+        db_file = self.engine.url.database
+        if db_file and db_file != ":memory:":
+            Path(db_file).parent.mkdir(parents=True, exist_ok=True)
+        await super().connect()
 
     def _driver_url(self, url: str) -> str:
         path = url.replace("sqlite:///", "").replace("sqlite://", "")

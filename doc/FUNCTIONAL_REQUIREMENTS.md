@@ -7,9 +7,12 @@
 > and extracted to the `tiqtasq.backend` repo** (`app/api/v1/rag/`, over a no-op stub service
 > layer; the contract now lives in that repo's `doc/RAG_API_SPEC.md`). Ingestion and retrieval are
 > now used through `IngestionEngine` / `RetrievalEngine` (`create()` factories); the old
-> composition builders are gone (folded into the engines + `from_settings` classmethods).
-> `run_worker.py` wraps `IngestionEngine.run_worker()`. Treat §8 and other `app/main.py` / `/v1/…`
-> references below as historical.
+> composition builders are gone (folded into the engines + `create()` classmethods).
+> `run_worker.py` wraps `IngestionEngine.run_worker()`. `Settings` is also now grouped into nested
+> sub-models (`settings.embedding`, `settings.database`, …) with `GROUP__FIELD` env vars (e.g.
+> `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`) — see `.env.example`. Treat §8 and other
+> `app/main.py` / `/v1/…` references, and flat config names (`EMBEDDING_MODEL`, `DOCUMENT_DB_URL`,
+> `CHUNK_SIZE`, …), below as historical.
 
 ---
 

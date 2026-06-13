@@ -29,7 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from app.core.config import Settings
+from app.core.config import DatabaseSettings
 from app.core.exceptions import ChunkNotFoundError
 from app.domains.base.chunk_store import ChunkStore
 from app.domains.base.models import Chunk, Document, Embedding
@@ -58,20 +58,22 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     """
 
     @classmethod
-    async def from_settings(cls, settings: Settings) -> DocumentRepository:
-        """Build and connect the repository selected by ``DOCUMENT_DB_URL`` (Postgres on a
-        ``postgres`` URL, else SQLite). Heavy backends are imported lazily."""
-        if "postgres" in settings.DOCUMENT_DB_URL:
+    async def create(
+        cls, database: DatabaseSettings, embedding_dimension: int
+    ) -> DocumentRepository:
+        """Build and connect the repository selected by ``database.document_url`` (Postgres on
+        a ``postgres`` URL, else SQLite). Heavy backends are imported lazily."""
+        if "postgres" in database.document_url:
             from app.domains.base.postgres_repository import PostgresRepository
 
             repo: DocumentRepository = PostgresRepository(
-                settings.DOCUMENT_DB_URL, embedding_dimension=settings.EMBEDDING_DIMENSION
+                database.document_url, embedding_dimension=embedding_dimension
             )
         else:
             from app.domains.base.sqlite_repository import SqliteRepository
 
             repo = SqliteRepository(
-                settings.DOCUMENT_DB_URL, embedding_dimension=settings.EMBEDDING_DIMENSION
+                database.document_url, embedding_dimension=embedding_dimension
             )
         await repo.connect()
         return repo

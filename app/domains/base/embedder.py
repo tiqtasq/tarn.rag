@@ -19,7 +19,7 @@ import json
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from app.core.config import Settings
+from app.core.config import EmbeddingSettings
 
 
 class Embedder(ABC):
@@ -74,17 +74,18 @@ class OnnxEmbedder(Embedder):
         self._input_names: set[str] | None = None
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> OnnxEmbedder:
-        """Build the shared ONNX embedder from ``Settings`` (model loads lazily on first
-        ``embed``). Ingestion and retrieval both go through here, so they share one pipeline."""
+    def create(cls, embedding: EmbeddingSettings, embedding_dimension: int) -> OnnxEmbedder:
+        """Build the shared ONNX embedder from its config slice (model loads lazily on first
+        ``embed``). Ingestion and retrieval both go through here, so they share one pipeline.
+        ``embedding_dimension`` is passed separately — it's cross-cutting (index + repo match it)."""
         return cls(
-            settings.MODEL_DIR,
-            model_id=settings.EMBEDDING_MODEL,
-            revision=settings.EMBEDDING_MODEL_REVISION,
-            embedding_dim=settings.EMBEDDING_DIMENSION,
-            max_length=settings.MAX_SEQ_LENGTH,
-            query_prefix=settings.EMBEDDING_QUERY_PREFIX,
-            passage_prefix=settings.EMBEDDING_PASSAGE_PREFIX,
+            embedding.model_dir,
+            model_id=embedding.model,
+            revision=embedding.revision,
+            embedding_dim=embedding_dimension,
+            max_length=embedding.max_seq_length,
+            query_prefix=embedding.query_prefix,
+            passage_prefix=embedding.passage_prefix,
         )
 
     # ---------------- identity (no model load needed) ----------------

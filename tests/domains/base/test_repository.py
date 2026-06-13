@@ -2,6 +2,7 @@ import pytest
 
 from app.core.exceptions import ChunkNotFoundError
 from app.domains.base.models import Chunk, Document, Embedding
+from app.domains.base.sqlite_repository import SqliteRepository
 
 
 def _chunk(content, index, total, source_id="s1", **meta):
@@ -12,6 +13,14 @@ def _chunk(content, index, total, source_id="s1", **meta):
         total_chunks=total,
         metadata={"source_id": source_id, **meta},
     )
+
+
+async def test_connect_creates_missing_parent_dir(tmp_path):
+    nested = tmp_path / "does" / "not" / "exist"
+    repo = SqliteRepository(f"sqlite:///{nested}/docs.db", embedding_dimension=3)
+    await repo.connect()
+    assert nested.is_dir()  # SQLite won't create it; connect() does
+    await repo.disconnect()
 
 
 async def test_store_and_get_document(repo):
