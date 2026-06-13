@@ -254,7 +254,8 @@ Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/storage/models.py`,
   `stage_name`, so no `stage_config` travels in the job.)
 
 **`metadata` conventions** (loose bag; recommended keys): `source_id`, `source_type`,
-`source_path`, `doc_id` (set by Load), `chunk_index`, `total_chunks`, `chunk_size`,
+`source_path`, `content_hash` (sha256 of submitted content; persisted to its own column),
+`doc_id` (set by Load), `chunk_index`, `total_chunks`, `chunk_size`,
 `chunk_id` (set by ChunkResultSink), `created_at` (ISO); future NLP: `nlp_entities`,
 `nlp_noun_phrases`, `summary`.
 
@@ -282,8 +283,10 @@ re-ingest), `store_document_with_chunks`, `store_chunks`, `store_embeddings`,
 (`record_job`, `document_jobs`, `document_status`).
 
 **Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic);
-documents are keyed by `metadata['source_id']` (UNIQUE), so re-ingest upserts the doc and
-replaces its chunks/embeddings (cascade) — never duplicates.
+documents are keyed by `metadata['source_id']` (UNIQUE, **stable**), so re-ingest upserts the doc
+and replaces its chunks/embeddings (cascade) — never duplicates. Each document also stores a
+`content_hash` column (sha256 of submitted content); `documents_by_content_hash` looks it up for
+content dedup, independent of the source_id identity.
 
 **Dialect hooks (adapters):** `_driver_url`, `_vector_type`, `_encode_vector` /
 `_decode_vector`, `vector_search`, and `_before_/_after_create_schema`.
@@ -310,11 +313,13 @@ CREATE TABLE documents (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     content TEXT NOT NULL,
     metadata JSONB DEFAULT '{}',
+    content_hash TEXT,                  -- sha256 of submitted content (content dedup, not identity)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- UNIQUE on source_id makes re-ingestion idempotent (upsert via ON CONFLICT)
 CREATE UNIQUE INDEX idx_documents_source_id ON documents ((metadata->>'source_id'));
+CREATE INDEX idx_documents_content_hash ON documents(content_hash);
 
 CREATE TABLE chunks (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
@@ -363,10 +368,12 @@ CREATE TABLE documents (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
     metadata TEXT DEFAULT '{}',
+    content_hash TEXT,                  -- sha256 of submitted content (content dedup, not identity)
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_documents_created ON documents(created_at);
+CREATE INDEX idx_documents_content_hash ON documents(content_hash);
 -- UNIQUE on source_id makes re-ingestion idempotent (upsert / INSERT OR REPLACE)
 CREATE UNIQUE INDEX idx_documents_source_id ON documents (json_extract(metadata, '$.source_id'));
 
@@ -544,9 +551,15 @@ never leak into the contract.
 - `await IngestionEngine.create(settings=None)` wires everything per `Settings.MODE`
   (`embedded` → in-process InMemory queue; `distributed` → pgQueuer + a separate `run_worker()`).
 - `ingest_paths(paths)`, `ingest_content(documents)`, `ingest_streams(streams)` shape
-  `PipelineItem`s (a caller `source_id` becomes the `document_id`, else one is assigned), delegate
-  to `orchestrator.ingest_documents`, and **return the document IDs (`list[str]`)**. In embedded
-  mode the call also drains the pipeline to completion before returning.
+  `PipelineItem`s and **return the document IDs (`list[str]`)**. The `document_id` (== `source_id`)
+  is **stable** and assigned per `Settings.ID_POLICY`: `caller` requires the caller to supply every
+  id (per-doc on `ingest_content`; a parallel `source_ids` list on `ingest_paths`/`ingest_streams`);
+  `uuid` assigns one and forbids caller ids. A mismatch fails ingestion (no silent scheme-mixing);
+  reuse an id to upsert in place. They delegate to `orchestrator.ingest_documents`; in embedded mode
+  the call also drains the pipeline to completion before returning.
+- `find_by_content_hash(content_hash)` → the document IDs holding that exact content (content
+  dedup, independent of identity). Every document stores a `content_hash` (sha256 of its submitted
+  bytes/text); `content_hash(data)` / `content_hash_of_file(path)` compute the key.
 - `status(document_id)` → `DocumentStatus` (`pending | in_progress | complete | failed` + chunk /
   embedding counts), or `None` if unknown — the single source of truth for state.
 - `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless
@@ -567,7 +580,8 @@ never leak into the contract.
 **grouped into nested sub-models** — `settings.embedding`, `settings.chunking`, `settings.index`,
 `settings.database`, `settings.worker`, `settings.observability` — read from env via the
 `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`). Cross-cutting
-`MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR` stay top-level/flat; `EMBEDDING_DIMENSION` must match
+`MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR`, `ID_POLICY` (`uuid` | `caller` — how document ids are
+assigned) stay top-level/flat; `EMBEDDING_DIMENSION` must match
 the model (and sets the pgvector column width). A `model_validator` pins the backend to the mode:
 `distributed` requires a Postgres `DATABASE__DOCUMENT_URL` + `DATABASE__QUEUE_URL`; `embedded`
 requires SQLite. The composition **factories** live in **`tarnrag/ingestion/factories.py`**

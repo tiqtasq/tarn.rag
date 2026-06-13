@@ -131,6 +131,9 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("id", Text, primary_key=True),
             Column("content", Text, nullable=False),
             Column("metadata", json_type, nullable=False, default=dict),
+            # sha256 of the document's submitted content — the content-dedup key (independent
+            # of the source_id identity, which is stable across content replacement).
+            Column("content_hash", Text, index=True),
             Column("created_at", TIMESTAMP, server_default=func.now()),
         )
         self.chunks = Table(
@@ -382,6 +385,17 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             ).scalar_one()
         return DocumentFacts(True, chunk_count, embedding_count)
 
+    async def documents_by_content_hash(self, content_hash: str) -> list[str]:
+        """Public document_ids (== source_id) whose stored content_hash matches — content dedup."""
+        src = self.documents.c.metadata["source_id"].as_string()
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(src).where(self.documents.c.content_hash == content_hash)
+                )
+            ).all()
+        return [r[0] for r in rows]
+
     async def document_status(self, document_id: str) -> dict[str, Any] | None:
         """Convenience: status over this repo alone (job_status + data both here). The
         retrieval path composes a reader over the repo (jobs) + the index store (facts)."""
@@ -405,7 +419,11 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                 await conn.execute(
                     update(self.documents)
                     .where(self.documents.c.id == existing)
-                    .values(content=values["content"], metadata=values["metadata"])
+                    .values(
+                        content=values["content"],
+                        metadata=values["metadata"],
+                        content_hash=values.get("content_hash"),
+                    )
                 )
                 return existing
         await conn.execute(insert(self.documents).values(**values))
@@ -416,6 +434,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             "id": doc.id or str(uuid.uuid4()),
             "content": doc.content,
             "metadata": doc.metadata,
+            "content_hash": (doc.metadata or {}).get("content_hash"),
         }
 
     async def _insert_chunks(

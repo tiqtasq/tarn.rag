@@ -29,6 +29,12 @@ class DocumentFactsSource(ABC):
         """Persisted-data facts for a document (the repo in the classic path, the §8 index
         in retrieval mode)."""
 
+    @abstractmethod
+    async def documents_by_content_hash(self, content_hash: str) -> list[str]:
+        """Public document_ids whose stored ``content_hash`` matches — for content dedup
+        (independent of the id policy). Empty if none; possibly several when identical content
+        was ingested under different ids."""
+
 
 class JobStatusSource(ABC):
     @abstractmethod
