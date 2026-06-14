@@ -422,6 +422,12 @@ CREATE VIRTUAL TABLE fts_chunks USING fts5(
 
 ## 9. Cross-port identical-functionality contract (R1)
 
+**Scope — portability is one-directional and SQLite-only.** The contract is that a SQLite
+database *produced by the Python ingestion path* is consumable (read-only) by the C++ port. It
+is **not** required that (a) Postgres databases be consumable in C++, nor (b) C++ ever write to
+the SQLite database. Postgres is a separate, Python-only retrieval backend with its own ANN; the
+bit-identity guarantees below bind only the **Python-SQLite ↔ C++-SQLite** pair.
+
 Define "identical" precisely so it is testable.
 
 | Stage | Identity guarantee | Mechanism |
