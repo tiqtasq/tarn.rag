@@ -182,6 +182,15 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("created_at", TIMESTAMP, server_default=func.now()),
             Column("updated_at", TIMESTAMP, server_default=func.now()),
         )
+        # §8 build/compatibility metadata (key/value): schema/ingestion versions and the
+        # embedding-pipeline fingerprint the retrieval store validates at open(). Dialect-agnostic —
+        # the first §8 table to live in the base as the repository takes over the retrieval index.
+        self.index_meta_table = Table(
+            "index_meta",
+            self.metadata,
+            Column("key", Text, primary_key=True),
+            Column("value", Text, nullable=False),
+        )
 
     # ---------------- lifecycle ----------------
 
@@ -201,6 +210,34 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             return True
         except Exception:
             return False
+
+    # ---------------- §8 index metadata ----------------
+
+    async def write_index_meta(self, meta: dict[str, str]) -> None:
+        """
+        Upsert §8 build/compatibility metadata (key/value) — e.g. the embedding-pipeline
+        fingerprint the retrieval store validates at ``open()``. Portable upsert (update, else
+        insert); takes a plain dict so the producer owns how the fingerprint is assembled.
+        """
+        async with self.engine.begin() as conn:
+            for key, value in meta.items():
+                res = await conn.execute(
+                    update(self.index_meta_table)
+                    .where(self.index_meta_table.c.key == key)
+                    .values(value=value)
+                )
+                if res.rowcount == 0:
+                    await conn.execute(
+                        insert(self.index_meta_table).values(key=key, value=value)
+                    )
+
+    async def index_meta(self) -> dict[str, str]:
+        """
+        All §8 build/compatibility metadata as a dict (empty before anything is written).
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(self.index_meta_table))).all()
+        return {key: value for key, value in rows}
 
     # ---------------- writes (shared Core) ----------------
 

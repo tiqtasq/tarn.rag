@@ -169,3 +169,15 @@ async def test_store_document_is_atomic(repo, monkeypatch):
 
     # The upsert to "B" shared the same transaction, so it was rolled back: still "A".
     assert (await repo.get_document(doc_id)).content == "A"
+
+
+async def test_index_meta_round_trip(repo):
+    assert await repo.index_meta() == {}  # empty before anything is written
+    await repo.write_index_meta({"schema_version": "1", "embedding_config_fingerprint": "fp-1"})
+    assert await repo.index_meta() == {
+        "schema_version": "1", "embedding_config_fingerprint": "fp-1",
+    }
+    # Upsert: re-writing a key updates it in place (no duplicate row).
+    await repo.write_index_meta({"schema_version": "2"})
+    meta = await repo.index_meta()
+    assert meta["schema_version"] == "2" and meta["embedding_config_fingerprint"] == "fp-1"
