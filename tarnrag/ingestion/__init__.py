@@ -6,6 +6,6 @@ the engine's calls return. Everything else (orchestrator, queue, worker, stages)
 """
 
 from tarnrag.ingestion.engine import IngestionEngine, run_worker
-from tarnrag.ingestion.types import DocumentStatus
+from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 
-__all__ = ["IngestionEngine", "run_worker", "DocumentStatus"]
+__all__ = ["IngestionEngine", "run_worker", "DocumentStatus", "DocumentSummary"]

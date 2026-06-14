@@ -358,6 +358,14 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             ).mappings().all()
         return [dict(r) for r in rows]
 
+    async def delete_document_jobs(self, document_id: str) -> bool:
+        """Remove a document's job_status rows (used when deleting a document)."""
+        async with self.engine.begin() as conn:
+            res = await conn.execute(
+                self.job_status.delete().where(self.job_status.c.document_id == document_id)
+            )
+        return res.rowcount > 0
+
     async def document_facts(self, document_id: str) -> DocumentFacts:
         """Persisted-data facts (presence + chunk/embedding counts) for this document."""
         src = self.documents.c.metadata["source_id"].as_string()
@@ -395,6 +403,66 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                 )
             ).all()
         return [r[0] for r in rows]
+
+    async def delete_document(self, document_id: str) -> bool:
+        """Delete the document (by source_id) and its chunks; embeddings cascade off the chunks.
+        Returns True if the document existed."""
+        src = self.documents.c.metadata["source_id"].as_string()
+        async with self.engine.begin() as conn:
+            row = (
+                await conn.execute(select(self.documents.c.id).where(src == document_id))
+            ).first()
+            if row is None:
+                return False
+            doc_pk = row[0]
+            # Drop chunks explicitly (ON DELETE CASCADE removes their embeddings), then the doc.
+            await conn.execute(
+                self.chunks.delete().where(self.chunks.c.parent_doc_id == doc_pk)
+            )
+            await conn.execute(self.documents.delete().where(self.documents.c.id == doc_pk))
+        return True
+
+    async def list_documents(self) -> list[dict[str, Any]]:
+        """Inventory of all documents with chunk/embedding counts (three grouped queries — no
+        per-document N+1)."""
+        src = self.documents.c.metadata["source_id"].as_string()
+        async with self.engine.connect() as conn:
+            docs = (
+                await conn.execute(
+                    select(self.documents.c.id, src, self.documents.c.content_hash)
+                )
+            ).all()
+            chunk_counts = dict(
+                (
+                    await conn.execute(
+                        select(self.chunks.c.parent_doc_id, func.count())
+                        .group_by(self.chunks.c.parent_doc_id)
+                    )
+                ).all()
+            )
+            embedding_counts = dict(
+                (
+                    await conn.execute(
+                        select(self.chunks.c.parent_doc_id, func.count(self.embeddings.c.id))
+                        .select_from(
+                            self.chunks.join(
+                                self.embeddings,
+                                self.embeddings.c.chunk_id == self.chunks.c.id,
+                            )
+                        )
+                        .group_by(self.chunks.c.parent_doc_id)
+                    )
+                ).all()
+            )
+        return [
+            {
+                "document_id": document_id,
+                "content_hash": content_hash,
+                "chunk_count": chunk_counts.get(doc_pk, 0),
+                "embedding_count": embedding_counts.get(doc_pk, 0),
+            }
+            for doc_pk, document_id, content_hash in docs
+        ]
 
     async def document_status(self, document_id: str) -> dict[str, Any] | None:
         """Convenience: status over this repo alone (job_status + data both here). The

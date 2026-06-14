@@ -278,9 +278,11 @@ hooks. → `repository.py`, `postgres_repository.py`, `sqlite_repository.py`.
 `embeddings`, `job_status`; `metadata` is JSON with a JSONB variant on Postgres) and the
 CRUD: `store_document` (upsert on `source_id`, then delete the doc's chunks → idempotent
 re-ingest), `store_document_with_chunks`, `store_chunks`, `store_embeddings`,
-`update_chunk_metadata`, reads (`get_document` / `get_chunk` / `get_chunks_by_document` /
-`query_chunks`), abstract `vector_search`, and the document-status projection
-(`record_job`, `document_jobs`, `document_status`).
+`update_chunk_metadata`, `delete_document` (drops the doc + chunks → embeddings cascade),
+reads (`get_document` / `get_chunk` / `get_chunks_by_document` / `query_chunks`),
+`list_documents` (inventory + counts), `documents_by_content_hash`, abstract `vector_search`,
+and the document-status projection
+(`record_job`, `document_jobs`, `delete_document_jobs`, `document_status`).
 
 **Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic);
 documents are keyed by `metadata['source_id']` (UNIQUE, **stable**), so re-ingest upserts the doc
@@ -562,6 +564,10 @@ never leak into the contract.
   bytes/text); `content_hash(data)` / `content_hash_of_file(path)` compute the key.
 - `status(document_id)` → `DocumentStatus` (`pending | in_progress | complete | failed` + chunk /
   embedding counts), or `None` if unknown — the single source of truth for state.
+- `list_documents()` → `list[DocumentSummary]` (id, `content_hash`, chunk/embedding counts) — the
+  inventory of everything ingested. `delete_document(document_id)` → removes the document and all its derived
+  data (chunks, embeddings, retrieval-index rows) plus its job-status records; returns whether it
+  existed (idempotent).
 - `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless
   `APP__DEBUG`). Lifecycle: `aclose()` / `async with`.
 

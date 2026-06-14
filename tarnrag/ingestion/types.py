@@ -13,3 +13,13 @@ class DocumentStatus:
     status: str  # pending | in_progress | complete | failed
     chunk_count: int
     embedding_count: int
+
+
+@dataclass(frozen=True)
+class DocumentSummary:
+    """One row of the document inventory returned by ``IngestionEngine.list_documents``."""
+
+    document_id: str
+    content_hash: str | None
+    chunk_count: int
+    embedding_count: int

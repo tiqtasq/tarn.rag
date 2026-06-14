@@ -174,11 +174,11 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
             **embedder.embed_meta(),
             **(extra or {}),
         }
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO index_meta(key, value) VALUES (?, ?)",
-            [(k, str(v)) for k, v in meta.items()],
-        )
-        self.conn.commit()
+        with self.conn:  # commit on clean exit, rollback on any exception
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO index_meta(key, value) VALUES (?, ?)",
+                [(k, str(v)) for k, v in meta.items()],
+            )
 
     def index_meta(self) -> dict[str, str]:
         return dict(self.conn.execute("SELECT key, value FROM index_meta").fetchall())
@@ -193,27 +193,27 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         old = [r[0] for r in self.conn.execute(
             "SELECT chunk_id FROM chunks WHERE document_id=?", (document_id,)
         )]
-        if old:
-            marks = ",".join("?" * len(old))
-            self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
-            self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
-        self.conn.execute(
-            "INSERT OR REPLACE INTO documents"
-            "(document_id, title, source_kind, standard_id, doc_version, license_class, content_hash)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                document_id,
-                md.get("title"),
-                md.get("source_kind") or "document",
-                md.get("standard_id"),
-                md.get("doc_version"),
-                md.get("license_class") or self.default_license_class,
-                md.get("content_hash"),
-            ),
-        )
-        self.conn.commit()
+        with self.conn:  # commit on clean exit, rollback on any exception
+            if old:
+                marks = ",".join("?" * len(old))
+                self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
+            self.conn.execute(
+                "INSERT OR REPLACE INTO documents"
+                "(document_id, title, source_kind, standard_id, doc_version, license_class, content_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    document_id,
+                    md.get("title"),
+                    md.get("source_kind") or "document",
+                    md.get("standard_id"),
+                    md.get("doc_version"),
+                    md.get("license_class") or self.default_license_class,
+                    md.get("content_hash"),
+                ),
+            )
         return document_id
 
     async def store_chunks(self, chunks: list[Chunk]) -> list[str]:
@@ -238,16 +238,16 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
                 hashlib.sha256(ch.content.encode("utf-8")).hexdigest(),
             ))
             frows.append((cid, ch.content))
-        self.conn.executemany(
-            "INSERT INTO chunks(chunk_id, document_id, ordinal, text, locator, "
-            "license_class, ai_grounding_allowed, available, content_hash)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            crows,
-        )
-        self.conn.executemany(
-            "INSERT INTO fts_chunks(chunk_id, text) VALUES (?, ?)", frows
-        )
-        self.conn.commit()
+        with self.conn:  # chunk rows + their fts rows commit (or roll back) together
+            self.conn.executemany(
+                "INSERT INTO chunks(chunk_id, document_id, ordinal, text, locator, "
+                "license_class, ai_grounding_allowed, available, content_hash)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                crows,
+            )
+            self.conn.executemany(
+                "INSERT INTO fts_chunks(chunk_id, text) VALUES (?, ?)", frows
+            )
         return ids
 
     async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
@@ -256,10 +256,10 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         rows = [
             (e.chunk_id, sqlite_vec.serialize_float32(e.vector)) for e in embeddings
         ]
-        self.conn.executemany(
-            "INSERT OR REPLACE INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)", rows
-        )
-        self.conn.commit()
+        with self.conn:  # commit on clean exit, rollback on any exception
+            self.conn.executemany(
+                "INSERT OR REPLACE INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)", rows
+            )
         return [e.chunk_id for e in embeddings]
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
@@ -295,6 +295,38 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
             "SELECT document_id FROM documents WHERE content_hash=?", (content_hash,)
         ).fetchall()
         return [r[0] for r in rows]
+
+    async def delete_document(self, document_id: str) -> bool:
+        """Remove the document and its chunks + vec/fts/method rows (virtual tables don't
+        cascade). Atomic: the deletes run inside ``with self.conn`` — one transaction that
+        commits on success and **rolls back if any execute fails** (no partial delete left
+        pending on the shared connection). Returns True if the document existed."""
+        old = [r[0] for r in self.conn.execute(
+            "SELECT chunk_id FROM chunks WHERE document_id=?", (document_id,)
+        )]
+        with self.conn:  # commit on clean exit, rollback on any exception
+            if old:
+                marks = ",".join("?" * len(old))
+                self.conn.execute(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute(f"DELETE FROM method_chunks WHERE chunk_id IN ({marks})", old)
+                self.conn.execute("DELETE FROM chunks WHERE document_id=?", (document_id,))
+            cur = self.conn.execute("DELETE FROM documents WHERE document_id=?", (document_id,))
+        return cur.rowcount > 0
+
+    async def list_documents(self) -> list[dict[str, Any]]:
+        """Inventory of indexed documents with chunk/embedding counts."""
+        rows = self.conn.execute(
+            "SELECT d.document_id, d.content_hash, "
+            "(SELECT count(*) FROM chunks c WHERE c.document_id = d.document_id) AS chunk_count, "
+            "(SELECT count(*) FROM vec_chunks v WHERE v.chunk_id IN "
+            "(SELECT chunk_id FROM chunks WHERE document_id = d.document_id)) AS embedding_count "
+            "FROM documents d"
+        ).fetchall()
+        return [
+            {"document_id": r[0], "content_hash": r[1], "chunk_count": r[2], "embedding_count": r[3]}
+            for r in rows
+        ]
 
     # ---------------- read side (retrieval) ----------------
 

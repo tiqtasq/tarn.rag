@@ -256,6 +256,78 @@ async def test_content_hash_of_file_matches_what_is_stored(repo, tmp_path):
     assert await engine.find_by_content_hash(engine.content_hash_of_file(str(doc))) == ["f1"]
 
 
+async def test_delete_removes_document_data_and_status(repo):
+    engine, queue = _wire(repo, policy="caller")
+    text = "Hello world. " * 10
+    await engine.ingest_content([{"content": text, "source_id": "d1"}])
+    await queue.run()
+    assert (await engine.status("d1")).status == "complete"
+
+    assert await engine.delete_document("d1") is True
+    assert await engine.status("d1") is None  # data + job_status both gone
+    assert await engine.find_by_content_hash(engine.content_hash(text.encode("utf-8"))) == []
+
+
+async def test_delete_unknown_document_returns_false(repo):
+    engine, _ = _wire(repo)
+    assert await engine.delete_document("nope") is False
+
+
+async def test_delete_clears_pending_jobs(repo):
+    """A queued-but-undrained document (job_status only, no data) is still deletable → None."""
+    engine, _ = _wire(repo, policy="caller")
+    await engine.ingest_content([{"content": "x " * 20, "source_id": "p1"}])  # not drained
+    assert (await engine.status("p1")).status == "pending"
+    assert await engine.delete_document("p1") is True
+    assert await engine.status("p1") is None
+
+
+async def test_list_documents_inventory(repo):
+    engine, queue = _wire(repo, policy="caller")
+    await engine.ingest_content([
+        {"content": "alpha " * 20, "source_id": "a"},
+        {"content": "beta " * 20, "source_id": "b"},
+    ])
+    await queue.run()
+
+    docs = {d.document_id: d for d in await engine.list_documents()}
+    assert set(docs) == {"a", "b"}
+    assert docs["a"].chunk_count >= 1
+    assert docs["a"].embedding_count == docs["a"].chunk_count
+    assert docs["a"].content_hash == engine.content_hash(("alpha " * 20).encode("utf-8"))
+
+    # delete drops it from the inventory.
+    assert await engine.delete_document("a") is True
+    assert {d.document_id for d in await engine.list_documents()} == {"b"}
+
+
+async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
+    """delete() spans two stores and can't be cross-atomic. If the data delete fails after the
+    job-status delete succeeds, the document is left fully present (consistent), and a retry
+    completes the delete — no 'ghost' status pointing at deleted data."""
+    engine, queue = _wire(repo, policy="caller")
+    await engine.ingest_content([{"content": "hello world " * 10, "source_id": "d1"}])
+    await queue.run()
+    assert (await engine.status("d1")).status == "complete"
+
+    # Make the data-store delete fail; the job-status delete (which runs first) has succeeded.
+    async def boom(_doc_id):
+        raise RuntimeError("data store down")
+
+    monkeypatch.setattr(repo, "delete_document", boom)
+    with pytest.raises(RuntimeError, match="data store down"):
+        await engine.delete_document("d1")
+
+    # Consistent residue: the document is still fully present, not a ghost.
+    assert (await engine.status("d1")).status == "complete"
+    assert "d1" in {d.document_id for d in await engine.list_documents()}
+
+    # Retry (data store healthy again) completes the delete.
+    monkeypatch.undo()
+    assert await engine.delete_document("d1") is True
+    assert await engine.status("d1") is None
+
+
 async def test_reingesting_same_source_id_replaces(repo, tmp_path):
     """Re-ingesting under the same source_id upserts (dedup) — chunks are replaced, not appended."""
     engine, _ = _wire(repo, auto_drain=True)

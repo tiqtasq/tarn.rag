@@ -35,11 +35,26 @@ class DocumentFactsSource(ABC):
         (independent of the id policy). Empty if none; possibly several when identical content
         was ingested under different ids."""
 
+    @abstractmethod
+    async def delete_document(self, document_id: str) -> bool:
+        """Remove a document and its derived data (chunks/embeddings/index rows). Returns True
+        if a document existed, False if it was unknown."""
+
+    @abstractmethod
+    async def list_documents(self) -> list[dict[str, Any]]:
+        """Inventory of stored documents — one dict per document with keys ``document_id``,
+        ``content_hash``, ``chunk_count``, ``embedding_count``. Order is unspecified."""
+
 
 class JobStatusSource(ABC):
     @abstractmethod
     async def document_jobs(self, document_id: str) -> list[dict[str, Any]]:
         """The per-job rows for a document (the job_status projection)."""
+
+    @abstractmethod
+    async def delete_document_jobs(self, document_id: str) -> bool:
+        """Remove a document's job_status rows (when deleting a document). Returns True if any
+        rows were removed."""
 
 
 class DocumentStatusReader:

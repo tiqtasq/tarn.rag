@@ -114,6 +114,47 @@ async def test_document_status_and_jobs(repo):
     assert any(j["status"] == "failed" and j["error"] == "boom" for j in jobs)
 
 
+async def test_delete_document_and_jobs(repo):
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("a", 0, 1)],
+    )
+    await repo.store_embeddings(
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+    )
+    await repo.record_job("s1", "j1", "LoadAndParse", "completed")
+    assert (await repo.document_status("s1"))["status"] == "complete"
+
+    # delete_document drops the data (chunks/embeddings cascade); job_status survives until cleared.
+    assert await repo.delete_document("s1") is True
+    facts = await repo.document_facts("s1")
+    assert facts.present is False and facts.chunk_count == 0 and facts.embedding_count == 0
+    assert (await repo.document_status("s1"))["status"] == "pending"  # stale job row remains
+
+    assert await repo.delete_document_jobs("s1") is True
+    assert await repo.document_status("s1") is None  # fully gone
+
+    # Idempotent: nothing left to remove.
+    assert await repo.delete_document("s1") is False
+    assert await repo.delete_document_jobs("s1") is False
+
+
+async def test_list_documents(repo):
+    await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1", "content_hash": "h1"}),
+        [_chunk("a", 0, 2), _chunk("b", 1, 2)],
+    )
+    await repo.store_document(  # second doc, no chunks
+        Document(content="e", metadata={"source_id": "s2", "content_hash": "h2"})
+    )
+
+    docs = {d["document_id"]: d for d in await repo.list_documents()}
+    assert set(docs) == {"s1", "s2"}
+    assert docs["s1"]["content_hash"] == "h1"
+    assert docs["s1"]["chunk_count"] == 2 and docs["s1"]["embedding_count"] == 0
+    assert docs["s2"]["chunk_count"] == 0 and docs["s2"]["content_hash"] == "h2"
+
+
 async def test_store_document_is_atomic(repo, monkeypatch):
     # Existing document with content "A".
     doc_id = await repo.store_document(Document(content="A", metadata={"source_id": "s1"}))
