@@ -84,8 +84,8 @@ async def test_metrics_emitted_on_successful_ingest(repo):
 
 
 class BoomStage(PipelineStage):
-    def __init__(self, **config):
-        super().__init__(name="Boom", **config)
+    def __init__(self):
+        super().__init__(name="Boom")
 
     def process(self, item):
         raise RuntimeError("boom")

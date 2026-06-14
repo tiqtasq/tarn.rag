@@ -15,8 +15,8 @@ from tarnrag.ingestion.worker import IngestionWorker
 class BoomStage(PipelineStage):
     """A stage that always fails during compute."""
 
-    def __init__(self, **config):
-        super().__init__(name="Boom", **config)
+    def __init__(self):
+        super().__init__(name="Boom")
 
     def process(self, item):
         raise RuntimeError("boom")
@@ -80,8 +80,8 @@ async def test_worker_reports_to_context_without_orchestrator():
             events.append(("complete",))
 
     class EchoStage(PipelineStage):
-        def __init__(self, **config):
-            super().__init__(name="Echo", **config)
+        def __init__(self):
+            super().__init__(name="Echo")
 
         def process(self, item):
             yield item

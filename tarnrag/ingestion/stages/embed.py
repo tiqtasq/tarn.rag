@@ -1,7 +1,8 @@
 """EmbedStage — vectorize chunks into Embeddings (terminal stage).
 
 Uses the shared ONNX ``OnnxEmbedder`` (passage side), so ingestion embeds with exactly the
-pipeline retrieval will replay for queries (§5.3). The embedder is lazy-loaded via
+pipeline retrieval will replay for queries (§5.3). The embedder is built from the same
+``EmbeddingSettings`` slice via ``OnnxEmbedder.create`` and lazy-loaded on first use through
 ``_get_embedder``; tests inject a fake by overriding it (anything with
 ``embed_passages(list[str]) -> list[list[float]]``).
 """
@@ -9,8 +10,8 @@ pipeline retrieval will replay for queries (§5.3). The embedder is lazy-loaded 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
 
+from tarnrag.core.config import EmbeddingSettings
 from tarnrag.contracts import Embedding, PipelineItem
 from tarnrag.ingestion.pipeline import PipelineStage
 
@@ -24,30 +25,17 @@ class EmbedStage(PipelineStage):
 
     def __init__(
         self,
+        embedding: EmbeddingSettings | None = None,
+        embedding_dimension: int = 384,
         *,
-        model_dir: str = "",
-        model_id: str = "sentence-transformers/all-MiniLM-L6-v2",
-        revision: str = "",
-        embedding_dim: int = 384,
-        max_length: int = 512,
-        query_prefix: str = "",
-        passage_prefix: str = "",
         model_batch_size: int = 32,
-        **config: Any,
     ):
         # Set before super().__init__(), which runs validate().
-        self.model_dir = model_dir
-        self.model_id = model_id
-        self.revision = revision
-        self.embedding_dim = embedding_dim
-        self.max_length = max_length
-        self.query_prefix = query_prefix
-        self.passage_prefix = passage_prefix
+        self.embedding = embedding or EmbeddingSettings()
+        self.embedding_dimension = embedding_dimension
         self.model_batch_size = model_batch_size
-        self._embedder = None  # lazy; not serializable config
-        super().__init__(
-            name="Embed", model_id=model_id, model_batch_size=model_batch_size, **config
-        )
+        self._embedder = None  # lazy; built on first use (or injected by tests)
+        super().__init__(name="Embed")
 
     def process(self, item: PipelineItem) -> Iterator[Embedding]:
         yield from self.process_batch([item])
@@ -65,7 +53,7 @@ class EmbedStage(PipelineStage):
                 yield Embedding(
                     chunk_id=it.metadata["chunk_id"],
                     vector=list(vec),
-                    model=self.model_id,
+                    model=self.embedding.model,
                     dimension=len(vec),
                     metadata={"source_id": it.metadata.get("source_id")},
                 )
@@ -74,15 +62,7 @@ class EmbedStage(PipelineStage):
         if self._embedder is None:
             from tarnrag.embedder import OnnxEmbedder
 
-            self._embedder = OnnxEmbedder(
-                self.model_dir,
-                model_id=self.model_id,
-                revision=self.revision,
-                embedding_dim=self.embedding_dim,
-                max_length=self.max_length,
-                query_prefix=self.query_prefix,
-                passage_prefix=self.passage_prefix,
-            )
+            self._embedder = OnnxEmbedder.create(self.embedding, self.embedding_dimension)
         return self._embedder
 
     def validate(self) -> None:

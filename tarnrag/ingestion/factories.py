@@ -29,13 +29,8 @@ def create_ingestion_pipeline(settings: Settings | None = None) -> Pipeline:
             ChunkStage(chunk_size=settings.chunking.size, overlap=settings.chunking.overlap),
             EnrichMetadataStage(),
             EmbedStage(
-                model_dir=settings.embedding.model_dir,
-                model_id=settings.embedding.model,
-                revision=settings.embedding.revision,
-                embedding_dim=settings.EMBEDDING_DIMENSION,
-                max_length=settings.embedding.max_seq_length,
-                query_prefix=settings.embedding.query_prefix,
-                passage_prefix=settings.embedding.passage_prefix,
+                settings.embedding,
+                settings.EMBEDDING_DIMENSION,
                 model_batch_size=settings.embedding.batch_size,
             ),
         ]

@@ -16,11 +16,11 @@ class ChunkStage(ChunkerStage):
     adjacent chunks.
     """
 
-    def __init__(self, chunk_size: int = 512, overlap: int = 50, **config: Any):
+    def __init__(self, chunk_size: int = 512, overlap: int = 50):
         # Set before super().__init__(), which runs validate().
         self.chunk_size = chunk_size
         self.overlap = overlap
-        super().__init__(name="Chunk", chunk_size=chunk_size, overlap=overlap, **config)
+        super().__init__(name="Chunk")
 
     def chunk(self, text: str, metadata: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
         return [(c, {"chunk_size": len(c)}) for c in self._split_recursive(text)]

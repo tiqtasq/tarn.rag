@@ -21,9 +21,8 @@ class PipelineStage(ABC):
     (MapperStage / ChunkerStage / FilterStage) unless a stage needs full control.
     """
 
-    def __init__(self, name: str, **config: Any):
+    def __init__(self, name: str):
         self.name = name
-        self.config = config  # travels in the job; used to reconstruct the stage
         # validate() runs here: subclasses must set any attrs it reads BEFORE
         # calling super().__init__().
         self.validate()
