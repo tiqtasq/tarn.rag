@@ -279,8 +279,10 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     # ---------------- writes (shared Core) ----------------
 
     async def store_document(self, doc: Document) -> str:
-        # Atomic: upsert + chunk-delete share one engine.begin() transaction — if the
-        # delete fails, the upsert is rolled back too (commits only on clean exit).
+        """
+        Atomic: upsert + chunk-delete share one engine.begin() transaction — if the delete
+        fails, the upsert is rolled back too (commits only on clean exit).
+        """
         async with self.engine.begin() as conn:
             doc_id = await self._upsert_document(conn, self._doc_values(doc))
             # Re-storing REPLACES derived data (idempotency): clear the search indexes (vec0/FTS
@@ -337,16 +339,22 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     async def _index_chunk_text(
         self, conn: AsyncConnection, ids: list[str], chunks: list[Chunk]
     ) -> None:
-        """Index chunk text for sparse search. No-op by default; SQLite writes ``fts_chunks``."""
+        """
+        Index chunk text for sparse search. No-op by default; SQLite writes ``fts_chunks``.
+        """
         return None
 
     async def _clear_chunk_index(self, conn: AsyncConnection, document_id: str) -> None:
-        """Drop a document's chunks from search indexes the FK CASCADE can't reach (vec0/FTS
-        virtual tables). No-op by default (the embeddings table cascades)."""
+        """
+        Drop a document's chunks from search indexes the FK CASCADE can't reach (vec0/FTS
+        virtual tables). No-op by default (the embeddings table cascades).
+        """
         return None
 
     async def _count_doc_embeddings(self, conn: AsyncConnection, document_id: str) -> int:
-        """Vector count for a document — default: the embeddings table; SQLite counts ``vec_chunks``."""
+        """
+        Vector count for a document — default: the embeddings table; SQLite counts ``vec_chunks``.
+        """
         return (
             await conn.execute(
                 select(func.count())
@@ -357,7 +365,9 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         ).scalar_one()
 
     async def _embedding_counts_by_document(self, conn: AsyncConnection) -> dict[str, int]:
-        """Per-document vector counts — default: the embeddings table; SQLite counts ``vec_chunks``."""
+        """
+        Per-document vector counts — default: the embeddings table; SQLite counts ``vec_chunks``.
+        """
         return dict(
             (
                 await conn.execute(
@@ -502,8 +512,10 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return [r[0] for r in rows]
 
     async def delete_document(self, document_id: str) -> bool:
-        """Delete the document; its chunks (and their embeddings) cascade off the FKs, and the
-        non-cascading search indexes (vec0/FTS) are cleared first. Returns True if it existed."""
+        """
+        Delete the document; its chunks (and their embeddings) cascade off the FKs, and the
+        non-cascading search indexes (vec0/FTS) are cleared first. Returns True if it existed.
+        """
         async with self.engine.begin() as conn:
             await self._clear_chunk_index(conn, document_id)
             res = await conn.execute(

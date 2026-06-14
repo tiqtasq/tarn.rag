@@ -84,8 +84,10 @@ class SqliteRepository(DocumentRepository):
         await super().connect()
 
     async def _after_create_schema(self, conn: AsyncConnection) -> None:
-        # §8 sqlite-vec dense index + FTS5 sparse index (virtual tables; the sqlite-vec extension
-        # is loaded per connection by the connect hook above).
+        """
+        Build the §8 sqlite-vec dense index + FTS5 sparse index (virtual tables; the sqlite-vec
+        extension is loaded per connection by the connect hook above).
+        """
         await conn.exec_driver_sql(
             "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
             f"chunk_id TEXT PRIMARY KEY, embedding float[{self.embedding_dimension}])"
@@ -127,8 +129,10 @@ class SqliteRepository(DocumentRepository):
         return results
 
     async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
-        # §8: dense vectors live in the sqlite-vec ``vec_chunks`` virtual table, not the
-        # embeddings table (which stays empty on SQLite).
+        """
+        §8: dense vectors live in the sqlite-vec ``vec_chunks`` virtual table, not the embeddings
+        table (which stays empty on SQLite).
+        """
         if not embeddings:
             return []
         rows = [(e.chunk_id, sqlite_vec.serialize_float32(e.vector)) for e in embeddings]
@@ -139,7 +143,9 @@ class SqliteRepository(DocumentRepository):
         return [e.chunk_id for e in embeddings]
 
     async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
-        """Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first."""
+        """
+        Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first.
+        """
         q = sqlite_vec.serialize_float32(query_vec)
         async with self.engine.connect() as conn:
             rows = (
@@ -155,7 +161,9 @@ class SqliteRepository(DocumentRepository):
         ]
 
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
-        """Canonical text + provenance for the given chunk ids, preserving input order."""
+        """
+        Canonical text + provenance for the given chunk ids, preserving input order.
+        """
         if not chunk_ids:
             return []
         marks = ",".join("?" * len(chunk_ids))
