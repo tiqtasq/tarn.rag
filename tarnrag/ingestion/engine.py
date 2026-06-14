@@ -255,9 +255,18 @@ class IngestionEngine:
     async def delete(self, document_id: str) -> bool:
         """Delete a document and everything derived from it — chunks, embeddings, retrieval-index
         rows, and its job-status records. Returns True if the document was known (had data or
-        in-flight jobs), False if there was nothing to delete. Idempotent."""
-        removed_data = await self._facts_source.delete_document(document_id)
+        in-flight jobs), False if there was nothing to delete.
+
+        This spans **two independent stores** (the document data store and the job_status
+        projection — separate databases in any real deployment), so it can't be one transaction.
+        Each call is individually atomic; they run **job-status-first** on purpose, so a failure
+        partway leaves a *consistent* residue — the document stays fully present (its status and
+        inventory unchanged), losing only debug job rows, never a 'ghost' status pointing at
+        deleted data. It is idempotent: a retry completes the delete and heals any residue."""
+        # job_status first (operational exhaust). If the data delete then fails, the document is
+        # left intact and consistent rather than gone-with-a-stale-status; a retry finishes it.
         removed_jobs = await self.repository.delete_document_jobs(document_id)
+        removed_data = await self._facts_source.delete_document(document_id)
         return removed_data or removed_jobs
 
     # ----- debug (gated on APP__DEBUG) -----

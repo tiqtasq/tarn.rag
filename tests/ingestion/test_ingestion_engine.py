@@ -301,6 +301,33 @@ async def test_list_documents_inventory(repo):
     assert {d.document_id for d in await engine.list_documents()} == {"b"}
 
 
+async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
+    """delete() spans two stores and can't be cross-atomic. If the data delete fails after the
+    job-status delete succeeds, the document is left fully present (consistent), and a retry
+    completes the delete — no 'ghost' status pointing at deleted data."""
+    engine, queue = _wire(repo, policy="caller")
+    await engine.ingest_content([{"content": "hello world " * 10, "source_id": "d1"}])
+    await queue.run()
+    assert (await engine.status("d1")).status == "complete"
+
+    # Make the data-store delete fail; the job-status delete (which runs first) has succeeded.
+    async def boom(_doc_id):
+        raise RuntimeError("data store down")
+
+    monkeypatch.setattr(repo, "delete_document", boom)
+    with pytest.raises(RuntimeError, match="data store down"):
+        await engine.delete("d1")
+
+    # Consistent residue: the document is still fully present, not a ghost.
+    assert (await engine.status("d1")).status == "complete"
+    assert "d1" in {d.document_id for d in await engine.list_documents()}
+
+    # Retry (data store healthy again) completes the delete.
+    monkeypatch.undo()
+    assert await engine.delete("d1") is True
+    assert await engine.status("d1") is None
+
+
 async def test_reingesting_same_source_id_replaces(repo, tmp_path):
     """Re-ingesting under the same source_id upserts (dedup) — chunks are replaced, not appended."""
     engine, _ = _wire(repo, auto_drain=True)
