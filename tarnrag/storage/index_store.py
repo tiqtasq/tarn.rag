@@ -18,7 +18,6 @@ import hashlib
 import sqlite3
 import time
 import uuid
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -27,39 +26,12 @@ import sqlite_vec
 from tarnrag.core.config import IndexSettings
 from tarnrag.storage.chunk_store import ChunkStore
 from tarnrag.storage.models import Chunk, Document, Embedding
+from tarnrag.storage.retrieval import Candidate, ChunkRecord
 from tarnrag.storage.status import DocumentFacts, DocumentFactsSource
 
 SCHEMA_VERSION = "1"
 INGESTION_VERSION = "0.1.0"
 FTS_TOKENIZER = "unicode61"
-
-
-@dataclass(frozen=True)
-class Candidate:
-    """
-    A ranked candidate from a retriever (rank is 1-based; raw_score is engine-specific:
-    distance for dense KNN, bm25 for sparse).
-    """
-
-    chunk_id: str
-    rank: int
-    raw_score: float
-
-
-@dataclass(frozen=True)
-class ChunkRecord:
-    """
-    A hydrated chunk: canonical text + provenance + license, for result assembly.
-    """
-
-    chunk_id: str
-    text: str
-    document_id: str
-    source_kind: str
-    standard_id: str | None
-    locator: str | None
-    license_class: str
-    methods: list[tuple[str, str]] = field(default_factory=list)  # (method_id, method_version)
 
 
 class SqliteIndexStore(ChunkStore, DocumentFactsSource):

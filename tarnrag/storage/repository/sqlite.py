@@ -10,12 +10,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import sqlite_vec
-from sqlalchemy import Text, event, select
+from sqlalchemy import Text, event
+from sqlalchemy.ext.asyncio import AsyncConnection
 
-from tarnrag.storage.models import Chunk
+from tarnrag.storage.models import Chunk, Embedding
 from tarnrag.storage.repository.base import DocumentRepository
+from tarnrag.storage.retrieval import Candidate, ChunkRecord
 
 
 class SqliteRepository(DocumentRepository):
@@ -82,6 +83,18 @@ class SqliteRepository(DocumentRepository):
             Path(db_file).parent.mkdir(parents=True, exist_ok=True)
         await super().connect()
 
+    async def _after_create_schema(self, conn: AsyncConnection) -> None:
+        # §8 sqlite-vec dense index + FTS5 sparse index (virtual tables; the sqlite-vec extension
+        # is loaded per connection by the connect hook above).
+        await conn.exec_driver_sql(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS vec_chunks USING vec0("
+            f"chunk_id TEXT PRIMARY KEY, embedding float[{self.embedding_dimension}])"
+        )
+        await conn.exec_driver_sql(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5("
+            "chunk_id UNINDEXED, text, tokenize='unicode61')"
+        )
+
     def _driver_url(self, url: str) -> str:
         path = url.replace("sqlite:///", "").replace("sqlite://", "")
         return f"sqlite+aiosqlite:///{path}"
@@ -103,22 +116,119 @@ class SqliteRepository(DocumentRepository):
         filters: dict[str, Any] | None = None,
     ) -> list[tuple[Chunk, float]]:
         """
-        Top-k by cosine similarity computed in-memory with numpy over all stored vectors
-        (dev/small-scale; no ANN index).
+        Top-k by sqlite-vec dense KNN over ``vec_chunks``, mapped to the ``(Chunk, similarity)``
+        shape (similarity = -distance, so nearest ranks highest).
         """
-        stmt = select(self.chunks, self.embeddings.c.vector).join(
-            self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.chunk_id
-        )
-        if model:
-            stmt = stmt.where(self.embeddings.c.model == model)
+        results: list[tuple[Chunk, float]] = []
+        for cand in await self.dense_knn(vector, k):
+            chunk = await self.get_chunk(cand.chunk_id)
+            if chunk is not None:
+                results.append((chunk, -cand.raw_score))
+        return results
+
+    async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
+        # §8: dense vectors live in the sqlite-vec ``vec_chunks`` virtual table, not the
+        # embeddings table (which stays empty on SQLite).
+        if not embeddings:
+            return []
+        rows = [(e.chunk_id, sqlite_vec.serialize_float32(e.vector)) for e in embeddings]
+        async with self.engine.begin() as conn:
+            await conn.exec_driver_sql(
+                "INSERT OR REPLACE INTO vec_chunks(chunk_id, embedding) VALUES (?, ?)", rows
+            )
+        return [e.chunk_id for e in embeddings]
+
+    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+        """Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first."""
+        q = sqlite_vec.serialize_float32(query_vec)
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(stmt)).mappings().all()
-        q = np.asarray(vector, dtype=float)
-        qn = np.linalg.norm(q) or 1.0
-        scored: list[tuple[Chunk, float]] = []
-        for r in rows:
-            v = np.asarray(self._decode_vector(r["vector"]), dtype=float)
-            sim = float(q @ v / (qn * (np.linalg.norm(v) or 1.0)))
-            scored.append((self._row_to_chunk(r), sim))
-        scored.sort(key=lambda t: t[1], reverse=True)
-        return scored[:k]
+            rows = (
+                await conn.exec_driver_sql(
+                    "SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? "
+                    "ORDER BY distance LIMIT ?",
+                    (q, k),
+                )
+            ).fetchall()
+        return [
+            Candidate(chunk_id=cid, rank=i + 1, raw_score=dist)
+            for i, (cid, dist) in enumerate(rows)
+        ]
+
+    async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
+        """Canonical text + provenance for the given chunk ids, preserving input order."""
+        if not chunk_ids:
+            return []
+        marks = ",".join("?" * len(chunk_ids))
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.exec_driver_sql(
+                    "SELECT c.chunk_id, c.text, c.document_id, d.source_kind, d.standard_id, "
+                    "c.locator, c.license_class FROM chunks c "
+                    "JOIN documents d ON c.document_id = d.document_id "
+                    f"WHERE c.chunk_id IN ({marks})",
+                    tuple(chunk_ids),
+                )
+            ).fetchall()
+            by_id = {r[0]: r for r in rows}
+            records: list[ChunkRecord] = []
+            for cid in chunk_ids:
+                r = by_id.get(cid)
+                if r is None:
+                    continue
+                methods = (
+                    await conn.exec_driver_sql(
+                        "SELECT method_id, method_version FROM method_chunks WHERE chunk_id = ?",
+                        (cid,),
+                    )
+                ).fetchall()
+                records.append(
+                    ChunkRecord(
+                        chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
+                        standard_id=r[4], locator=r[5], license_class=r[6],
+                        methods=[(m, v) for m, v in methods],
+                    )
+                )
+        return records
+
+    # ----- §8 search-index hooks (vec0 + FTS5 live outside the FK graph) -----
+
+    async def _index_chunk_text(
+        self, conn: AsyncConnection, ids: list[str], chunks: list[Chunk]
+    ) -> None:
+        rows = [(cid, ch.content) for cid, ch in zip(ids, chunks)]
+        if rows:
+            await conn.exec_driver_sql("INSERT INTO fts_chunks(chunk_id, text) VALUES (?, ?)", rows)
+
+    async def _clear_chunk_index(self, conn: AsyncConnection, document_id: str) -> None:
+        old = [
+            r[0]
+            for r in (
+                await conn.exec_driver_sql(
+                    "SELECT chunk_id FROM chunks WHERE document_id = ?", (document_id,)
+                )
+            ).fetchall()
+        ]
+        if not old:
+            return
+        marks = ",".join("?" * len(old))
+        await conn.exec_driver_sql(f"DELETE FROM vec_chunks WHERE chunk_id IN ({marks})", tuple(old))
+        await conn.exec_driver_sql(f"DELETE FROM fts_chunks WHERE chunk_id IN ({marks})", tuple(old))
+
+    async def _count_doc_embeddings(self, conn: AsyncConnection, document_id: str) -> int:
+        row = (
+            await conn.exec_driver_sql(
+                "SELECT count(*) FROM vec_chunks WHERE chunk_id IN "
+                "(SELECT chunk_id FROM chunks WHERE document_id = ?)",
+                (document_id,),
+            )
+        ).fetchone()
+        return row[0]
+
+    async def _embedding_counts_by_document(self, conn: AsyncConnection) -> dict[str, int]:
+        rows = (
+            await conn.exec_driver_sql(
+                "SELECT c.document_id, count(v.chunk_id) FROM chunks c "
+                "JOIN vec_chunks v ON v.chunk_id = c.chunk_id GROUP BY c.document_id"
+            )
+        ).fetchall()
+        return {doc_id: cnt for doc_id, cnt in rows}

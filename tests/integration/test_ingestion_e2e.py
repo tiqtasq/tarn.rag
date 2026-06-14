@@ -93,10 +93,10 @@ async def test_reingest_is_idempotent(repo):
     assert second["chunk_count"] == first["chunk_count"]
     assert second["embedding_count"] == first["embedding_count"]
 
-    # Prove no orphans: the raw embeddings/chunks tables hold exactly the live rows
-    # (so the FK ON DELETE CASCADE actually fired when the old chunks were dropped).
+    # Prove no orphans: chunks (FK CASCADE) and vec_chunks (explicit clear — vec0 doesn't
+    # cascade) hold exactly the live rows after re-ingest.
     async with repo.engine.connect() as conn:
         raw_chunks = (await conn.execute(select(func.count()).select_from(repo.chunks))).scalar_one()
-        raw_embs = (await conn.execute(select(func.count()).select_from(repo.embeddings))).scalar_one()
+        raw_vecs = (await conn.exec_driver_sql("SELECT count(*) FROM vec_chunks")).scalar_one()
     assert raw_chunks == second["chunk_count"]
-    assert raw_embs == second["embedding_count"]
+    assert raw_vecs == second["embedding_count"]
