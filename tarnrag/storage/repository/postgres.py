@@ -17,8 +17,10 @@ from tarnrag.storage.repository.base import DocumentRepository
 
 
 class PostgresRepository(DocumentRepository):
-    """PostgreSQL adapter. Inherits the portable upsert + CRUD from the base; supplies
-    the asyncpg driver URL, the pgvector column, and pgvector cosine search."""
+    """
+    PostgreSQL adapter. Inherits the portable upsert + CRUD from the base; supplies
+    the asyncpg driver URL, the pgvector column, and pgvector cosine search.
+    """
 
     def _driver_url(self, url: str) -> str:
         return url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -52,6 +54,10 @@ class PostgresRepository(DocumentRepository):
         model: str | None = None,
         filters: dict[str, Any] | None = None,
     ) -> list[tuple[Chunk, float]]:
+        """
+        Top-k by pgvector ``<=>`` cosine distance (returned as ``similarity = 1 - distance``),
+        optionally filtered to one embedding ``model``.
+        """
         dist = self.embeddings.c.vector.cosine_distance(vector)
         stmt = (
             select(self.chunks, (1 - dist).label("similarity"))

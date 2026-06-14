@@ -18,12 +18,22 @@ from typing import Any
 
 @dataclass(frozen=True)
 class DocumentFacts:
+    """
+    Persisted-data facts for one document: whether its row exists, and how many
+    chunks/embeddings it has.
+    """
+
     present: bool  # the document row exists in the data store
     chunk_count: int
     embedding_count: int
 
 
 class DocumentFactsSource(ABC):
+    """
+    Port over the document data store (the repo in the classic path, the §8 index in retrieval
+    mode): status facts, content-hash lookup, and the list/delete admin ops.
+    """
+
     @abstractmethod
     async def document_facts(self, document_id: str) -> DocumentFacts:
         """Persisted-data facts for a document (the repo in the classic path, the §8 index
@@ -47,6 +57,11 @@ class DocumentFactsSource(ABC):
 
 
 class JobStatusSource(ABC):
+    """
+    Port over the job_status projection (lives on the repository) — read and delete a document's
+    per-job rows.
+    """
+
     @abstractmethod
     async def document_jobs(self, document_id: str) -> list[dict[str, Any]]:
         """The per-job rows for a document (the job_status projection)."""
@@ -58,7 +73,9 @@ class JobStatusSource(ABC):
 
 
 class DocumentStatusReader:
-    """Derives public status by composing a ``JobStatusSource`` with a ``DocumentFactsSource``."""
+    """
+    Derives public status by composing a ``JobStatusSource`` with a ``DocumentFactsSource``.
+    """
 
     def __init__(self, jobs: JobStatusSource, facts: DocumentFactsSource):
         self._jobs = jobs

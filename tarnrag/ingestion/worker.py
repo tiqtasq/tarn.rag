@@ -14,7 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 class IngestionWorker:
-    """The job handler — COMPUTE ONLY (D2/D3). A pure handler: it holds only the
+    """
+    The job handler — COMPUTE ONLY (D2/D3). A pure handler: it holds only the
     coordinator and exposes ``handle_batch``. It does not touch the queue — the
     composition root registers ``worker.handle_batch`` with a ``JobConsumer`` and runs
     the consumer's loop.

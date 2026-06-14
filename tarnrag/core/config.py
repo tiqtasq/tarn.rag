@@ -29,7 +29,9 @@ IdPolicy = Literal["caller", "uuid"]
 
 
 class AppSettings(BaseModel):
-    """Process metadata (largely vestigial since the FastAPI layer moved out)."""
+    """
+    Process metadata (largely vestigial since the FastAPI layer moved out).
+    """
 
     name: str = "RAG Ingestion"
     version: str = "0.1.0"
@@ -37,9 +39,11 @@ class AppSettings(BaseModel):
 
 
 class EmbeddingSettings(BaseModel):
-    """The shared ONNX embedding pipeline (ingestion passages + retrieval queries). Its
+    """
+    The shared ONNX embedding pipeline (ingestion passages + retrieval queries). Its
     identity (model/revision/prefixes/…) feeds the index fingerprint. ``EMBEDDING_DIMENSION``
-    is top-level — it's cross-cutting (index + repo must match it)."""
+    is top-level — it's cross-cutting (index + repo must match it).
+    """
 
     model: str = "sentence-transformers/all-MiniLM-L6-v2"  # model id (recorded in index_meta)
     revision: str = ""
@@ -51,43 +55,54 @@ class EmbeddingSettings(BaseModel):
 
 
 class ChunkingSettings(BaseModel):
-    """Text chunking for the ingestion pipeline."""
+    """
+    Text chunking for the ingestion pipeline.
+    """
 
     size: int = 512
     overlap: int = 50
 
 
 class IndexSettings(BaseModel):
-    """The §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled."""
+    """
+    The §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled.
+    """
 
     db_path: str = "./index.db"
     default_license_class: str = "public_domain"
 
 
 class DatabaseSettings(BaseModel):
-    """The two stores — never conflate them. ``document_url`` defaults to local SQLite so
-    embedded mode is zero-config; ``queue_url`` (pgQueuer) is only used in distributed mode."""
+    """
+    The two stores — never conflate them. ``document_url`` defaults to local SQLite so
+    embedded mode is zero-config; ``queue_url`` (pgQueuer) is only used in distributed mode.
+    """
 
     document_url: str = "sqlite:///./rag_docs.db"  # document / chunk / embedding storage
     queue_url: str = ""  # pgQueuer job queue (required for MODE='distributed')
 
 
 class WorkerSettings(BaseModel):
-    """Distributed-mode worker tuning."""
+    """
+    Distributed-mode worker tuning.
+    """
 
     queue_timeout_seconds: int = 30
     concurrency: int = 4
 
 
 class ObservabilitySettings(BaseModel):
-    """Observability toggle (Phase 5). Real adapters plug in behind the ABC."""
+    """
+    Observability toggle (Phase 5). Real adapters plug in behind the ABC.
+    """
 
     enabled: bool = False
     type: str | None = None  # "prometheus" | "structured_logging"
 
 
 class Settings(BaseSettings):
-    """Application configuration from environment variables (and an optional ``.env``).
+    """
+    Application configuration from environment variables (and an optional ``.env``).
 
     Grouped fields use the ``GROUP__FIELD`` env convention, e.g. ``EMBEDDING__MODEL``,
     ``DATABASE__DOCUMENT_URL``. The top-level fields keep their flat names.

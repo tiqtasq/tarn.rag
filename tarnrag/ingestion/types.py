@@ -7,7 +7,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class DocumentStatus:
-    """Document-level status derived from persisted data."""
+    """
+    Document-level status derived from persisted data.
+    """
 
     document_id: str
     status: str  # pending | in_progress | complete | failed
@@ -17,7 +19,9 @@ class DocumentStatus:
 
 @dataclass(frozen=True)
 class DocumentSummary:
-    """One row of the document inventory returned by ``IngestionEngine.list_documents``."""
+    """
+    One row of the document inventory returned by ``IngestionEngine.list_documents``.
+    """
 
     document_id: str
     content_hash: str | None

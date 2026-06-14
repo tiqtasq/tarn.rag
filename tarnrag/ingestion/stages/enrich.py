@@ -8,8 +8,10 @@ from tarnrag.ingestion.pipeline import MapperStage
 
 
 class EnrichMetadataStage(MapperStage):
-    """Attach cheap, content-derived metadata. Richer NLP enrichment (NER, noun
-    phrases) is a future extension — see the metadata conventions in Core Models."""
+    """
+    Attach cheap, content-derived metadata. Richer NLP enrichment (NER, noun
+    phrases) is a future extension — see the metadata conventions in Core Models.
+    """
 
     def __init__(self, **config: Any):
         super().__init__(name="EnrichMetadata", **config)

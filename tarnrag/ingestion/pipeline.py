@@ -16,8 +16,10 @@ from tarnrag.storage.models import PipelineItem
 
 
 class PipelineStage(ABC):
-    """Base class for a pure transformation stage. Subclass a typed helper below
-    (MapperStage / ChunkerStage / FilterStage) unless a stage needs full control."""
+    """
+    Base class for a pure transformation stage. Subclass a typed helper below
+    (MapperStage / ChunkerStage / FilterStage) unless a stage needs full control.
+    """
 
     def __init__(self, name: str, **config: Any):
         self.name = name
@@ -46,7 +48,9 @@ class PipelineStage(ABC):
 
 
 class MapperStage(PipelineStage):
-    """1 -> 1 transform. Override ``map``; upstream metadata is merged automatically."""
+    """
+    1 -> 1 transform. Override ``map``; upstream metadata is merged automatically.
+    """
 
     @abstractmethod
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -58,8 +62,10 @@ class MapperStage(PipelineStage):
 
 
 class ChunkerStage(PipelineStage):
-    """1 -> N transform. Override ``chunk``; ``chunk_index``/``total_chunks`` are set
-    automatically on each produced item."""
+    """
+    1 -> N transform. Override ``chunk``; ``chunk_index``/``total_chunks`` are set
+    automatically on each produced item.
+    """
 
     @abstractmethod
     def chunk(
@@ -87,7 +93,9 @@ class ChunkerStage(PipelineStage):
 
 
 class FilterStage(PipelineStage):
-    """1 -> {0, 1}. Override ``should_keep`` (and optionally ``maybe_transform``)."""
+    """
+    1 -> {0, 1}. Override ``should_keep`` (and optionally ``maybe_transform``).
+    """
 
     @abstractmethod
     def should_keep(self, text: str, metadata: dict[str, Any]) -> bool:
@@ -106,9 +114,11 @@ class FilterStage(PipelineStage):
 
 
 class Pipeline:
-    """An ordered list of stages. The DAG/orchestrator read ``.stages`` (name + config);
+    """
+    An ordered list of stages. The DAG/orchestrator read ``.stages`` (name + config);
     ``run`` is a convenience for in-process execution and local testing (the
-    distributed engine runs stages individually via the worker)."""
+    distributed engine runs stages individually via the worker).
+    """
 
     def __init__(self, stages: list[PipelineStage]):
         if not stages:

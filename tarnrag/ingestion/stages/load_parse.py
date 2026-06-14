@@ -21,9 +21,11 @@ from tarnrag.ingestion.stages.parsers import (
 
 
 class LoadAndParseStage(MapperStage):
-    """If ``metadata['source_path']`` is set, load and parse the file; otherwise treat
+    """
+    If ``metadata['source_path']`` is set, load and parse the file; otherwise treat
     the incoming content as already loaded. Assigns a provisional ``doc_id`` (the
-    DocumentResultSink overwrites it with the stored id)."""
+    DocumentResultSink overwrites it with the stored id).
+    """
 
     def __init__(
         self,
@@ -47,6 +49,9 @@ class LoadAndParseStage(MapperStage):
         return content, {"doc_id": metadata.get("doc_id") or str(uuid.uuid4()), "loaded": True}
 
     def _load_file(self, path: str, parser: str | None = None) -> str:
+        """
+        Read a file by extension: txt/md plain, pdf via the selected parser, html via ``load_html``.
+        """
         ext = path.rsplit(".", 1)[-1].lower()
         if ext in ("txt", "text", "md"):
             with open(path, encoding="utf-8", errors="replace") as f:

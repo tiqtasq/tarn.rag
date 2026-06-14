@@ -15,6 +15,11 @@ from tarnrag.storage.models import Chunk, Document, Embedding
 
 
 class ChunkStore(ABC):
+    """
+    The persistence port a ResultSink writes through — implemented by ``DocumentRepository``
+    and ``SqliteIndexStore`` (see the module docstring for the two backends).
+    """
+
     @abstractmethod
     async def store_document(self, doc: Document) -> str:
         """Upsert a document; return its id (threaded forward as ``metadata['doc_id']``)."""
