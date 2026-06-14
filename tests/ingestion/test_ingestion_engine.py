@@ -301,28 +301,28 @@ async def test_list_documents_inventory(repo):
     assert {d.document_id for d in await engine.list_documents()} == {"b"}
 
 
-async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
-    """delete() runs two separate calls (data + job_status) and isn't cross-atomic. If the data
-    delete fails after the job-status delete succeeds, the document is left fully present
-    (consistent), and a retry completes the delete — no 'ghost' status pointing at deleted data."""
+async def test_delete_is_atomic_on_failure(repo, monkeypatch):
+    """delete() is a single transaction: if any part fails, the whole delete rolls back — the
+    document is left fully present (data AND job_status), never half-deleted or a 'ghost' status
+    pointing at deleted data. A retry completes the delete."""
     engine, queue = _wire(repo, policy="caller")
     await engine.ingest_content([{"content": "hello world " * 10, "source_id": "d1"}])
     await queue.run()
     assert (await engine.status("d1")).status == "complete"
 
-    # Make the data-store delete fail; the job-status delete (which runs first) has succeeded.
-    async def boom(_doc_id):
-        raise RuntimeError("data store down")
+    # Fail the job-status delete; the data delete ran first in the SAME transaction.
+    async def boom(*_args, **_kwargs):
+        raise RuntimeError("delete failed")
 
-    monkeypatch.setattr(repo, "delete_document", boom)
-    with pytest.raises(RuntimeError, match="data store down"):
+    monkeypatch.setattr(repo, "_delete_job_rows", boom)
+    with pytest.raises(RuntimeError, match="delete failed"):
         await engine.delete_document("d1")
 
-    # Consistent residue: the document is still fully present, not a ghost.
+    # Atomic rollback: nothing was deleted — data and jobs both intact.
     assert (await engine.status("d1")).status == "complete"
     assert "d1" in {d.document_id for d in await engine.list_documents()}
 
-    # Retry (data store healthy again) completes the delete.
+    # Retry (no fault) completes the delete.
     monkeypatch.undo()
     assert await engine.delete_document("d1") is True
     assert await engine.status("d1") is None

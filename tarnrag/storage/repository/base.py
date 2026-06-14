@@ -480,10 +480,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     async def delete_document_jobs(self, document_id: str) -> bool:
         """Remove a document's job_status rows (used when deleting a document)."""
         async with self.engine.begin() as conn:
-            res = await conn.execute(
-                self.job_status.delete().where(self.job_status.c.document_id == document_id)
-            )
-        return res.rowcount > 0
+            return await self._delete_job_rows(conn, document_id)
 
     async def document_facts(self, document_id: str) -> DocumentFacts:
         """Persisted-data facts (presence + chunk/embedding counts) for this document."""
@@ -521,12 +518,43 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         """
         Delete the document; its chunks (and their embeddings) cascade off the FKs, and the
         non-cascading search indexes (vec0/FTS) are cleared first. Returns True if it existed.
+        Leaves the job_status rows (use ``delete_document_jobs``, or ``delete_document_and_jobs``
+        to remove both atomically).
         """
         async with self.engine.begin() as conn:
-            await self._clear_chunk_index(conn, document_id)
-            res = await conn.execute(
-                self.documents.delete().where(self.documents.c.document_id == document_id)
-            )
+            return await self._delete_document_rows(conn, document_id)
+
+    async def delete_document_and_jobs(self, document_id: str) -> bool:
+        """
+        Delete a document's data AND its job_status rows in **one transaction** (atomic): chunks +
+        embeddings cascade off the FKs, the non-cascading vec0/FTS indexes are cleared, and the
+        job_status rows are removed — all-or-nothing, so any failure rolls the whole delete back.
+        Returns True if anything existed. (Data and job_status share this one repository, so the
+        delete that used to span two stores is now a single transaction.)
+        """
+        async with self.engine.begin() as conn:
+            removed_data = await self._delete_document_rows(conn, document_id)
+            removed_jobs = await self._delete_job_rows(conn, document_id)
+            return removed_data or removed_jobs
+
+    async def _delete_document_rows(self, conn: AsyncConnection, document_id: str) -> bool:
+        """
+        Delete the document row (chunks/embeddings cascade) and clear the non-cascading vec0/FTS
+        indexes, on the given connection. Returns True if the document existed.
+        """
+        await self._clear_chunk_index(conn, document_id)
+        res = await conn.execute(
+            self.documents.delete().where(self.documents.c.document_id == document_id)
+        )
+        return res.rowcount > 0
+
+    async def _delete_job_rows(self, conn: AsyncConnection, document_id: str) -> bool:
+        """
+        Delete the document's job_status rows on the given connection.
+        """
+        res = await conn.execute(
+            self.job_status.delete().where(self.job_status.c.document_id == document_id)
+        )
         return res.rowcount > 0
 
     async def list_documents(self) -> list[dict[str, Any]]:

@@ -95,7 +95,9 @@ async def test_document_status_and_jobs(repo):
     assert any(j["status"] == "failed" and j["error"] == "boom" for j in jobs)
 
 
-async def test_delete_document_and_jobs(repo):
+async def test_delete_document_keeps_jobs_until_cleared(repo):
+    # The granular ports: delete_document removes only the data; job_status survives until
+    # delete_document_jobs clears it. (delete_document_and_jobs does both in one shot.)
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
         [_chunk("a", 0, 1)],
@@ -118,6 +120,23 @@ async def test_delete_document_and_jobs(repo):
     # Idempotent: nothing left to remove.
     assert await repo.delete_document("s1") is False
     assert await repo.delete_document_jobs("s1") is False
+
+
+async def test_delete_document_and_jobs_removes_both(repo):
+    # The atomic combined delete: data + job_status gone in a single transaction.
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("a", 0, 1)],
+    )
+    await repo.store_embeddings(
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+    )
+    await repo.record_job("s1", "j1", "LoadAndParse", "completed")
+    assert (await repo.document_status("s1"))["status"] == "complete"
+
+    assert await repo.delete_document_and_jobs("s1") is True
+    assert await repo.document_status("s1") is None  # data AND jobs gone in one call
+    assert await repo.delete_document_and_jobs("s1") is False  # idempotent
 
 
 async def test_list_documents(repo):
