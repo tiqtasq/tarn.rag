@@ -17,9 +17,9 @@ Data flow:
 ```
 IngestionEngine.create() → ingest_paths/content/streams → PipelineOrchestrator (walks the DAG,
   creates jobs) → queue (InMemory in embedded mode · pgQueuer in distributed) → IngestionWorker(s)
-  → stages (load → clean → chunk → enrich → embed) → §8 SqliteIndexStore + DocumentRepository (job_status)
+  → stages (load → clean → chunk → enrich → embed) → DocumentRepository (§8 index + job_status, one store)
 
-RetrievalEngine.create() → search/search_text → embed query → sqlite-vec KNN → hydrate → ranked results
+RetrievalEngine.create() → await search/search_text → embed query → repository dense_knn → hydrate → ranked results
 ```
 
 Design specs: `doc/FUNCTIONAL_REQUIREMENTS.md` (ingestion pipeline) and
@@ -54,10 +54,11 @@ with RetrievalEngine.create() as r:                  # validates schema + embedd
 - **`MODE='embedded'`** (default) runs in-process (InMemory queue) — each ingest call processes to
   completion. **`MODE='distributed'`** enqueues to pgQueuer; run `python run_worker.py` as one or
   more separate consumer processes.
-- **Async vs sync is deliberate:** ingestion is **async** (async SQLAlchemy + pgQueuer); retrieval
-  is **sync** (sync `sqlite3`/sqlite-vec + ONNX, matching a future C++ port). For event-loop callers
-  retrieval also exposes `asearch` / `asearch_text` (thread-offloaded). An `a`-prefix marks the async
-  variant of a sync method; lifecycle follows the idiom (`aclose` + `async with` vs `close` + `with`).
+- **Both engines are async:** ingestion and retrieval both run on the async repository (async
+  SQLAlchemy; pgQueuer in distributed mode). `RetrievalEngine.search` / `search_text` are `async`
+  (the query embed is thread-offloaded since ONNX is CPU-bound and releases the GIL); lifecycle
+  follows the async idiom (`aclose` + `async with`). The portable SQLite file stays C++-consumable —
+  a future sync C++ reader opens it directly, independent of the Python engine's async-ness.
 - **Jobs are internal** — never in the public surface. The per-job breakdown is available only via
   the debug-gated `IngestionEngine.document_jobs` (raises unless `APP__DEBUG`).
 
@@ -68,7 +69,7 @@ tarnrag/
 ├── core/         # infra only: config, exceptions, observability
 ├── embedder.py   # Embedder ABC + OnnxEmbedder (shared by both engines)
 ├── storage/      # persistence layer
-│   ├── models.py · chunk_store.py · index_store.py · status.py
+│   ├── models.py · chunk_store.py · index_meta.py · retrieval.py · status.py
 │   └── repository/   # base.py (DocumentRepository) · postgres.py · sqlite.py
 ├── ingestion/    # engine, worker, pipeline, orchestrator, queue, batch,
 │                 #   result_sink, models, types, factories, stages/
@@ -119,18 +120,20 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   (ingestion) and queries (retrieval), guaranteeing pipeline identity; `config_fingerprint()` is
   recorded in `index_meta` and retrieval refuses to `open()` on mismatch. Model configurable via
   `settings.embedding` (default all-MiniLM-L6-v2); fetch artifacts with `scripts/fetch_model.py`.
-- **The §8 index + status read model** (`storage/`). `SqliteIndexStore(ChunkStore)` is the retrieval
-  index — a single SQLite file (`index_meta`, `documents`, `chunks`, `vec_chunks` via sqlite-vec,
-  `fts_chunks` via FTS5, `method_chunks`) over **sync `sqlite3`**. `ChunkStore` is the persistence ABC
-  both the index and the repository implement. `DocumentStatusReader` (`storage/status.py`) composes
-  two **narrow ports** — `JobStatusSource` (the repo's `job_status`) + `DocumentFactsSource` (presence
-  + counts, supplied by the index) — and owns the rollup (ISP: only this read model sees both).
+- **The §8 index + status read model** (`storage/`). The retrieval index lives in the
+  `DocumentRepository` itself (one store) — embedded: a single SQLite file (`index_meta`, `documents`,
+  `chunks`, `vec_chunks` via sqlite-vec, `fts_chunks` via FTS5, `method_chunks`); distributed:
+  Postgres with dense retrieval on `embeddings` (pgvector). `ChunkStore` is the persistence ABC the
+  repository implements (where the ingestion sinks write). `DocumentStatusReader` (`storage/status.py`)
+  composes two **narrow ports** — `JobStatusSource` (the repo's `job_status`) + `DocumentFactsSource`
+  (presence + counts) — and owns the rollup (ISP: only this read model sees both), now both backed by
+  the repository.
 - **Database agnosticism** (`storage/repository/`). All document storage goes through
   `DocumentRepository` (SQLAlchemy 2.0 Core, async): shared tables + dialect-agnostic CRUD in
   `base.py`; `postgres.py` / `sqlite.py` override only the hooks (`_driver_url`, `_vector_type`,
   `_encode_vector` / `_decode_vector`, `_upsert_document`, `_create_dialect_objects`,
-  `vector_search`). Postgres uses pgvector; SQLite stores vectors as JSON + in-memory cosine
-  (dev/small-scale). Selection is driven by `settings.database.document_url` (a `postgres` substring
+  `dense_knn` / `hydrate`). Postgres uses pgvector; SQLite uses sqlite-vec (`vec_chunks`) for dense
+  KNN + FTS5 for sparse. Selection is driven by `settings.database.document_url` (a `postgres` substring
   → Postgres, else SQLite). Put shared logic in the base, dialect specifics in the hooks.
 - **Transactional guarantees & idempotency.** `store_document_with_chunks` / `store_chunks` /
   `store_embeddings` are atomic. Documents are keyed by `metadata['source_id']` (UNIQUE, **stable** —
@@ -152,13 +155,12 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
 ## Conventions
 
 - **Config** (`core/config.py`). `Settings` (pydantic-settings) nests per-component sub-models —
-  `settings.embedding`, `settings.chunking`, `settings.index`, `settings.database`, `settings.worker`,
+  `settings.embedding`, `settings.chunking`, `settings.database`, `settings.worker`,
   `settings.observability` — read from env via the `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`,
   `DATABASE__DOCUMENT_URL`). Cross-cutting `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR`, `ID_POLICY`
   stay top-level/flat. A `model_validator` pins the backend: `distributed` requires Postgres +
   `DATABASE__QUEUE_URL`; `embedded` requires SQLite. See `.env.example`. Each component is built via a
-  `create()` classmethod from its config slice (`OnnxEmbedder.create`, `SqliteIndexStore.create`,
-  `DocumentRepository.create`).
+  `create()` classmethod from its config slice (`OnnxEmbedder.create`, `DocumentRepository.create`).
 - **Type annotations (Python 3.12):** builtin generics (`list`, `dict`, `tuple`, `type`) and
   `X | None` — never `typing.List` / `Dict` / `Optional`. Import `Iterator` / `Iterable` / `Callable`
   from `collections.abc`; keep `Any` / `Literal` from `typing`. Use `datetime.now(UTC)`.

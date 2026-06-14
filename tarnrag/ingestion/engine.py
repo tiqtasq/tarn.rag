@@ -29,7 +29,7 @@ from typing import Any, BinaryIO
 from tarnrag.core.config import IdPolicy, Settings, get_settings
 from tarnrag.core.observability import NoOpObservability
 from tarnrag.embedder import OnnxEmbedder
-from tarnrag.storage.index_store import SqliteIndexStore
+from tarnrag.storage.index_meta import build_index_meta
 from tarnrag.storage.models import PipelineItem
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentFactsSource, DocumentStatusReader
@@ -88,15 +88,15 @@ class IngestionEngine:
         self.repository = repository  # persistence + job_status projection
         self.obs = observability
         self.staging_dir = staging_dir
-        # The document data store (repo in the classic path, §8 index store in retrieval mode):
-        # supplies status facts AND the content_hash dedup lookup.
+        # The document data store — the repository, which now also holds the §8 retrieval index
+        # (one store): it supplies status facts AND the content_hash dedup lookup. The seam stays
+        # (a narrow DocumentFactsSource port) but defaults to the repository.
         self._facts_source = facts_source or repository
         self._status = DocumentStatusReader(repository, self._facts_source)
         self._queue = queue
         self._auto_drain = auto_drain
         self._debug = debug
         self._id_policy = id_policy
-        self._index_store: SqliteIndexStore | None = None  # set by create(), closed by aclose()
 
     # ----- construction -----
 
@@ -110,11 +110,10 @@ class IngestionEngine:
             settings.database, settings.EMBEDDING_DIMENSION
         )
         embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
-        # The engine is the index producer: it records index_meta and the sinks persist into
-        # the §8 index. job_status stays on the repository.
-        index_store = SqliteIndexStore.create(
-            settings.index, settings.EMBEDDING_DIMENSION, embedder=embedder
-        )
+        # The engine is the index producer: stamp the §8 build/identity record onto the
+        # repository (RetrievalEngine.open validates it). The sinks persist document/chunk/
+        # embedding data into the same repository; job_status lives there too.
+        await repository.write_index_meta(build_index_meta(embedder))
         pipeline = create_ingestion_pipeline(settings)
 
         if settings.MODE == "distributed":
@@ -126,15 +125,14 @@ class IngestionEngine:
 
         orchestrator = PipelineOrchestrator(
             PipelineDAG(pipeline.stages), queue, repository, create_sink_registry(),
-            observability=obs, chunk_store=index_store,
+            observability=obs,  # chunk_store defaults to the repository
         )
         engine = cls(
             pipeline, orchestrator, repository, observability=obs,
-            staging_dir=settings.UPLOAD_DIR, facts_source=index_store,
+            staging_dir=settings.UPLOAD_DIR,  # facts_source defaults to the repository
             queue=queue, auto_drain=auto_drain, debug=settings.app.debug,
             id_policy=settings.ID_POLICY,
         )
-        engine._index_store = index_store
         if auto_drain:  # register the in-process worker that ingest() will drive
             worker = IngestionWorker(orchestrator, observability=obs)
             queue.set_handler(worker.handle_batch)
@@ -256,20 +254,13 @@ class IngestionEngine:
 
     async def delete_document(self, document_id: str) -> bool:
         """Delete a document and everything derived from it — chunks, embeddings, retrieval-index
-        rows, and its job-status records. Returns True if the document was known (had data or
-        in-flight jobs), False if there was nothing to delete.
+        rows, and its job_status records — in a **single atomic transaction**. Returns True if the
+        document was known (had data or in-flight jobs), False if there was nothing to delete.
 
-        This spans **two independent stores** (the document data store and the job_status
-        projection — separate databases in any real deployment), so it can't be one transaction.
-        Each call is individually atomic; they run **job-status-first** on purpose, so a failure
-        partway leaves a *consistent* residue — the document stays fully present (its status and
-        inventory unchanged), losing only debug job rows, never a 'ghost' status pointing at
-        deleted data. It is idempotent: a retry completes the delete and heals any residue."""
-        # job_status first (operational exhaust). If the data delete then fails, the document is
-        # left intact and consistent rather than gone-with-a-stale-status; a retry finishes it.
-        removed_jobs = await self.repository.delete_document_jobs(document_id)
-        removed_data = await self._facts_source.delete_document(document_id)
-        return removed_data or removed_jobs
+        The data and the job_status projection live in the one repository, so this is all-or-
+        nothing: a failure rolls everything back — never a half-deleted document or a 'ghost'
+        status pointing at deleted data. Idempotent: deleting an unknown document is a no-op."""
+        return await self.repository.delete_document_and_jobs(document_id)
 
     # ----- debug (gated on APP__DEBUG) -----
 
@@ -282,12 +273,10 @@ class IngestionEngine:
     # ----- lifecycle -----
 
     async def aclose(self) -> None:
-        """Release resources owned by the engine (DB engine pool, index store)."""
+        """Release resources owned by the engine (the repository's DB engine pool)."""
         engine = getattr(self.repository, "engine", None)
         if engine is not None:
             await engine.dispose()
-        if self._index_store is not None:
-            self._index_store.close()
 
     async def __aenter__(self) -> IngestionEngine:
         return self

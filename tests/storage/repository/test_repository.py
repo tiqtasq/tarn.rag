@@ -52,24 +52,6 @@ async def test_document_with_chunks_and_idempotency(repo):
     assert (await repo.get_document(doc_id)).content == "updated"
 
 
-async def test_embeddings_and_vector_search(repo):
-    doc_id, (cid_a, cid_b) = await repo.store_document_with_chunks(
-        Document(content="d", metadata={"source_id": "s1"}),
-        [_chunk("a", 0, 2), _chunk("b", 1, 2)],
-    )
-    await repo.store_embeddings(
-        [
-            Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-            Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
-        ]
-    )
-    results = await repo.vector_search([0.9, 0.1, 0.0], k=2)
-    assert len(results) == 2
-    (top_chunk, top_sim), (_, second_sim) = results
-    assert top_chunk.id == cid_a  # closest to [1,0,0]
-    assert top_sim > second_sim
-
-
 async def test_update_chunk_metadata_is_noop(repo):
     # §8 chunks carry no metadata column — update_chunk_metadata is a harmless no-op
     # (enrichment is not persisted; the metadata bag is deferred).
@@ -113,7 +95,9 @@ async def test_document_status_and_jobs(repo):
     assert any(j["status"] == "failed" and j["error"] == "boom" for j in jobs)
 
 
-async def test_delete_document_and_jobs(repo):
+async def test_delete_document_keeps_jobs_until_cleared(repo):
+    # The granular ports: delete_document removes only the data; job_status survives until
+    # delete_document_jobs clears it. (delete_document_and_jobs does both in one shot.)
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
         [_chunk("a", 0, 1)],
@@ -136,6 +120,23 @@ async def test_delete_document_and_jobs(repo):
     # Idempotent: nothing left to remove.
     assert await repo.delete_document("s1") is False
     assert await repo.delete_document_jobs("s1") is False
+
+
+async def test_delete_document_and_jobs_removes_both(repo):
+    # The atomic combined delete: data + job_status gone in a single transaction.
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("a", 0, 1)],
+    )
+    await repo.store_embeddings(
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+    )
+    await repo.record_job("s1", "j1", "LoadAndParse", "completed")
+    assert (await repo.document_status("s1"))["status"] == "complete"
+
+    assert await repo.delete_document_and_jobs("s1") is True
+    assert await repo.document_status("s1") is None  # data AND jobs gone in one call
+    assert await repo.delete_document_and_jobs("s1") is False  # idempotent
 
 
 async def test_list_documents(repo):

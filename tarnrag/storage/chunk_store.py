@@ -1,9 +1,9 @@
 """The persistence seam the ResultSinks (D4) write through.
 
-``ChunkStore`` is the surface a sink needs — *where* document/chunk/embedding data lands. Two
-implementations: ``DocumentRepository`` (SQLAlchemy; the operational store that also backs the
-``job_status`` projection) and ``SqliteIndexStore`` (the §8 sqlite-vec/FTS5 retrieval index).
-Methods are async to match the sinks' ``await``ed ``_persist``.
+``ChunkStore`` is the surface a sink needs — *where* document/chunk/embedding data lands. It is
+implemented by ``DocumentRepository`` (SQLAlchemy), which is the single store: documents/chunks,
+the §8 retrieval index (sqlite-vec/FTS5 on SQLite, pgvector on Postgres), and the ``job_status``
+projection. Methods are async to match the sinks' ``await``ed ``_persist``.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from tarnrag.storage.models import Chunk, Document, Embedding
 class ChunkStore(ABC):
     """
     The persistence port a ResultSink writes through — implemented by ``DocumentRepository``
-    and ``SqliteIndexStore`` (see the module docstring for the two backends).
+    (see the module docstring).
     """
 
     @abstractmethod

@@ -60,10 +60,11 @@ async def test_full_document_ingest(repo):
     assert status["embedding_count"] == status["chunk_count"]
     assert queue.dead_letters == []
 
-    # Embeddings are searchable; chunks carry their §8 provenance (metadata reconstructed).
-    results = await repo.vector_search([10.0, 1.0, 0.0], k=status["chunk_count"])
-    assert len(results) == status["chunk_count"]
-    assert all(chunk.content and chunk.metadata["license_class"] for chunk, _ in results)
+    # Embeddings are searchable; chunks hydrate with their §8 provenance.
+    cands = await repo.dense_knn([10.0, 1.0, 0.0], k=status["chunk_count"])
+    assert len(cands) == status["chunk_count"]
+    recs = await repo.hydrate([c.chunk_id for c in cands])
+    assert all(r.text and r.license_class for r in recs)
 
     # Every job for the document ended 'completed' (none failed/stuck).
     jobs = await repo.document_jobs("s1")

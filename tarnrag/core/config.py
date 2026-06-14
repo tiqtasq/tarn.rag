@@ -2,10 +2,10 @@
 
 ``Settings`` is the single source of runtime config; the engines (``IngestionEngine`` /
 ``RetrievalEngine``) read it in their ``create()`` factories to build the wiring. Config is
-**grouped into nested sub-models** (``settings.embedding``, ``settings.index``,
-``settings.database`` …) so each component depends only on its slice — env vars use the
-``GROUP__FIELD`` convention (e.g. ``EMBEDDING__MODEL``). The few cross-cutting knobs
-(``MODE``, ``EMBEDDING_DIMENSION``, ``UPLOAD_DIR``) stay top-level.
+**grouped into nested sub-models** (``settings.embedding``, ``settings.database`` …) so each
+component depends only on its slice — env vars use the ``GROUP__FIELD`` convention (e.g.
+``EMBEDDING__MODEL``). The few cross-cutting knobs (``MODE``, ``EMBEDDING_DIMENSION``,
+``UPLOAD_DIR``) stay top-level.
 
 The pipeline/sink *factories* live in ``tarnrag/ingestion/factories.py`` (they consume ``Settings``).
 """
@@ -63,22 +63,14 @@ class ChunkingSettings(BaseModel):
     overlap: int = 50
 
 
-class IndexSettings(BaseModel):
-    """
-    The §8 retrieval index (sqlite-vec/FTS5). Domain fields default until modeled.
-    """
-
-    db_path: str = "./index.db"
-    default_license_class: str = "public_domain"
-
-
 class DatabaseSettings(BaseModel):
     """
-    The two stores — never conflate them. ``document_url`` defaults to local SQLite so
-    embedded mode is zero-config; ``queue_url`` (pgQueuer) is only used in distributed mode.
+    The two stores — never conflate them. ``document_url`` is the repository (documents, chunks,
+    the §8 retrieval index, and job_status); it defaults to local SQLite so embedded mode is
+    zero-config. ``queue_url`` (pgQueuer) is only used in distributed mode.
     """
 
-    document_url: str = "sqlite:///./rag_docs.db"  # document / chunk / embedding storage
+    document_url: str = "sqlite:///./rag_docs.db"  # repository: docs/chunks/§8 index + job_status
     queue_url: str = ""  # pgQueuer job queue (required for MODE='distributed')
 
 
@@ -127,7 +119,6 @@ class Settings(BaseSettings):
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
     chunking: ChunkingSettings = ChunkingSettings()
-    index: IndexSettings = IndexSettings()
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()

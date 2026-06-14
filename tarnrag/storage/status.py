@@ -1,12 +1,12 @@
-"""Document status read model — composes the two stores without merging them.
+"""Document status read model — composes the job_status projection with the data facts.
 
 Public document status (`pending | in_progress | complete | failed`) needs two *different*
 things: the operational **job_status** projection (did anything fail / is it known?) and the
-persisted **data facts** (how many chunks/embeddings exist). Those live in separate stores —
-``DocumentRepository`` (job_status) and the §8 ``SqliteIndexStore`` (retrieval data) — and we
-keep them separate (the index is a portable product artifact; job_status is operational
-exhaust). Only this thin read model sees both; it's injected with two narrow ports, not a fat
-"document storage" object (ISP — each writer/caller still depends only on what it uses).
+persisted **data facts** (how many chunks/embeddings exist). Both now live on the repository (one
+store), but the read model still depends on **two narrow ports** — a ``JobStatusSource`` and a
+``DocumentFactsSource`` — not a fat "document storage" object (ISP — each writer/caller depends
+only on what it uses, and the facts source can still be pointed elsewhere). Only this thin read
+model composes the two.
 """
 
 from __future__ import annotations
@@ -30,14 +30,13 @@ class DocumentFacts:
 
 class DocumentFactsSource(ABC):
     """
-    Port over the document data store (the repo in the classic path, the §8 index in retrieval
-    mode): status facts, content-hash lookup, and the list/delete admin ops.
+    Port over the document data store (the repository): status facts, content-hash lookup, and
+    the list/delete admin ops.
     """
 
     @abstractmethod
     async def document_facts(self, document_id: str) -> DocumentFacts:
-        """Persisted-data facts for a document (the repo in the classic path, the §8 index
-        in retrieval mode)."""
+        """Persisted-data facts for a document (from the repository)."""
 
     @abstractmethod
     async def documents_by_content_hash(self, content_hash: str) -> list[str]:
