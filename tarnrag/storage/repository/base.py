@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from tarnrag.core.config import DatabaseSettings
 from tarnrag.storage.chunk_store import ChunkStore
 from tarnrag.storage.models import Chunk, Document, Embedding
+from tarnrag.storage.retrieval import Candidate, ChunkRecord
 from tarnrag.storage.status import (
     DocumentFacts,
     DocumentFactsSource,
@@ -122,7 +123,25 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         model: str | None = None,
         filters: dict[str, Any] | None = None,
     ) -> list[tuple[Chunk, float]]:
-        """Semantic search: pgvector cosine on Postgres, in-memory cosine on SQLite."""
+        """
+        Legacy top-k dense search returning ``(Chunk, similarity)`` — pgvector on Postgres,
+        sqlite-vec on SQLite. The §8 retrieval path uses ``dense_knn`` + ``hydrate`` instead.
+        """
+
+    @abstractmethod
+    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+        """
+        §8 dense retrieval: the nearest ``k`` chunks to ``query_vec`` as ranked ``Candidate``s
+        (sqlite-vec on SQLite, pgvector on Postgres).
+        """
+
+    @abstractmethod
+    async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
+        """
+        §8 hydration: canonical text + provenance + license for the given chunk ids, preserving
+        input order. Touches only the normal tables, so each dialect renders it natively (raw SQL
+        on SQLite, SQLAlchemy on Postgres).
+        """
 
     # Schema hooks: default no-ops. The pgvector extension must exist *before* the
     # tables (the embeddings vector column needs it); expression/vector indexes must

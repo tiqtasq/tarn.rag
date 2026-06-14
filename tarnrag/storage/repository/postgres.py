@@ -14,6 +14,7 @@ from pgvector.sqlalchemy import Vector
 
 from tarnrag.storage.models import Chunk
 from tarnrag.storage.repository.base import DocumentRepository
+from tarnrag.storage.retrieval import Candidate, ChunkRecord
 
 
 class PostgresRepository(DocumentRepository):
@@ -67,3 +68,52 @@ class PostgresRepository(DocumentRepository):
         async with self.engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
         return [(self._row_to_chunk(r), r["similarity"]) for r in rows]
+
+    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+        """
+        §8 dense KNN over the pgvector ``embeddings`` table (cosine distance, nearest first),
+        returned as ranked ``Candidate``s — the SQLite ``vec_chunks`` counterpart.
+        """
+        dist = self.embeddings.c.vector.cosine_distance(query_vec)
+        stmt = select(self.embeddings.c.chunk_id, dist.label("distance")).order_by(dist).limit(k)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=d) for i, (cid, d) in enumerate(rows)]
+
+    async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
+        """
+        §8 hydration via SQLAlchemy over the normal tables (chunks joined to documents, plus
+        method_chunks), preserving input order. No virtual tables here, so unlike SQLite this
+        stays in Core.
+        """
+        if not chunk_ids:
+            return []
+        c, d, m = self.chunks, self.documents, self.method_chunks
+        stmt = (
+            select(
+                c.c.chunk_id, c.c.text, c.c.document_id, d.c.source_kind,
+                d.c.standard_id, c.c.locator, c.c.license_class,
+            )
+            .select_from(c.join(d, c.c.document_id == d.c.document_id))
+            .where(c.c.chunk_id.in_(chunk_ids))
+        )
+        async with self.engine.connect() as conn:
+            by_id = {r[0]: r for r in (await conn.execute(stmt)).all()}
+            records: list[ChunkRecord] = []
+            for cid in chunk_ids:
+                r = by_id.get(cid)
+                if r is None:
+                    continue
+                methods = (
+                    await conn.execute(
+                        select(m.c.method_id, m.c.method_version).where(m.c.chunk_id == cid)
+                    )
+                ).all()
+                records.append(
+                    ChunkRecord(
+                        chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
+                        standard_id=r[4], locator=r[5], license_class=r[6],
+                        methods=[(mid, ver) for mid, ver in methods],
+                    )
+                )
+        return records
