@@ -6,18 +6,20 @@ subclasses supply only the Postgres/SQLite specifics via a small set of hooks.
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from abc import abstractmethod
 from typing import Any
 
 from sqlalchemy import (
-    JSON,
     TIMESTAMP,
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
     Integer,
     MetaData,
+    PrimaryKeyConstraint,
     Table,
     Text,
     func,
@@ -26,11 +28,9 @@ from sqlalchemy import (
     text,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tarnrag.core.config import DatabaseSettings
-from tarnrag.core.exceptions import ChunkNotFoundError
 from tarnrag.storage.chunk_store import ChunkStore
 from tarnrag.storage.models import Chunk, Document, Embedding
 from tarnrag.storage.status import (
@@ -39,6 +39,17 @@ from tarnrag.storage.status import (
     DocumentStatusReader,
     JobStatusSource,
 )
+
+# §8 license_class is a closed enum (matches the strategy doc). Single source of truth for the
+# CHECK constraints on documents.license_class / chunks.license_class.
+LICENSE_CLASSES = (
+    "customer_licensed",
+    "public_domain",
+    "modusq_authored",
+    "third_party_copyrighted",
+    "third_party_licensed",
+)
+_LICENSE_CHECK = "license_class IN (" + ", ".join(f"'{c}'" for c in LICENSE_CLASSES) + ")"
 
 
 class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
@@ -125,34 +136,61 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     # ---------------- shared schema ----------------
 
     def _define_tables(self) -> None:
-        json_type = JSON().with_variant(JSONB(), "postgresql")
+        # §8 documents (ModusQ §8.1): typed provenance + ``document_id`` (== source_id) as the PK.
+        # ``content`` (full doc text) and ``content_hash`` are Python-side extras beyond the bare
+        # §8 columns — harmless to the C++ reader, which reads only the columns it knows.
         self.documents = Table(
             "documents",
             self.metadata,
-            Column("id", Text, primary_key=True),
-            Column("content", Text, nullable=False),
-            Column("metadata", json_type, nullable=False, default=dict),
-            # sha256 of the document's submitted content — the content-dedup key (independent
-            # of the source_id identity, which is stable across content replacement).
-            Column("content_hash", Text, index=True),
-            Column("created_at", TIMESTAMP, server_default=func.now()),
+            Column("document_id", Text, primary_key=True),  # == source_id (the public handle)
+            Column("content", Text, nullable=False),         # full doc text (Python-side; not §8)
+            Column("title", Text),
+            Column("source_kind", Text, nullable=False, default="document"),
+            Column("standard_id", Text),
+            Column("doc_version", Text),
+            Column("license_class", Text, nullable=False, default="public_domain"),
+            Column("content_hash", Text, index=True),        # content-dedup key
+            CheckConstraint(_LICENSE_CHECK, name="ck_documents_license_class"),
         )
+        # §8 chunks: typed provenance + license denormalized for fast filtering. No metadata bag —
+        # a positional/metadata field returns later (see the rag-chunk-metadata-deferred note).
         self.chunks = Table(
             "chunks",
             self.metadata,
-            Column("id", Text, primary_key=True),
+            Column("chunk_id", Text, primary_key=True),
             Column(
-                "parent_doc_id",
+                "document_id",
                 Text,
-                ForeignKey("documents.id", ondelete="CASCADE"),
+                ForeignKey("documents.document_id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            Column("content", Text, nullable=False),
-            Column("chunk_index", Integer, nullable=False),
-            Column("total_chunks", Integer, nullable=False),
-            Column("metadata", json_type, nullable=False, default=dict),
-            Column("created_at", TIMESTAMP, server_default=func.now()),
-            Index("idx_chunks_parent", "parent_doc_id"),
+            Column("ordinal", Integer, nullable=False),      # position within the document
+            Column("text", Text, nullable=False),            # canonical chunk text (returned verbatim)
+            Column("locator", Text),                         # citable locator, e.g. '§6.4.2'
+            Column("license_class", Text, nullable=False, default="public_domain"),
+            Column("ai_grounding_allowed", Integer, nullable=False, default=1),
+            Column("available", Integer, nullable=False, default=1),
+            Column("content_hash", Text, nullable=False),    # sha256 of the chunk text
+            CheckConstraint(_LICENSE_CHECK, name="ck_chunks_license_class"),
+            CheckConstraint("ai_grounding_allowed IN (0, 1)", name="ck_chunks_ai_grounding"),
+            CheckConstraint("available IN (0, 1)", name="ck_chunks_available"),
+            Index("idx_chunks_document", "document_id"),
+            Index("idx_chunks_license", "license_class", "available"),
+        )
+        # §8 method_chunks: resolved reference bundles (method version -> chunk).
+        self.method_chunks = Table(
+            "method_chunks",
+            self.metadata,
+            Column("method_id", Text, nullable=False),
+            Column("method_version", Text, nullable=False),
+            Column(
+                "chunk_id",
+                Text,
+                ForeignKey("chunks.chunk_id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            PrimaryKeyConstraint("method_id", "method_version", "chunk_id"),
+            Index("idx_method_chunks_chunk", "chunk_id"),
         )
         self.embeddings = Table(
             "embeddings",
@@ -161,13 +199,12 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column(
                 "chunk_id",
                 Text,
-                ForeignKey("chunks.id", ondelete="CASCADE"),
+                ForeignKey("chunks.chunk_id", ondelete="CASCADE"),
                 nullable=False,
             ),
             Column("vector", self._vector_type(), nullable=False),
             Column("model", Text, nullable=False),
             Column("dimension", Integer, nullable=False),
-            Column("metadata", json_type, nullable=False, default=dict),
             Index("idx_embeddings_chunk", "chunk_id"),
         )
         # Document-keyed status PROJECTION for the API (the queue itself is pgQueuer's).
@@ -181,6 +218,15 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("error", Text),
             Column("created_at", TIMESTAMP, server_default=func.now()),
             Column("updated_at", TIMESTAMP, server_default=func.now()),
+        )
+        # §8 build/compatibility metadata (key/value): schema/ingestion versions and the
+        # embedding-pipeline fingerprint the retrieval store validates at open(). Dialect-agnostic —
+        # the first §8 table to live in the base as the repository takes over the retrieval index.
+        self.index_meta_table = Table(
+            "index_meta",
+            self.metadata,
+            Column("key", Text, primary_key=True),
+            Column("value", Text, nullable=False),
         )
 
     # ---------------- lifecycle ----------------
@@ -202,6 +248,34 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         except Exception:
             return False
 
+    # ---------------- §8 index metadata ----------------
+
+    async def write_index_meta(self, meta: dict[str, str]) -> None:
+        """
+        Upsert §8 build/compatibility metadata (key/value) — e.g. the embedding-pipeline
+        fingerprint the retrieval store validates at ``open()``. Portable upsert (update, else
+        insert); takes a plain dict so the producer owns how the fingerprint is assembled.
+        """
+        async with self.engine.begin() as conn:
+            for key, value in meta.items():
+                res = await conn.execute(
+                    update(self.index_meta_table)
+                    .where(self.index_meta_table.c.key == key)
+                    .values(value=value)
+                )
+                if res.rowcount == 0:
+                    await conn.execute(
+                        insert(self.index_meta_table).values(key=key, value=value)
+                    )
+
+    async def index_meta(self) -> dict[str, str]:
+        """
+        All §8 build/compatibility metadata as a dict (empty before anything is written).
+        """
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(self.index_meta_table))).all()
+        return {key: value for key, value in rows}
+
     # ---------------- writes (shared Core) ----------------
 
     async def store_document(self, doc: Document) -> str:
@@ -212,7 +286,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             # Re-storing a document REPLACES its derived data (idempotency): drop its
             # chunks (ON DELETE CASCADE removes their embeddings). A new doc has none.
             await conn.execute(
-                self.chunks.delete().where(self.chunks.c.parent_doc_id == doc_id)
+                self.chunks.delete().where(self.chunks.c.document_id == doc_id)
             )
             return doc_id
 
@@ -223,7 +297,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             doc_id = await self._upsert_document(conn, self._doc_values(doc))
             # Re-ingest replaces chunks (ON DELETE CASCADE removes their embeddings).
             await conn.execute(
-                self.chunks.delete().where(self.chunks.c.parent_doc_id == doc_id)
+                self.chunks.delete().where(self.chunks.c.document_id == doc_id)
             )
             chunk_ids = await self._insert_chunks(conn, doc_id, chunks)
             return doc_id, chunk_ids
@@ -244,7 +318,6 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     "vector": self._encode_vector(emb.vector),
                     "model": emb.model,
                     "dimension": emb.dimension,
-                    "metadata": emb.metadata,
                 }
             )
         async with self.engine.begin() as conn:
@@ -253,20 +326,9 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return ids
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
-        async with self.engine.begin() as conn:
-            row = (
-                await conn.execute(
-                    select(self.chunks.c.metadata).where(self.chunks.c.id == chunk_id)
-                )
-            ).first()
-            if row is None:
-                raise ChunkNotFoundError(chunk_id)
-            merged = {**(row[0] or {}), **updates}
-            await conn.execute(
-                update(self.chunks)
-                .where(self.chunks.c.id == chunk_id)
-                .values(metadata=merged)
-            )
+        # §8 chunks carry no metadata column — enrichment is not persisted (the metadata bag is
+        # deferred; see the rag-chunk-metadata-deferred note). No-op, like SqliteIndexStore.
+        return None
 
     # ---------------- reads (shared Core) ----------------
 
@@ -274,16 +336,18 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         async with self.engine.connect() as conn:
             row = (
                 await conn.execute(
-                    select(self.documents).where(self.documents.c.id == doc_id)
+                    select(self.documents).where(self.documents.c.document_id == doc_id)
                 )
             ).mappings().first()
-        return Document(**self._pick(row, Document)) if row else None
+        if row is None:
+            return None
+        return Document(id=row["document_id"], content=row["content"], metadata=self._doc_metadata(row))
 
     async def get_chunk(self, chunk_id: str) -> Chunk | None:
         async with self.engine.connect() as conn:
             row = (
                 await conn.execute(
-                    select(self.chunks).where(self.chunks.c.id == chunk_id)
+                    select(self.chunks).where(self.chunks.c.chunk_id == chunk_id)
                 )
             ).mappings().first()
         return self._row_to_chunk(row) if row else None
@@ -293,8 +357,8 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             rows = (
                 await conn.execute(
                     select(self.chunks)
-                    .where(self.chunks.c.parent_doc_id == doc_id)
-                    .order_by(self.chunks.c.chunk_index)
+                    .where(self.chunks.c.document_id == doc_id)
+                    .order_by(self.chunks.c.ordinal)
                 )
             ).mappings().all()
         return [self._row_to_chunk(r) for r in rows]
@@ -303,15 +367,10 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         self, filters: dict[str, Any], limit: int = 100
     ) -> list[Chunk]:
         stmt = select(self.chunks)
-        if "source_id" in filters:
-            stmt = stmt.where(
-                self.chunks.c.metadata["source_id"].as_string() == filters["source_id"]
-            )
-        if "source_type" in filters:
-            stmt = stmt.where(
-                self.chunks.c.metadata["source_type"].as_string()
-                == filters["source_type"]
-            )
+        if "source_id" in filters:  # source_id is the document_id under §8
+            stmt = stmt.where(self.chunks.c.document_id == filters["source_id"])
+        if "license_class" in filters:
+            stmt = stmt.where(self.chunks.c.license_class == filters["license_class"])
         async with self.engine.connect() as conn:
             rows = (await conn.execute(stmt.limit(limit))).mappings().all()
         return [self._row_to_chunk(r) for r in rows]
@@ -369,89 +428,80 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
 
     async def document_facts(self, document_id: str) -> DocumentFacts:
         """Persisted-data facts (presence + chunk/embedding counts) for this document."""
-        src = self.documents.c.metadata["source_id"].as_string()
         async with self.engine.connect() as conn:
-            doc = (
-                await conn.execute(select(self.documents.c.id).where(src == document_id))
-            ).first()
-            if doc is None:
+            present = (
+                await conn.execute(
+                    select(self.documents.c.document_id)
+                    .where(self.documents.c.document_id == document_id)
+                )
+            ).first() is not None
+            if not present:
                 return DocumentFacts(present=False, chunk_count=0, embedding_count=0)
-            doc_id = doc[0]
             chunk_count = (
                 await conn.execute(
                     select(func.count())
                     .select_from(self.chunks)
-                    .where(self.chunks.c.parent_doc_id == doc_id)
+                    .where(self.chunks.c.document_id == document_id)
                 )
             ).scalar_one()
             embedding_count = (
                 await conn.execute(
                     select(func.count())
                     .select_from(self.embeddings)
-                    .join(self.chunks, self.embeddings.c.chunk_id == self.chunks.c.id)
-                    .where(self.chunks.c.parent_doc_id == doc_id)
+                    .join(self.chunks, self.embeddings.c.chunk_id == self.chunks.c.chunk_id)
+                    .where(self.chunks.c.document_id == document_id)
                 )
             ).scalar_one()
         return DocumentFacts(True, chunk_count, embedding_count)
 
     async def documents_by_content_hash(self, content_hash: str) -> list[str]:
-        """Public document_ids (== source_id) whose stored content_hash matches — content dedup."""
-        src = self.documents.c.metadata["source_id"].as_string()
+        """Public document_ids whose stored content_hash matches — content dedup."""
         async with self.engine.connect() as conn:
             rows = (
                 await conn.execute(
-                    select(src).where(self.documents.c.content_hash == content_hash)
+                    select(self.documents.c.document_id)
+                    .where(self.documents.c.content_hash == content_hash)
                 )
             ).all()
         return [r[0] for r in rows]
 
     async def delete_document(self, document_id: str) -> bool:
-        """Delete the document (by source_id) and its chunks; embeddings cascade off the chunks.
-        Returns True if the document existed."""
-        src = self.documents.c.metadata["source_id"].as_string()
+        """Delete the document; its chunks (and their embeddings) cascade off the FKs. Returns
+        True if the document existed."""
         async with self.engine.begin() as conn:
-            row = (
-                await conn.execute(select(self.documents.c.id).where(src == document_id))
-            ).first()
-            if row is None:
-                return False
-            doc_pk = row[0]
-            # Drop chunks explicitly (ON DELETE CASCADE removes their embeddings), then the doc.
-            await conn.execute(
-                self.chunks.delete().where(self.chunks.c.parent_doc_id == doc_pk)
+            res = await conn.execute(
+                self.documents.delete().where(self.documents.c.document_id == document_id)
             )
-            await conn.execute(self.documents.delete().where(self.documents.c.id == doc_pk))
-        return True
+        return res.rowcount > 0
 
     async def list_documents(self) -> list[dict[str, Any]]:
         """Inventory of all documents with chunk/embedding counts (three grouped queries — no
         per-document N+1)."""
-        src = self.documents.c.metadata["source_id"].as_string()
         async with self.engine.connect() as conn:
             docs = (
                 await conn.execute(
-                    select(self.documents.c.id, src, self.documents.c.content_hash)
+                    select(self.documents.c.document_id, self.documents.c.content_hash)
                 )
             ).all()
             chunk_counts = dict(
                 (
                     await conn.execute(
-                        select(self.chunks.c.parent_doc_id, func.count())
-                        .group_by(self.chunks.c.parent_doc_id)
+                        select(self.chunks.c.document_id, func.count())
+                        .group_by(self.chunks.c.document_id)
                     )
                 ).all()
             )
             embedding_counts = dict(
                 (
                     await conn.execute(
-                        select(self.chunks.c.parent_doc_id, func.count(self.embeddings.c.id))
+                        select(self.chunks.c.document_id, func.count(self.embeddings.c.id))
                         .select_from(
                             self.chunks.join(
                                 self.embeddings,
-                                self.embeddings.c.chunk_id == self.chunks.c.id,
+                                self.embeddings.c.chunk_id == self.chunks.c.chunk_id,
                             )
                         )
-                        .group_by(self.chunks.c.parent_doc_id)
+                        .group_by(self.chunks.c.document_id)
                     )
                 ).all()
             )
@@ -459,10 +509,10 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             {
                 "document_id": document_id,
                 "content_hash": content_hash,
-                "chunk_count": chunk_counts.get(doc_pk, 0),
-                "embedding_count": embedding_counts.get(doc_pk, 0),
+                "chunk_count": chunk_counts.get(document_id, 0),
+                "embedding_count": embedding_counts.get(document_id, 0),
             }
-            for doc_pk, document_id, content_hash in docs
+            for document_id, content_hash in docs
         ]
 
     async def document_status(self, document_id: str) -> dict[str, Any] | None:
@@ -473,54 +523,52 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     # ---------------- shared helpers ----------------
 
     async def _upsert_document(self, conn: AsyncConnection, values: dict) -> str:
-        """Upsert on metadata['source_id']: update if present, else insert. Portable
-        (no dialect ON CONFLICT); the UNIQUE source_id index is the safety net.
-        Returns the (existing) document id so chunks resolve parent_doc_id."""
-        source_id = (values.get("metadata") or {}).get("source_id")
-        if source_id is not None:
-            src = self.documents.c.metadata["source_id"].as_string()
-            existing = (
-                await conn.execute(
-                    select(self.documents.c.id).where(src == source_id)
-                )
-            ).scalar()
-            if existing is not None:
-                await conn.execute(
-                    update(self.documents)
-                    .where(self.documents.c.id == existing)
-                    .values(
-                        content=values["content"],
-                        metadata=values["metadata"],
-                        content_hash=values.get("content_hash"),
-                    )
-                )
-                return existing
-        await conn.execute(insert(self.documents).values(**values))
-        return values["id"]
+        """Upsert on the ``document_id`` primary key (portable: update, else insert). Returns
+        the document_id so chunks resolve their FK."""
+        document_id = values["document_id"]
+        res = await conn.execute(
+            update(self.documents)
+            .where(self.documents.c.document_id == document_id)
+            .values({k: v for k, v in values.items() if k != "document_id"})
+        )
+        if res.rowcount == 0:
+            await conn.execute(insert(self.documents).values(**values))
+        return document_id
 
     def _doc_values(self, doc: Document) -> dict:
+        """Map a Document DTO to §8 document columns — provenance read from its metadata bag with
+        safe defaults; the full ``content`` is kept Python-side."""
+        md = doc.metadata or {}
         return {
-            "id": doc.id or str(uuid.uuid4()),
+            "document_id": md.get("source_id") or doc.id or str(uuid.uuid4()),
             "content": doc.content,
-            "metadata": doc.metadata,
-            "content_hash": (doc.metadata or {}).get("content_hash"),
+            "title": md.get("title"),
+            "source_kind": md.get("source_kind") or "document",
+            "standard_id": md.get("standard_id"),
+            "doc_version": md.get("doc_version"),
+            "license_class": md.get("license_class") or "public_domain",
+            "content_hash": md.get("content_hash"),
         }
 
     async def _insert_chunks(
-        self, conn: AsyncConnection, parent_doc_id: str | None, chunks: list[Chunk]
+        self, conn: AsyncConnection, document_id: str | None, chunks: list[Chunk]
     ) -> list[str]:
         rows, ids = [], []
         for ch in chunks:
             cid = ch.id or str(uuid.uuid4())
             ids.append(cid)
+            md = ch.metadata or {}
             rows.append(
                 {
-                    "id": cid,
-                    "parent_doc_id": parent_doc_id or ch.parent_doc_id,
-                    "content": ch.content,
-                    "chunk_index": ch.chunk_index,
-                    "total_chunks": ch.total_chunks,
-                    "metadata": ch.metadata,
+                    "chunk_id": cid,
+                    "document_id": document_id or ch.parent_doc_id,
+                    "ordinal": ch.chunk_index,
+                    "text": ch.content,
+                    "locator": md.get("locator"),
+                    "license_class": md.get("license_class") or "public_domain",
+                    "ai_grounding_allowed": int(md.get("ai_grounding_allowed", 1)),
+                    "available": int(md.get("available", 1)),
+                    "content_hash": hashlib.sha256(ch.content.encode("utf-8")).hexdigest(),
                 }
             )
         if rows:
@@ -529,13 +577,35 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
 
     def _row_to_chunk(self, r) -> Chunk:
         return Chunk(
-            id=r["id"],
-            parent_doc_id=r["parent_doc_id"],
-            content=r["content"],
-            chunk_index=r["chunk_index"],
-            total_chunks=r["total_chunks"],
-            metadata=r["metadata"],
+            id=r["chunk_id"],
+            parent_doc_id=r["document_id"],
+            content=r["text"],
+            chunk_index=r["ordinal"],
+            total_chunks=0,  # not stored in §8 (derive from a count if ever needed)
+            metadata=self._chunk_metadata(r),
         )
 
-    def _pick(self, r, model) -> dict:
-        return {k: r[k] for k in model.model_fields if k in r}
+    @staticmethod
+    def _doc_metadata(r) -> dict[str, Any]:
+        """Reconstruct a metadata dict from §8 document columns (for the Document DTO)."""
+        return {
+            "source_id": r["document_id"],
+            "title": r["title"],
+            "source_kind": r["source_kind"],
+            "standard_id": r["standard_id"],
+            "doc_version": r["doc_version"],
+            "license_class": r["license_class"],
+            "content_hash": r["content_hash"],
+        }
+
+    @staticmethod
+    def _chunk_metadata(r) -> dict[str, Any]:
+        """Reconstruct a metadata dict from §8 chunk columns (for the Chunk DTO)."""
+        return {
+            "source_id": r["document_id"],
+            "locator": r["locator"],
+            "license_class": r["license_class"],
+            "ai_grounding_allowed": r["ai_grounding_allowed"],
+            "available": r["available"],
+            "content_hash": r["content_hash"],
+        }

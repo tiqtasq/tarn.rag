@@ -38,10 +38,7 @@ class PostgresRepository(DocumentRepository):
         await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
     async def _after_create_schema(self, conn: AsyncConnection) -> None:
-        await conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_id "
-            "ON documents ((metadata->>'source_id'))"
-        )
+        # document_id is the documents PK (already unique); only the pgvector ANN index remains.
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS idx_embeddings_vector "
             "ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100)"
@@ -61,7 +58,7 @@ class PostgresRepository(DocumentRepository):
         dist = self.embeddings.c.vector.cosine_distance(vector)
         stmt = (
             select(self.chunks, (1 - dist).label("similarity"))
-            .join(self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.id)
+            .join(self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.chunk_id)
             .order_by(dist)
             .limit(k)
         )

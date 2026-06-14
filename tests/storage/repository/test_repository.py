@@ -1,6 +1,6 @@
 import pytest
+from sqlalchemy.exc import IntegrityError
 
-from tarnrag.core.exceptions import ChunkNotFoundError
 from tarnrag.storage.models import Chunk, Document, Embedding
 from tarnrag.storage.repository.sqlite import SqliteRepository
 
@@ -70,17 +70,16 @@ async def test_embeddings_and_vector_search(repo):
     assert top_sim > second_sim
 
 
-async def test_update_chunk_metadata(repo):
+async def test_update_chunk_metadata_is_noop(repo):
+    # §8 chunks carry no metadata column — update_chunk_metadata is a harmless no-op
+    # (enrichment is not persisted; the metadata bag is deferred).
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
-        [_chunk("a", 0, 1, k=1)],
+        [_chunk("a", 0, 1)],
     )
-    await repo.update_chunk_metadata(cid, {"k": 2, "extra": "x"})
-    ch = await repo.get_chunk(cid)
-    assert ch.metadata["k"] == 2 and ch.metadata["extra"] == "x"
-
-    with pytest.raises(ChunkNotFoundError):
-        await repo.update_chunk_metadata("missing", {"a": 1})
+    await repo.update_chunk_metadata(cid, {"k": 2})       # does not raise, stores nothing
+    await repo.update_chunk_metadata("missing", {"k": 2})  # also a no-op for unknown ids
+    assert "k" not in (await repo.get_chunk(cid)).metadata
 
 
 async def test_document_status_and_jobs(repo):
@@ -169,3 +168,23 @@ async def test_store_document_is_atomic(repo, monkeypatch):
 
     # The upsert to "B" shared the same transaction, so it was rolled back: still "A".
     assert (await repo.get_document(doc_id)).content == "A"
+
+
+async def test_license_class_enum_is_enforced(repo):
+    # license_class is a closed §8 enum guarded by a CHECK constraint.
+    with pytest.raises(IntegrityError):
+        await repo.store_document(
+            Document(content="d", metadata={"source_id": "s1", "license_class": "bogus"})
+        )
+
+
+async def test_index_meta_round_trip(repo):
+    assert await repo.index_meta() == {}  # empty before anything is written
+    await repo.write_index_meta({"schema_version": "1", "embedding_config_fingerprint": "fp-1"})
+    assert await repo.index_meta() == {
+        "schema_version": "1", "embedding_config_fingerprint": "fp-1",
+    }
+    # Upsert: re-writing a key updates it in place (no duplicate row).
+    await repo.write_index_meta({"schema_version": "2"})
+    meta = await repo.index_meta()
+    assert meta["schema_version"] == "2" and meta["embedding_config_fingerprint"] == "fp-1"
