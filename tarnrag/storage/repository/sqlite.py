@@ -19,43 +19,6 @@ from tarnrag.storage.models import Chunk
 from tarnrag.storage.repository.base import DocumentRepository
 
 
-def _load_sqlite_vec(dbapi_connection) -> None:  # noqa: ANN001
-    """
-    Load the sqlite-vec extension onto a freshly-opened connection (called from the
-    per-connection ``connect`` event), so vec0 dense-KNN is available on every connection.
-
-    Why this reaches a **private aiosqlite attribute** (``._conn``)
-    --------------------------------------------------------------
-    Loading a SQLite loadable extension needs the C-API calls
-    ``conn.enable_load_extension(True)`` / ``conn.load_extension(path)`` on the **real,
-    synchronous** ``sqlite3.Connection``. Neither layer above us offers that synchronously:
-
-    * ``dbapi_connection`` here is SQLAlchemy's async adapter
-      (``AsyncAdapt_aiosqlite_connection``) — it does **not** expose ``enable_load_extension``.
-    * ``dbapi_connection.driver_connection`` is the ``aiosqlite.Connection`` (public SQLAlchemy
-      API), but aiosqlite's ``enable_load_extension`` / ``load_extension`` are **async**
-      coroutines — unusable from this *synchronous* ``connect`` event.
-
-    So we descend one more level, to the ``sqlite3.Connection`` that aiosqlite wraps, and load on
-    it directly. aiosqlite opens that connection with ``check_same_thread=False``, so calling its
-    sync methods from this hook is safe::
-
-        dbapi_connection                  # AsyncAdapt_aiosqlite_connection  (SQLAlchemy adapter)
-            .driver_connection            # aiosqlite.Connection             (public SQLAlchemy API)
-            ._conn                        # sqlite3.Connection               (PRIVATE aiosqlite attr) <-- here
-
-    ``._conn`` is a **private aiosqlite attribute** and is therefore the single fragile point of
-    this integration: an aiosqlite-internal rename would silently break extension loading. It is
-    guarded by ``tests/storage/test_sqlite_vec_under_aiosqlite.py``, which fails loudly if the
-    path changes. If aiosqlite ever exposes a public *sync* accessor (or SQLAlchemy gains an
-    async ``connect`` hook), switch to it and delete this note.
-    """
-    raw_sqlite3_connection = dbapi_connection.driver_connection._conn  # PRIVATE aiosqlite attr
-    raw_sqlite3_connection.enable_load_extension(True)
-    sqlite_vec.load(raw_sqlite3_connection)
-    raw_sqlite3_connection.enable_load_extension(False)
-
-
 class SqliteRepository(DocumentRepository):
     """
     SQLite adapter; vectors as JSON, in-memory cosine search.
@@ -74,7 +37,44 @@ class SqliteRepository(DocumentRepository):
             # Load sqlite-vec so vec0 KNN is available on every connection (see
             # ``_load_sqlite_vec`` for the ``._conn`` rationale). This is the foundation for
             # folding the §8 retrieval index into this repository.
-            _load_sqlite_vec(dbapi_connection)
+            self._load_sqlite_vec(dbapi_connection)
+
+    @staticmethod
+    def _load_sqlite_vec(dbapi_connection) -> None:  # noqa: ANN001
+        """
+        Load the sqlite-vec extension onto a freshly-opened connection (called from the
+        per-connection ``connect`` event), so vec0 dense-KNN is available on every connection.
+
+        Why this reaches a **private aiosqlite attribute** (``._conn``)
+        --------------------------------------------------------------
+        Loading a SQLite loadable extension needs the C-API calls
+        ``conn.enable_load_extension(True)`` / ``conn.load_extension(path)`` on the **real,
+        synchronous** ``sqlite3.Connection``. Neither layer above us offers that synchronously:
+
+        * ``dbapi_connection`` here is SQLAlchemy's async adapter
+          (``AsyncAdapt_aiosqlite_connection``) — it does **not** expose ``enable_load_extension``.
+        * ``dbapi_connection.driver_connection`` is the ``aiosqlite.Connection`` (public SQLAlchemy
+          API), but aiosqlite's ``enable_load_extension`` / ``load_extension`` are **async**
+          coroutines — unusable from this *synchronous* ``connect`` event.
+
+        So we descend one more level, to the ``sqlite3.Connection`` that aiosqlite wraps, and load
+        on it directly. aiosqlite opens that connection with ``check_same_thread=False``, so calling
+        its sync methods from this hook is safe::
+
+            dbapi_connection                  # AsyncAdapt_aiosqlite_connection  (SQLAlchemy adapter)
+                .driver_connection            # aiosqlite.Connection             (public SQLAlchemy API)
+                ._conn                        # sqlite3.Connection               (PRIVATE aiosqlite attr) <-- here
+
+        ``._conn`` is a **private aiosqlite attribute** and is therefore the single fragile point
+        of this integration: an aiosqlite-internal rename would silently break extension loading.
+        It is guarded by ``tests/storage/test_sqlite_vec_under_aiosqlite.py``, which fails loudly
+        if the path changes. If aiosqlite ever exposes a public *sync* accessor (or SQLAlchemy
+        gains an async ``connect`` hook), switch to it and delete this note.
+        """
+        raw_sqlite3_connection = dbapi_connection.driver_connection._conn  # PRIVATE aiosqlite attr
+        raw_sqlite3_connection.enable_load_extension(True)
+        sqlite_vec.load(raw_sqlite3_connection)
+        raw_sqlite3_connection.enable_load_extension(False)
 
     async def connect(self) -> None:
         # SQLite won't create the parent directory — ensure it exists (no-op for in-memory).
