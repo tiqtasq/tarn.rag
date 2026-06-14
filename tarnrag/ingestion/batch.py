@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from tarnrag.ingestion.models import Batch
+from tarnrag.ingestion.jobs import Batch
 from tarnrag.ingestion.pipeline import PipelineStage
 
 

@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tarnrag.storage.models import Chunk, Document, Embedding
+from tarnrag.contracts import Chunk, Document, Embedding
 from tarnrag.storage.repository.sqlite import SqliteRepository
 
 

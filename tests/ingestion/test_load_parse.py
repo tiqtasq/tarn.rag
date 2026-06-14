@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
 
 # A tiny real PDF whose only text is "Quokka ingestion smoke 7" (committed fixture).

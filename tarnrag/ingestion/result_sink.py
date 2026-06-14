@@ -16,8 +16,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from tarnrag.storage.chunk_store import ChunkStore
-from tarnrag.storage.models import Chunk, Document
+from tarnrag.contracts import ChunkStore
+from tarnrag.contracts import Chunk, Document
 
 
 @dataclass

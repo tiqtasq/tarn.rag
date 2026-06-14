@@ -13,7 +13,7 @@ import asyncio
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 
-from tarnrag.ingestion.models import Batch, IngestionJob
+from tarnrag.ingestion.jobs import Batch, IngestionJob
 
 ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the consumer forms homogeneous Batches
 

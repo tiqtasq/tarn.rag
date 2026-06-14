@@ -7,7 +7,7 @@ the expected metrics/logs appear. Stages remain pure — they get no obs.
 import pytest
 
 from tarnrag.core.observability import Observability
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import PipelineStage
 from tarnrag.ingestion.queue import InMemoryJobQueue

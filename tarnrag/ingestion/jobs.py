@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 
 
 class IngestionJob(BaseModel):

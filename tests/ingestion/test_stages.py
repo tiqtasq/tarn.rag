@@ -1,6 +1,6 @@
 import pytest
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.pipeline import Pipeline
 from tarnrag.ingestion.stages.chunk import ChunkStage
 from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage

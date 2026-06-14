@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tarnrag.storage.models import PipelineItem
-from tarnrag.ingestion.models import Batch, IngestionJob
+from tarnrag.contracts import PipelineItem
+from tarnrag.ingestion.jobs import Batch, IngestionJob
 
 
 def _job(job_id: str, stage_name: str) -> IngestionJob:

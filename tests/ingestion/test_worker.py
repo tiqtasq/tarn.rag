@@ -2,9 +2,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.batch import BatchContext, BatchCoordinator
-from tarnrag.ingestion.models import IngestionJob
+from tarnrag.ingestion.jobs import IngestionJob
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import PipelineStage
 from tarnrag.ingestion.queue import InMemoryJobQueue

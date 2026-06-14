@@ -1,7 +1,7 @@
-"""Shared Pydantic models for ingestion and (future) retrieval.
+"""Cross-boundary data contracts (DTOs).
 
-These four models are TWO FORMS of the things being ingested — not four unrelated
-types, and not an inheritance hierarchy:
+At the core are four models that are TWO FORMS of the things being ingested — not four
+unrelated types, and not an inheritance hierarchy:
 
 * IN-FLIGHT form -> ``PipelineItem``. The single, uniform type that flows between
   stages. A *document* (at Load/Clean) and a *chunk* (at Chunk/Enrich/Embed) are
@@ -35,8 +35,15 @@ and diverges (``Chunk`` adds FKs, ``Embedding`` has no content) — hence no sha
 or inheritance. The relations that DO hold are composition (``Chunk.parent_doc_id`` ->
 ``Document``, ``Embedding.chunk_id`` -> ``Chunk``) and transformation (a sink maps a
 ``PipelineItem`` into a DTO) — expressed by fields and functions, not a hierarchy.
+
+Two small value records round out the module: ``DocumentFacts`` (a document's presence +
+chunk/embedding counts, the facts port's return type) and ``MethodRef`` (a reference to an
+indexed method, used in both queries and results).
 """
 
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -102,3 +109,25 @@ class Embedding(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+
+@dataclass(frozen=True)
+class DocumentFacts:
+    """
+    Persisted-data facts for one document: whether its row exists, and how many
+    chunks/embeddings it has.
+    """
+
+    present: bool  # the document row exists in the data store
+    chunk_count: int
+    embedding_count: int
+
+
+@dataclass(frozen=True)
+class MethodRef:
+    """
+    Reference to an indexed method — id plus optional version (``None`` → latest in the index).
+    """
+
+    method_id: str
+    method_version: str | None = None  # None → latest in the index

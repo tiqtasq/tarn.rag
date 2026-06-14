@@ -1,9 +1,11 @@
-"""Retrieval public types (ModusQ spec §5.1 / §5.8)."""
+"""Retrieval query types (ModusQ spec §5.1). Result types live in ``tarnrag.contracts``."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
+
+from tarnrag.contracts import MethodRef
 
 
 class Purpose(str, Enum):
@@ -14,16 +16,6 @@ class Purpose(str, Enum):
     EXECUTION = "EXECUTION"
     AUTHORING = "AUTHORING"
     GENERATION_GROUNDING = "GENERATION_GROUNDING"
-
-
-@dataclass(frozen=True)
-class MethodRef:
-    """
-    Reference to an indexed method — id plus optional version (``None`` → latest in the index).
-    """
-
-    method_id: str
-    method_version: str | None = None  # None → latest in the index
 
 
 # Sentinel for "no scope restriction" (whole index).
@@ -43,21 +35,3 @@ class Query:
     top_k: int = 8
     dense_k: int = 50
     sparse_k: int = 50  # used in Step B (sparse retriever)
-
-
-@dataclass(frozen=True)
-class RetrievalResult:
-    """
-    One ranked hit: chunk text + fused score + per-component scores + provenance/licensing.
-    """
-
-    chunk_id: str
-    text: str
-    score: float
-    component_scores: dict[str, float]
-    document_id: str
-    source_kind: str
-    standard_id: str | None
-    locator: str | None
-    license_class: str
-    methods: list[MethodRef] = field(default_factory=list)
