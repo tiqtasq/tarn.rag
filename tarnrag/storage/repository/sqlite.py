@@ -1,7 +1,20 @@
-"""SQLite adapter (SQLAlchemy Core + aiosqlite).
+"""
+SQLite adapter (SQLAlchemy Core + aiosqlite) — also the §8 retrieval store.
 
-Vectors are stored as JSON text and searched with in-memory cosine similarity —
-fine for development and small-scale use, not for production-scale retrieval.
+The normal §8 tables (documents / chunks / method_chunks / index_meta) are SQLAlchemy ``Table``s
+defined in the base; the dense + sparse retrieval indexes are SQLite-extension **virtual tables**:
+``vec_chunks`` (sqlite-vec, dense KNN) and ``fts_chunks`` (FTS5, sparse).
+
+Those virtual-table operations are intentionally **raw SQL** (``exec_driver_sql``), not SQLAlchemy
+Core, for two reasons:
+
+* SQLAlchemy doesn't model virtual tables — no ``Table`` emits ``CREATE VIRTUAL TABLE ... USING
+  ...`` (true of built-in FTS5, not just the proprietary sqlite-vec).
+* The KNN query uses sqlite-vec's proprietary ``MATCH`` operator + synthetic ``distance`` column,
+  which has no SQLAlchemy expression.
+
+A few statements that touch only the normal tables (e.g. ``hydrate``'s join, the ``chunk_id``
+lookups) are kept raw too, deliberately, so the whole sqlite-vec/FTS layer reads as one block.
 """
 
 from __future__ import annotations
@@ -21,7 +34,8 @@ from tarnrag.storage.retrieval import Candidate, ChunkRecord
 
 class SqliteRepository(DocumentRepository):
     """
-    SQLite adapter; vectors as JSON, in-memory cosine search.
+    SQLite adapter and the §8 retrieval store: dense vectors in ``vec_chunks`` (sqlite-vec) and
+    sparse text in ``fts_chunks`` (FTS5). See the module docstring for why that layer is raw SQL.
     """
 
     def __init__(self, connection_url: str, embedding_dimension: int = 384):
@@ -144,7 +158,8 @@ class SqliteRepository(DocumentRepository):
 
     async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
         """
-        Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first.
+        Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first. Raw SQL: ``MATCH`` and the
+        synthetic ``distance`` column are sqlite-vec's proprietary query API (see module docstring).
         """
         q = sqlite_vec.serialize_float32(query_vec)
         async with self.engine.connect() as conn:
