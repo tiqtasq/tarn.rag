@@ -252,7 +252,7 @@ class IngestionEngine:
             for r in await self._facts_source.list_documents()
         ]
 
-    async def delete(self, document_id: str) -> bool:
+    async def delete_document(self, document_id: str) -> bool:
         """Delete a document and everything derived from it — chunks, embeddings, retrieval-index
         rows, and its job-status records. Returns True if the document was known (had data or
         in-flight jobs), False if there was nothing to delete.

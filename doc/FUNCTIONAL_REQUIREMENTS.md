@@ -565,7 +565,7 @@ never leak into the contract.
 - `status(document_id)` → `DocumentStatus` (`pending | in_progress | complete | failed` + chunk /
   embedding counts), or `None` if unknown — the single source of truth for state.
 - `list_documents()` → `list[DocumentSummary]` (id, `content_hash`, chunk/embedding counts) — the
-  inventory of everything ingested. `delete(document_id)` → removes the document and all its derived
+  inventory of everything ingested. `delete_document(document_id)` → removes the document and all its derived
   data (chunks, embeddings, retrieval-index rows) plus its job-status records; returns whether it
   existed (idempotent).
 - `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless

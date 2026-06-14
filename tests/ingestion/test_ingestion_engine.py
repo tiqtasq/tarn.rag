@@ -263,14 +263,14 @@ async def test_delete_removes_document_data_and_status(repo):
     await queue.run()
     assert (await engine.status("d1")).status == "complete"
 
-    assert await engine.delete("d1") is True
+    assert await engine.delete_document("d1") is True
     assert await engine.status("d1") is None  # data + job_status both gone
     assert await engine.find_by_content_hash(engine.content_hash(text.encode("utf-8"))) == []
 
 
 async def test_delete_unknown_document_returns_false(repo):
     engine, _ = _wire(repo)
-    assert await engine.delete("nope") is False
+    assert await engine.delete_document("nope") is False
 
 
 async def test_delete_clears_pending_jobs(repo):
@@ -278,7 +278,7 @@ async def test_delete_clears_pending_jobs(repo):
     engine, _ = _wire(repo, policy="caller")
     await engine.ingest_content([{"content": "x " * 20, "source_id": "p1"}])  # not drained
     assert (await engine.status("p1")).status == "pending"
-    assert await engine.delete("p1") is True
+    assert await engine.delete_document("p1") is True
     assert await engine.status("p1") is None
 
 
@@ -297,7 +297,7 @@ async def test_list_documents_inventory(repo):
     assert docs["a"].content_hash == engine.content_hash(("alpha " * 20).encode("utf-8"))
 
     # delete drops it from the inventory.
-    assert await engine.delete("a") is True
+    assert await engine.delete_document("a") is True
     assert {d.document_id for d in await engine.list_documents()} == {"b"}
 
 
@@ -316,7 +316,7 @@ async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
 
     monkeypatch.setattr(repo, "delete_document", boom)
     with pytest.raises(RuntimeError, match="data store down"):
-        await engine.delete("d1")
+        await engine.delete_document("d1")
 
     # Consistent residue: the document is still fully present, not a ghost.
     assert (await engine.status("d1")).status == "complete"
@@ -324,7 +324,7 @@ async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
 
     # Retry (data store healthy again) completes the delete.
     monkeypatch.undo()
-    assert await engine.delete("d1") is True
+    assert await engine.delete_document("d1") is True
     assert await engine.status("d1") is None
 
 

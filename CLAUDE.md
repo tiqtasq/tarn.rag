@@ -41,7 +41,7 @@ ids = await engine.ingest_paths(["/data/spec.pdf"])  # -> list[str]; also ingest
 #       ...                                          # these exact bytes are already ingested
 st = await engine.status(ids[0])                     # -> DocumentStatus
 docs = await engine.list_documents()                 # -> list[DocumentSummary] (id, content_hash, counts)
-await engine.delete(ids[0])                           # remove a doc + its chunks/embeddings/jobs
+await engine.delete_document(ids[0])                 # remove a doc + its chunks/embeddings/jobs
 await engine.aclose()                                # or: async with await IngestionEngine.create() as engine: ...
 
 # Retrieval (sync; reads the §8 index ingestion built):
@@ -139,7 +139,7 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   document also stores a `content_hash` column (sha256 of submitted content); `find_by_content_hash`
   queries it for content dedup, independent of identity. `list_documents` (inventory + counts) and
   `delete_document` round out the document admin surface; `delete_document_jobs` clears the
-  job-status rows (the engine's `delete()` does both).
+  job-status rows (the engine's `delete_document()` does both).
 - **Two databases.** `settings.database.queue_url` (pgQueuer) is separate from
   `settings.database.document_url` (document/chunk/embedding storage). Never conflate them.
 - **Observability is optional.** Core logic must work with `observability=None`; `NoOpObservability`
