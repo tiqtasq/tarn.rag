@@ -116,19 +116,6 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         """Inverse of _encode_vector when reading rows back."""
 
     @abstractmethod
-    async def vector_search(
-        self,
-        vector: list[float],
-        k: int = 10,
-        model: str | None = None,
-        filters: dict[str, Any] | None = None,
-    ) -> list[tuple[Chunk, float]]:
-        """
-        Legacy top-k dense search returning ``(Chunk, similarity)`` — pgvector on Postgres,
-        sqlite-vec on SQLite. The §8 retrieval path uses ``dense_knn`` + ``hydrate`` instead.
-        """
-
-    @abstractmethod
     async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
         """
         §8 dense retrieval: the nearest ``k`` chunks to ``query_vec`` as ranked ``Candidate``s

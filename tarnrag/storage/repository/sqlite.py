@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import sqlite_vec
 from sqlalchemy import Text, event
@@ -123,24 +122,6 @@ class SqliteRepository(DocumentRepository):
 
     def _decode_vector(self, stored) -> list[float]:
         return json.loads(stored)
-
-    async def vector_search(
-        self,
-        vector: list[float],
-        k: int = 10,
-        model: str | None = None,
-        filters: dict[str, Any] | None = None,
-    ) -> list[tuple[Chunk, float]]:
-        """
-        Top-k by sqlite-vec dense KNN over ``vec_chunks``, mapped to the ``(Chunk, similarity)``
-        shape (similarity = -distance, so nearest ranks highest).
-        """
-        results: list[tuple[Chunk, float]] = []
-        for cand in await self.dense_knn(vector, k):
-            chunk = await self.get_chunk(cand.chunk_id)
-            if chunk is not None:
-                results.append((chunk, -cand.raw_score))
-        return results
 
     async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
         """

@@ -257,12 +257,12 @@ class IngestionEngine:
         rows, and its job-status records. Returns True if the document was known (had data or
         in-flight jobs), False if there was nothing to delete.
 
-        This spans **two independent stores** (the document data store and the job_status
-        projection — separate databases in any real deployment), so it can't be one transaction.
-        Each call is individually atomic; they run **job-status-first** on purpose, so a failure
-        partway leaves a *consistent* residue — the document stays fully present (its status and
-        inventory unchanged), losing only debug job rows, never a 'ghost' status pointing at
-        deleted data. It is idempotent: a retry completes the delete and heals any residue."""
+        It deletes through **two narrow ports** (the data store and the job_status projection) as
+        two separate calls — so although both now resolve to the one repository, it is not a single
+        transaction. Each call is individually atomic; they run **job-status-first** on purpose, so
+        a failure partway leaves a *consistent* residue — the document stays fully present (its
+        status and inventory unchanged), losing only debug job rows, never a 'ghost' status pointing
+        at deleted data. It is idempotent: a retry completes the delete and heals any residue."""
         # job_status first (operational exhaust). If the data delete then fails, the document is
         # left intact and consistent rather than gone-with-a-stale-status; a retry finishes it.
         removed_jobs = await self.repository.delete_document_jobs(document_id)

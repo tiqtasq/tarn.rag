@@ -58,8 +58,8 @@ async def test_embedding_sink_persists(repo):
     )
     emb = Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)
     assert (await _finalize(EmbeddingResultSink(repo), [emb])).persisted
-    results = await repo.vector_search([1.0, 0.0, 0.0], k=1)
-    assert results[0][0].id == cid
+    cands = await repo.dense_knn([1.0, 0.0, 0.0], k=1)
+    assert cands[0].chunk_id == cid
 
 
 async def test_passthrough_persists_nothing(repo):

@@ -302,9 +302,9 @@ async def test_list_documents_inventory(repo):
 
 
 async def test_delete_partial_failure_stays_consistent(repo, monkeypatch):
-    """delete() spans two stores and can't be cross-atomic. If the data delete fails after the
-    job-status delete succeeds, the document is left fully present (consistent), and a retry
-    completes the delete — no 'ghost' status pointing at deleted data."""
+    """delete() runs two separate calls (data + job_status) and isn't cross-atomic. If the data
+    delete fails after the job-status delete succeeds, the document is left fully present
+    (consistent), and a retry completes the delete — no 'ghost' status pointing at deleted data."""
     engine, queue = _wire(repo, policy="caller")
     await engine.ingest_content([{"content": "hello world " * 10, "source_id": "d1"}])
     await queue.run()

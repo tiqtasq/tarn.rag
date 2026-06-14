@@ -45,9 +45,9 @@ IngestionWorker(s) (registered handlers; compute only, parallel)
     ↓
 PipelineStages (load → clean → chunk → enrich → embed)
     ↓
-§8 SqliteIndexStore (vectors)  +  DocumentRepository (job_status)
+DocumentRepository (§8 index + job_status — one store)
     ↓
-RetrievalEngine.create() → search → ranked, provenance-bearing results
+RetrievalEngine.create() → await search → ranked, provenance-bearing results
 ```
 
 ---
@@ -168,13 +168,14 @@ tarn.rag/
 │   │
 │   ├── storage/                                 # persistence layer
 │   │   ├── models.py                            # Document, Chunk, Embedding, PipelineItem
-│   │   ├── chunk_store.py                       # ChunkStore ABC (repo + index implement it)
-│   │   ├── index_store.py                       # SqliteIndexStore (§8 index: sqlite-vec + FTS5)
+│   │   ├── chunk_store.py                       # ChunkStore ABC (the repository implements it)
+│   │   ├── index_meta.py                        # §8 build/identity record (schema + fingerprint)
+│   │   ├── retrieval.py                         # Candidate / ChunkRecord (dense_knn + hydrate types)
 │   │   ├── status.py                            # DocumentStatusReader (job_status + facts ports)
 │   │   └── repository/
-│   │       ├── base.py                          # DocumentRepository (SQLAlchemy Core, async)
+│   │       ├── base.py                          # DocumentRepository (SQLAlchemy Core, async; §8 index)
 │   │       ├── postgres.py                      # PostgreSQL (pgvector) dialect
-│   │       └── sqlite.py                        # SQLite dialect
+│   │       └── sqlite.py                        # SQLite (sqlite-vec/FTS5) dialect
 │   │
 │   ├── ingestion/
 │   │   ├── engine.py                            # IngestionEngine facade + run_worker()
@@ -280,8 +281,8 @@ CRUD: `store_document` (upsert on `source_id`, then delete the doc's chunks → 
 re-ingest), `store_document_with_chunks`, `store_chunks`, `store_embeddings`,
 `update_chunk_metadata`, `delete_document` (drops the doc + chunks → embeddings cascade),
 reads (`get_document` / `get_chunk` / `get_chunks_by_document` / `query_chunks`),
-`list_documents` (inventory + counts), `documents_by_content_hash`, abstract `vector_search`,
-and the document-status projection
+`list_documents` (inventory + counts), `documents_by_content_hash`, the §8 retrieval reads
+(abstract `dense_knn` / `hydrate`), and the document-status projection
 (`record_job`, `document_jobs`, `delete_document_jobs`, `document_status`).
 
 **Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic);
@@ -291,18 +292,19 @@ and replaces its chunks/embeddings (cascade) — never duplicates. Each document
 content dedup, independent of the source_id identity.
 
 **Dialect hooks (adapters):** `_driver_url`, `_vector_type`, `_encode_vector` /
-`_decode_vector`, `vector_search`, and `_before_/_after_create_schema`.
-- **Postgres** — asyncpg driver + `pgvector` (real `<=>` cosine search); creates the
-  `vector` extension before tables and the ivfflat + `source_id`-unique indexes after.
-- **SQLite** — aiosqlite driver; vectors stored as JSON, in-memory numpy cosine
-  (dev/small-scale); enables `PRAGMA foreign_keys=ON` per connection (for cascade).
+`_decode_vector`, `dense_knn` / `hydrate`, and `_before_/_after_create_schema`.
+- **Postgres** — asyncpg driver + `pgvector` (`<=>` cosine for `dense_knn`); creates the
+  `vector` extension before tables and the ivfflat index after.
+- **SQLite** — aiosqlite driver; dense vectors in `vec_chunks` (sqlite-vec) + sparse text in
+  `fts_chunks` (FTS5), the extension loaded per connection; enables `PRAGMA foreign_keys=ON`
+  per connection (for cascade).
 
 ### Database Schema
 
 The document/chunk/embedding tables are created from the SQLAlchemy `MetaData` in
 the repository base (`metadata.create_all`), and the dialect-only objects (pgvector
-extension, the `vector_cosine_ops` ivfflat index, and the `source_id` expression
-unique index) by each adapter's `_create_dialect_objects`. The DDL below is the
+extension and the `vector_cosine_ops` ivfflat index on Postgres; the `vec_chunks` /
+`fts_chunks` virtual tables on SQLite) by each adapter. The DDL below is the
 **equivalent reference** (also handy for `scripts/init_db*.sql`). The `job_status`
 table is the API's read-model; pgQueuer owns the real queue tables (its own migrations).
 
@@ -583,7 +585,7 @@ never leak into the contract.
 ## Configuration
 
 **`Settings`** (`tarnrag/core/config.py`, pydantic-settings; cached `get_settings()`). Config is
-**grouped into nested sub-models** — `settings.embedding`, `settings.chunking`, `settings.index`,
+**grouped into nested sub-models** — `settings.embedding`, `settings.chunking`,
 `settings.database`, `settings.worker`, `settings.observability` — read from env via the
 `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`). Cross-cutting
 `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR`, `ID_POLICY` (`uuid` | `caller` — how document ids are

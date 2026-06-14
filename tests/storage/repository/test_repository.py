@@ -52,24 +52,6 @@ async def test_document_with_chunks_and_idempotency(repo):
     assert (await repo.get_document(doc_id)).content == "updated"
 
 
-async def test_embeddings_and_vector_search(repo):
-    doc_id, (cid_a, cid_b) = await repo.store_document_with_chunks(
-        Document(content="d", metadata={"source_id": "s1"}),
-        [_chunk("a", 0, 2), _chunk("b", 1, 2)],
-    )
-    await repo.store_embeddings(
-        [
-            Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-            Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
-        ]
-    )
-    results = await repo.vector_search([0.9, 0.1, 0.0], k=2)
-    assert len(results) == 2
-    (top_chunk, top_sim), (_, second_sim) = results
-    assert top_chunk.id == cid_a  # closest to [1,0,0]
-    assert top_sim > second_sim
-
-
 async def test_update_chunk_metadata_is_noop(repo):
     # §8 chunks carry no metadata column — update_chunk_metadata is a harmless no-op
     # (enrichment is not persisted; the metadata bag is deferred).

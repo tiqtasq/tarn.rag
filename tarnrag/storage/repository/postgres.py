@@ -1,18 +1,15 @@
 """PostgreSQL adapter (SQLAlchemy Core + asyncpg + pgvector).
 
-Real vector search via the pgvector ``<=>`` cosine-distance operator. Requires the
+§8 dense retrieval (``dense_knn``) via the pgvector ``<=>`` cosine-distance operator. Requires the
 ``postgres`` extra (``asyncpg``, ``pgvector``); not imported on the SQLite path.
 """
 
 from __future__ import annotations
 
-from typing import Any
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection
 from pgvector.sqlalchemy import Vector
 
-from tarnrag.storage.models import Chunk
 from tarnrag.storage.repository.base import DocumentRepository
 from tarnrag.storage.retrieval import Candidate, ChunkRecord
 
@@ -44,30 +41,6 @@ class PostgresRepository(DocumentRepository):
             "CREATE INDEX IF NOT EXISTS idx_embeddings_vector "
             "ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100)"
         )
-
-    async def vector_search(
-        self,
-        vector: list[float],
-        k: int = 10,
-        model: str | None = None,
-        filters: dict[str, Any] | None = None,
-    ) -> list[tuple[Chunk, float]]:
-        """
-        Top-k by pgvector ``<=>`` cosine distance (returned as ``similarity = 1 - distance``),
-        optionally filtered to one embedding ``model``.
-        """
-        dist = self.embeddings.c.vector.cosine_distance(vector)
-        stmt = (
-            select(self.chunks, (1 - dist).label("similarity"))
-            .join(self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.chunk_id)
-            .order_by(dist)
-            .limit(k)
-        )
-        if model:
-            stmt = stmt.where(self.embeddings.c.model == model)
-        async with self.engine.connect() as conn:
-            rows = (await conn.execute(stmt)).mappings().all()
-        return [(self._row_to_chunk(r), r["similarity"]) for r in rows]
 
     async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
         """
