@@ -13,7 +13,6 @@ def _job(job_id):
         document_id="s1",
         item=PipelineItem(content="x", metadata={"source_id": "s1"}),
         stage_name="LoadAndParse",
-        stage_config={},
         created_at=datetime.now(UTC),
     )
 

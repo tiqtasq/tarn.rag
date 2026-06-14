@@ -25,7 +25,7 @@ class _FakeEmbedder:
 
 
 class FakeEmbedStage(EmbedStage):
-    """EmbedStage wired with the fake encoder (reconstructed by the worker from config)."""
+    """EmbedStage wired with the fake encoder (overrides _get_embedder)."""
 
     def _get_embedder(self):
         return _FakeEmbedder()

@@ -13,8 +13,8 @@ class EnrichMetadataStage(MapperStage):
     phrases) is a future extension — see the metadata conventions in Core Models.
     """
 
-    def __init__(self, **config: Any):
-        super().__init__(name="EnrichMetadata", **config)
+    def __init__(self) -> None:
+        super().__init__(name="EnrichMetadata")
 
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         return text, {"char_count": len(text), "word_count": len(text.split())}

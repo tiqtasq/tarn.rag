@@ -16,10 +16,8 @@ class CleanAndNormalizeStage(MapperStage):
     chunking.
     """
 
-    def __init__(self, collapse_whitespace: bool = True, **config: Any):
-        super().__init__(
-            name="CleanAndNormalize", collapse_whitespace=collapse_whitespace, **config
-        )
+    def __init__(self, collapse_whitespace: bool = True):
+        super().__init__(name="CleanAndNormalize")
         self.collapse_whitespace = collapse_whitespace
 
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:

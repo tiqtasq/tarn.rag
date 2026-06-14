@@ -32,14 +32,13 @@ class LoadAndParseStage(MapperStage):
         supported_types: list[str] | None = None,
         pdf_parsers: dict[str, Callable[[str], str]] | None = None,
         default_pdf_parser: str = DEFAULT_PDF_PARSER,
-        **config: Any,
     ):
         # Set before super().__init__(), which runs validate().
         types = supported_types or ["txt", "pdf", "html"]
         self.supported_types = types
         self.pdf_parsers = pdf_parsers or dict(DEFAULT_PDF_PARSERS)
         self.default_pdf_parser = default_pdf_parser
-        super().__init__(name="LoadAndParse", supported_types=types, **config)
+        super().__init__(name="LoadAndParse")
 
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         source_path = metadata.get("source_path")
