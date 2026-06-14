@@ -65,7 +65,9 @@ def _sha256_file(path: str) -> str:
 
 
 class IngestionEngine:
-    """High-level facade for the ingestion pipeline; document-centric public surface."""
+    """
+    High-level facade for the ingestion pipeline; document-centric public surface.
+    """
 
     def __init__(
         self,

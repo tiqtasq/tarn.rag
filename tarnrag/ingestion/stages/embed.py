@@ -16,9 +16,11 @@ from tarnrag.ingestion.pipeline import PipelineStage
 
 
 class EmbedStage(PipelineStage):
-    """Terminal stage: yields ``Embedding``s (not ``PipelineItem``s). ``process_batch`` groups
+    """
+    Terminal stage: yields ``Embedding``s (not ``PipelineItem``s). ``process_batch`` groups
     items into ``model_batch_size``-sized embed calls; ``chunk_id`` comes from
-    ``metadata['chunk_id']`` (set by ChunkResultSink)."""
+    ``metadata['chunk_id']`` (set by ChunkResultSink).
+    """
 
     def __init__(
         self,
@@ -51,6 +53,10 @@ class EmbedStage(PipelineStage):
         yield from self.process_batch([item])
 
     def process_batch(self, items: list[PipelineItem]) -> Iterator[Embedding]:
+        """
+        Embed items in ``model_batch_size`` groups, yielding one ``Embedding`` per chunk
+        (``chunk_id`` taken from ``metadata['chunk_id']``).
+        """
         embedder = self._get_embedder()
         for i in range(0, len(items), self.model_batch_size):
             sub = items[i : i + self.model_batch_size]

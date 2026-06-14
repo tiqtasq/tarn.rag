@@ -17,8 +17,10 @@ from tarnrag.ingestion.pipeline import PipelineStage
 
 
 class BatchContext(ABC):
-    """A per-batch unit of work the worker reports to (created by a BatchCoordinator,
-    which has already recorded 'processing')."""
+    """
+    A per-batch unit of work the worker reports to (created by a BatchCoordinator,
+    which has already recorded 'processing').
+    """
 
     @abstractmethod
     def submit(self, results: list[Any]) -> None:
@@ -35,7 +37,9 @@ class BatchContext(ABC):
 
 
 class BatchCoordinator(ABC):
-    """Provides the worker with the stage to run and starts the unit of work."""
+    """
+    Provides the worker with the stage to run and starts the unit of work.
+    """
 
     @abstractmethod
     def get_stage(self, stage_name: str) -> PipelineStage:

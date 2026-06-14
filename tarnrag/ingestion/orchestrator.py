@@ -25,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineDAG:
-    """The pipeline as a directed acyclic graph. Sequential edges for now:
-    ``stage[i] -> stage[i+1]``."""
+    """
+    The pipeline as a directed acyclic graph. Sequential edges for now:
+    ``stage[i] -> stage[i+1]``.
+    """
 
     def __init__(self, stages: list):
         self.stages = stages
@@ -44,7 +46,8 @@ class PipelineDAG:
 
 
 class PipelineOrchestrator(BatchCoordinator):
-    """Walks the DAG and owns the JOB LIFECYCLE (D3/D5).
+    """
+    Walks the DAG and owns the JOB LIFECYCLE (D3/D5).
 
     The queue owns claiming/retries/acking; the orchestrator enqueues jobs through
     it, and per dispatched batch it issues a ``BatchContext`` (via ``begin_batch``) that
@@ -123,8 +126,10 @@ class PipelineOrchestrator(BatchCoordinator):
 
 
 class _OrchestratorBatchContext(BatchContext):
-    """Per-batch unit of work backed by the orchestrator's repo / DAG / queue. It
-    composes the per-stage ResultSink (kept pure) and adds status + DAG advance."""
+    """
+    Per-batch unit of work backed by the orchestrator's repo / DAG / queue. It
+    composes the per-stage ResultSink (kept pure) and adds status + DAG advance.
+    """
 
     def __init__(
         self,

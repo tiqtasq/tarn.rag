@@ -7,6 +7,10 @@ from enum import Enum
 
 
 class Purpose(str, Enum):
+    """
+    Retrieval intent (ModusQ §5.1) — drives scope/licensing policy in later steps.
+    """
+
     EXECUTION = "EXECUTION"
     AUTHORING = "AUTHORING"
     GENERATION_GROUNDING = "GENERATION_GROUNDING"
@@ -14,6 +18,10 @@ class Purpose(str, Enum):
 
 @dataclass(frozen=True)
 class MethodRef:
+    """
+    Reference to an indexed method — id plus optional version (``None`` → latest in the index).
+    """
+
     method_id: str
     method_version: str | None = None  # None → latest in the index
 
@@ -24,6 +32,11 @@ ALL = "ALL"
 
 @dataclass
 class Query:
+    """
+    A retrieval request: the query text plus knobs (purpose, method scope, top_k / dense_k /
+    sparse_k).
+    """
+
     text: str
     purpose: Purpose = Purpose.EXECUTION
     scope: list[MethodRef] | str = ALL  # MethodRef[] or ALL
@@ -34,6 +47,10 @@ class Query:
 
 @dataclass(frozen=True)
 class RetrievalResult:
+    """
+    One ranked hit: chunk text + fused score + per-component scores + provenance/licensing.
+    """
+
     chunk_id: str
     text: str
     score: float

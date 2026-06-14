@@ -10,9 +10,11 @@ _SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
 
 class ChunkStage(ChunkerStage):
-    """Recursive character chunking: split on coarse→fine separators, then pack the
+    """
+    Recursive character chunking: split on coarse→fine separators, then pack the
     pieces into ``chunk_size`` windows with ``overlap`` characters carried between
-    adjacent chunks."""
+    adjacent chunks.
+    """
 
     def __init__(self, chunk_size: int = 512, overlap: int = 50, **config: Any):
         # Set before super().__init__(), which runs validate().
@@ -24,6 +26,10 @@ class ChunkStage(ChunkerStage):
         return [(c, {"chunk_size": len(c)}) for c in self._split_recursive(text)]
 
     def _split_recursive(self, text: str) -> list[str]:
+        """
+        Split into separator-bounded pieces, then greedily pack them into ``chunk_size`` windows,
+        carrying ``overlap`` trailing characters into the next chunk.
+        """
         pieces = self._split_to_pieces(text, _SEPARATORS)
         chunks: list[str] = []
         current = ""

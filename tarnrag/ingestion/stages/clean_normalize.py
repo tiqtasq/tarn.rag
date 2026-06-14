@@ -11,8 +11,10 @@ _C0_CONTROL = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f]")
 
 
 class CleanAndNormalizeStage(MapperStage):
-    """Strip control characters and (optionally) collapse runs of whitespace before
-    chunking."""
+    """
+    Strip control characters and (optionally) collapse runs of whitespace before
+    chunking.
+    """
 
     def __init__(self, collapse_whitespace: bool = True, **config: Any):
         super().__init__(

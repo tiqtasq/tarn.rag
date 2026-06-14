@@ -42,7 +42,8 @@ from tarnrag.storage.status import (
 
 
 class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
-    """SQLAlchemy Core repository shared by ingestion and retrieval.
+    """
+    SQLAlchemy Core repository shared by ingestion and retrieval.
 
     Subclasses supply only the dialect specifics: the async driver URL, the vector
     column type + value encoding, the upsert, dialect-only schema objects (pgvector

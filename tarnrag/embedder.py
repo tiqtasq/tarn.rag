@@ -23,6 +23,11 @@ from tarnrag.core.config import EmbeddingSettings
 
 
 class Embedder(ABC):
+    """
+    Port for the shared embedding pipeline — the seam that lets ingestion and retrieval use one
+    model (and lets tests swap in a fake).
+    """
+
     @abstractmethod
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         """Embed passages (ingestion side) — uses the passage prefix."""
@@ -43,6 +48,11 @@ class Embedder(ABC):
 
 
 class OnnxEmbedder(Embedder):
+    """
+    ONNX Runtime embedder (prefix → tokenize → ONNX → mean-pool → L2). Heavy deps load lazily on
+    the first ``embed``; the identity methods need only the tokenizer file, not the model.
+    """
+
     def __init__(
         self,
         model_dir: str,
@@ -97,6 +107,10 @@ class OnnxEmbedder(Embedder):
         return hashlib.sha256(self.tokenizer_path.read_bytes()).hexdigest()
 
     def config_fingerprint(self) -> str:
+        """
+        Stable hash of the pipeline identity (model/tokenizer/pooling/normalize/prefixes/…),
+        recorded in ``index_meta`` — retrieval refuses to open an index whose fingerprint differs.
+        """
         identity = {
             "model_id": self.model_id,
             "revision": self.revision,
@@ -128,6 +142,9 @@ class OnnxEmbedder(Embedder):
     # ---------------- inference ----------------
 
     def _load(self):
+        """
+        Lazily build the ONNX session + tokenizer on first use (keeps import + identity cheap).
+        """
         if self._session is None:
             import onnxruntime as ort
             from tokenizers import Tokenizer
@@ -142,6 +159,10 @@ class OnnxEmbedder(Embedder):
             self._input_names = {i.name for i in self._session.get_inputs()}
 
     def _embed(self, texts: list[str], prefix: str) -> list[list[float]]:
+        """
+        Run one batch through the pipeline: tokenize (with ``prefix``) → ONNX forward →
+        mean-pool over the attention mask → L2-normalize. One vector per input.
+        """
         if not texts:
             return []
         self._load()

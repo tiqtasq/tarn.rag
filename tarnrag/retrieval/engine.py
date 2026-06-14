@@ -19,10 +19,18 @@ from tarnrag.retrieval.types import MethodRef, Query, RetrievalResult
 
 
 class RetrievalError(Exception):
-    """The engine cannot serve queries against this index (incompatibility at ``open()``)."""
+    """
+    The engine cannot serve queries against this index (incompatibility at ``open()``).
+    """
 
 
 class RetrievalEngine:
+    """
+    Sync query facade over the §8 index (ModusQ §5): embed → KNN → hydrate → assemble. Built via
+    ``create`` (or the ``open`` seam), which refuses an index whose embedding fingerprint or
+    schema differs. ``asearch`` / ``asearch_text`` are thread-offloaded async variants.
+    """
+
     def __init__(self, store: SqliteIndexStore, embedder: Embedder, config: Any = None):
         self.store = store
         self.embedder = embedder

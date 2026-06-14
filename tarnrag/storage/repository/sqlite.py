@@ -19,7 +19,9 @@ from tarnrag.storage.repository.base import DocumentRepository
 
 
 class SqliteRepository(DocumentRepository):
-    """SQLite adapter; vectors as JSON, in-memory cosine search."""
+    """
+    SQLite adapter; vectors as JSON, in-memory cosine search.
+    """
 
     def __init__(self, connection_url: str, embedding_dimension: int = 384):
         super().__init__(connection_url, embedding_dimension)
@@ -64,6 +66,10 @@ class SqliteRepository(DocumentRepository):
         model: str | None = None,
         filters: dict[str, Any] | None = None,
     ) -> list[tuple[Chunk, float]]:
+        """
+        Top-k by cosine similarity computed in-memory with numpy over all stored vectors
+        (dev/small-scale; no ANN index).
+        """
         stmt = select(self.chunks, self.embeddings.c.vector).join(
             self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.id
         )

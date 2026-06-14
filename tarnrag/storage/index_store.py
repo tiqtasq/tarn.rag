@@ -36,8 +36,10 @@ FTS_TOKENIZER = "unicode61"
 
 @dataclass(frozen=True)
 class Candidate:
-    """A ranked candidate from a retriever (rank is 1-based; raw_score is engine-specific:
-    distance for dense KNN, bm25 for sparse)."""
+    """
+    A ranked candidate from a retriever (rank is 1-based; raw_score is engine-specific:
+    distance for dense KNN, bm25 for sparse).
+    """
 
     chunk_id: str
     rank: int
@@ -46,7 +48,9 @@ class Candidate:
 
 @dataclass(frozen=True)
 class ChunkRecord:
-    """A hydrated chunk: canonical text + provenance + license, for result assembly."""
+    """
+    A hydrated chunk: canonical text + provenance + license, for result assembly.
+    """
 
     chunk_id: str
     text: str
@@ -59,6 +63,13 @@ class ChunkRecord:
 
 
 class SqliteIndexStore(ChunkStore, DocumentFactsSource):
+    """
+    The §8 retrieval index in one SQLite file (sqlite-vec + FTS5). It is the write side for
+    ingestion's ResultSinks (``ChunkStore``) and the status/admin source for retrieval mode
+    (``DocumentFactsSource``); the read side (``dense_knn`` / ``hydrate``) lives here too. Sync
+    ``sqlite3`` on purpose — see the module docstring.
+    """
+
     def __init__(
         self,
         db_path: str,
@@ -96,6 +107,10 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
         return self._conn
 
     def connect(self) -> SqliteIndexStore:
+        """
+        Open the file (creating its parent dir), load the sqlite-vec extension, enable foreign
+        keys + WAL, and ensure the schema. Returns self so callers can chain ``.connect()``.
+        """
         # SQLite won't create the parent directory — ensure it exists (no-op for ':memory:').
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -118,6 +133,10 @@ class SqliteIndexStore(ChunkStore, DocumentFactsSource):
     # ---------------- schema + meta ----------------
 
     def _create_schema(self) -> None:
+        """
+        Create the §8 tables + indexes if absent: ``documents`` / ``chunks`` / ``method_chunks``
+        plus the ``vec_chunks`` (vec0) and ``fts_chunks`` (fts5) virtual tables.
+        """
         c = self.conn
         c.executescript(
             """

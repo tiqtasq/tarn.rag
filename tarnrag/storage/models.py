@@ -43,7 +43,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class PipelineItem(BaseModel):
-    """The IN-FLIGHT form — the single, uniform type that flows through every stage.
+    """
+    The IN-FLIGHT form — the single, uniform type that flows through every stage.
 
     A document or a chunk *in flight* is a PipelineItem (which one rides in
     ``metadata``). The engine (stages, worker, DAG, inline job payload) is generic
@@ -59,8 +60,10 @@ class PipelineItem(BaseModel):
 
 
 class Document(BaseModel):
-    """A source document — AT-REST form (persistence DTO; built at a sink, never
-    flows). Mapped to/from the ``documents`` table by the repository."""
+    """
+    A source document — AT-REST form (persistence DTO; built at a sink, never
+    flows). Mapped to/from the ``documents`` table by the repository.
+    """
 
     id: str | None = None
     content: str
@@ -70,8 +73,10 @@ class Document(BaseModel):
 
 
 class Chunk(BaseModel):
-    """A text chunk — at-rest form (persistence DTO) of a chunk that flowed as a
-    PipelineItem. Mapped to/from the ``chunks`` table."""
+    """
+    A text chunk — at-rest form (persistence DTO) of a chunk that flowed as a
+    PipelineItem. Mapped to/from the ``chunks`` table.
+    """
 
     id: str | None = None
     parent_doc_id: str
@@ -84,8 +89,10 @@ class Chunk(BaseModel):
 
 
 class Embedding(BaseModel):
-    """A chunk's dense vector — at-rest ONLY (terminal stage output; never flows).
-    Mapped to/from the ``embeddings`` table."""
+    """
+    A chunk's dense vector — at-rest ONLY (terminal stage output; never flows).
+    Mapped to/from the ``embeddings`` table.
+    """
 
     id: str | None = None
     chunk_id: str

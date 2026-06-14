@@ -22,12 +22,18 @@ from tarnrag.storage.models import Chunk, Document
 
 @dataclass
 class FinalizationOutcome:
+    """
+    Result of a sink ``finalize`` — whether the buffer persisted, plus an error detail on failure.
+    """
+
     persisted: bool
     detail: str | None = None
 
 
 class ResultSink(ABC):
-    """submit()/close() are sync (buffer only); finalize() is async (persists)."""
+    """
+    submit()/close() are sync (buffer only); finalize() is async (persists).
+    """
 
     @abstractmethod
     def submit(self, results: list[Any]) -> None: ...
@@ -40,8 +46,10 @@ class ResultSink(ABC):
 
 
 class _BufferingSink(ResultSink):
-    """Shared buffering: submit() appends, close() marks done, finalize() persists the
-    whole buffer via _persist() and reports the outcome."""
+    """
+    Shared buffering: submit() appends, close() marks done, finalize() persists the
+    whole buffer via _persist() and reports the outcome.
+    """
 
     def __init__(self, repository: ChunkStore):
         self.repo = repository
@@ -66,16 +74,20 @@ class _BufferingSink(ResultSink):
 
 
 class PassthroughSink(_BufferingSink):
-    """For pure-transform stages with no storage target (e.g. CleanAndNormalize).
-    Persists nothing; produced items still flow downstream via the orchestrator."""
+    """
+    For pure-transform stages with no storage target (e.g. CleanAndNormalize).
+    Persists nothing; produced items still flow downstream via the orchestrator.
+    """
 
     async def _persist(self, results: list[Any]) -> None:
         return None
 
 
 class DocumentResultSink(_BufferingSink):
-    """After LoadAndParse: persist Document rows (upsert on source_id) and thread the
-    stored id forward as ``metadata['doc_id']`` so chunks resolve ``parent_doc_id``."""
+    """
+    After LoadAndParse: persist Document rows (upsert on source_id) and thread the
+    stored id forward as ``metadata['doc_id']`` so chunks resolve ``parent_doc_id``.
+    """
 
     async def _persist(self, results: list[Any]) -> None:
         for item in results:
@@ -86,8 +98,10 @@ class DocumentResultSink(_BufferingSink):
 
 
 class ChunkResultSink(_BufferingSink):
-    """After Chunk: persist Chunk rows atomically and thread each stored id forward as
-    ``metadata['chunk_id']`` for the downstream Enrich/Embed stages."""
+    """
+    After Chunk: persist Chunk rows atomically and thread each stored id forward as
+    ``metadata['chunk_id']`` for the downstream Enrich/Embed stages.
+    """
 
     async def _persist(self, results: list[Any]) -> None:
         if not results:
@@ -108,7 +122,9 @@ class ChunkResultSink(_BufferingSink):
 
 
 class ChunkMetadataResultSink(_BufferingSink):
-    """After EnrichMetadata: merge enrichment into the chunk via update_chunk_metadata."""
+    """
+    After EnrichMetadata: merge enrichment into the chunk via update_chunk_metadata.
+    """
 
     async def _persist(self, results: list[Any]) -> None:
         for item in results:
@@ -118,8 +134,10 @@ class ChunkMetadataResultSink(_BufferingSink):
 
 
 class EmbeddingResultSink(_BufferingSink):
-    """After Embed: bulk-persist Embedding results in persistence-batch-sized writes
-    (independent of the worker's compute batch, D4)."""
+    """
+    After Embed: bulk-persist Embedding results in persistence-batch-sized writes
+    (independent of the worker's compute batch, D4).
+    """
 
     def __init__(self, repository: ChunkStore, persist_batch_size: int = 128):
         super().__init__(repository)

@@ -17,7 +17,9 @@ from typing import Any
 
 
 class Observability(ABC):
-    """Metrics + logging port. ``counter``/``gauge`` are sync (cheap); ``log`` is async."""
+    """
+    Metrics + logging port. ``counter``/``gauge`` are sync (cheap); ``log`` is async.
+    """
 
     @abstractmethod
     async def log(self, level: str, message: str, **context: Any) -> None:
@@ -43,8 +45,10 @@ class Observability(ABC):
 
 
 class NoOpObservability(Observability):
-    """No-op implementation — for development/testing (or when obs is enabled but no real
-    adapter is configured yet). All methods do nothing."""
+    """
+    No-op implementation — for development/testing (or when obs is enabled but no real
+    adapter is configured yet). All methods do nothing.
+    """
 
     async def log(self, level: str, message: str, **context: Any) -> None:
         pass

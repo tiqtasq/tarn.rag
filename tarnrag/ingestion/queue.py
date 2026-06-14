@@ -24,17 +24,21 @@ JobHandler = Callable[[Batch], Awaitable[None]]
 
 
 class JobEnqueuer(ABC):
-    """Producer side — put jobs on the queue. Used by the orchestrator."""
+    """
+    Producer side — put jobs on the queue. Used by the orchestrator.
+    """
 
     @abstractmethod
     async def enqueue(self, job: IngestionJob) -> None: ...
 
 
 class JobConsumer(ABC):
-    """Consumer/runtime side — register a handler and run the dispatch loop. The loop
+    """
+    Consumer/runtime side — register a handler and run the dispatch loop. The loop
     itself belongs to the queue technology (e.g. pgQueuer's QueueManager); the worker
     is just a handler, and the composition root calls ``set_handler`` then ``run``.
-    Mechanics (claiming, retries, NOTIFY, dead-lettering) belong to the implementation."""
+    Mechanics (claiming, retries, NOTIFY, dead-lettering) belong to the implementation.
+    """
 
     @abstractmethod
     def set_handler(self, handler: JobHandler) -> None: ...
@@ -44,7 +48,8 @@ class JobConsumer(ABC):
 
 
 class InMemoryJobQueue(JobEnqueuer, JobConsumer):
-    """In-process job queue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
+    """
+    In-process job queue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
     at-least-once + requeue-on-raise semantics so tests reflect reality.
 
     ``requeue_on_error=True`` (default) re-queues a failing job up to ``max_attempts``
@@ -83,9 +88,11 @@ class InMemoryJobQueue(JobEnqueuer, JobConsumer):
 
 
 class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
-    """Queue backed by pgQueuer — the only adapter that imports pgQueuer (lazily).
+    """
+    Queue backed by pgQueuer — the only adapter that imports pgQueuer (lazily).
     pgQueuer owns claiming/retries/NOTIFY/dead-lettering; a handler that raises
-    propagates so pgQueuer requeues the job (= recovery, D5)."""
+    propagates so pgQueuer requeues the job (= recovery, D5).
+    """
 
     def __init__(self, driver):
         from pgqueuer import QueueManager
@@ -96,6 +103,9 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
 
     @classmethod
     async def connect(cls, connection_url: str) -> "PgQueuerJobQueue":
+        """
+        Create an asyncpg pool for ``connection_url`` and wrap it in a pgQueuer driver.
+        """
         import asyncpg
         from pgqueuer.db import AsyncpgPoolDriver
 
@@ -107,6 +117,10 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         await self._queries.enqueue([ENTRYPOINT], [job.model_dump_json().encode()], [0])
 
     def set_handler(self, handler: JobHandler) -> None:
+        """
+        Register ``handler`` as the pgQueuer entrypoint; each claimed job is decoded into a
+        single-job ``Batch`` and handed over.
+        """
         from pgqueuer.models import Job
 
         @self._qm.entrypoint(ENTRYPOINT)

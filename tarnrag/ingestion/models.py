@@ -8,7 +8,8 @@ from tarnrag.storage.models import PipelineItem
 
 
 class IngestionJob(BaseModel):
-    """Internal unit of work enqueued in the job queue (pgQueuer in prod).
+    """
+    Internal unit of work enqueued in the job queue (pgQueuer in prod).
 
     Runtime state (queued/processing/.../retries) is owned by the queue; for the
     status API a document-keyed ``job_status`` projection is kept in the repository.
@@ -26,7 +27,8 @@ class IngestionJob(BaseModel):
 
 
 class Batch:
-    """A homogeneous dispatch unit: a list of jobs that all target the SAME stage.
+    """
+    A homogeneous dispatch unit: a list of jobs that all target the SAME stage.
 
     This is what the queue (``JobConsumer``) hands the worker, and the compute batch a
     stage runs in one shot. Same-stage homogeneity is the invariant that makes a batch
@@ -43,6 +45,10 @@ class Batch:
     __slots__ = ("jobs", "stage_name")
 
     def __init__(self, jobs: list[IngestionJob]):
+        """
+        Build a batch from same-stage jobs, enforcing the homogeneity invariant (raises on an
+        empty list or a mix of ``stage_name``s).
+        """
         if not jobs:
             raise ValueError("Batch must contain at least one job")
         stage_names = {job.stage_name for job in jobs}
