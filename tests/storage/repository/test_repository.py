@@ -170,6 +170,33 @@ async def test_store_document_is_atomic(repo, monkeypatch):
     assert (await repo.get_document(doc_id)).content == "A"
 
 
+async def test_dense_knn_and_hydrate(repo):
+    _, (cid_a, cid_b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("tank inspection", 0, 2), _chunk("quokka", 1, 2)],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+    ])
+    cands = await repo.dense_knn([0.9, 0.1, 0.0], k=2)
+    assert cands[0].chunk_id == cid_a  # nearest first
+    recs = await repo.hydrate([cid_a])
+    assert recs[0].text == "tank inspection" and recs[0].document_id == "s1"
+
+
+async def test_fts_index_is_populated(repo):
+    await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("storage tank inspection", 0, 1)],
+    )
+    async with repo.engine.connect() as conn:
+        rows = (
+            await conn.exec_driver_sql("SELECT chunk_id FROM fts_chunks WHERE fts_chunks MATCH 'tank'")
+        ).fetchall()
+    assert len(rows) == 1
+
+
 async def test_license_class_enum_is_enforced(repo):
     # license_class is a closed §8 enum guarded by a CHECK constraint.
     with pytest.raises(IntegrityError):

@@ -279,12 +279,15 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     # ---------------- writes (shared Core) ----------------
 
     async def store_document(self, doc: Document) -> str:
-        # Atomic: upsert + chunk-delete share one engine.begin() transaction — if the
-        # delete fails, the upsert is rolled back too (commits only on clean exit).
+        """
+        Atomic: upsert + chunk-delete share one engine.begin() transaction — if the delete
+        fails, the upsert is rolled back too (commits only on clean exit).
+        """
         async with self.engine.begin() as conn:
             doc_id = await self._upsert_document(conn, self._doc_values(doc))
-            # Re-storing a document REPLACES its derived data (idempotency): drop its
-            # chunks (ON DELETE CASCADE removes their embeddings). A new doc has none.
+            # Re-storing REPLACES derived data (idempotency): clear the search indexes (vec0/FTS
+            # don't cascade) then drop chunks (ON DELETE CASCADE removes embeddings).
+            await self._clear_chunk_index(conn, doc_id)
             await conn.execute(
                 self.chunks.delete().where(self.chunks.c.document_id == doc_id)
             )
@@ -295,7 +298,8 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     ) -> tuple[str, list[str]]:
         async with self.engine.begin() as conn:
             doc_id = await self._upsert_document(conn, self._doc_values(doc))
-            # Re-ingest replaces chunks (ON DELETE CASCADE removes their embeddings).
+            # Re-ingest replaces chunks; clear non-cascading search indexes first.
+            await self._clear_chunk_index(conn, doc_id)
             await conn.execute(
                 self.chunks.delete().where(self.chunks.c.document_id == doc_id)
             )
@@ -329,6 +333,55 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         # §8 chunks carry no metadata column — enrichment is not persisted (the metadata bag is
         # deferred; see the rag-chunk-metadata-deferred note). No-op, like SqliteIndexStore.
         return None
+
+    # ---------------- dialect search-index hooks (vec0 / FTS live outside the FK graph) ----------------
+
+    async def _index_chunk_text(
+        self, conn: AsyncConnection, ids: list[str], chunks: list[Chunk]
+    ) -> None:
+        """
+        Index chunk text for sparse search. No-op by default; SQLite writes ``fts_chunks``.
+        """
+        return None
+
+    async def _clear_chunk_index(self, conn: AsyncConnection, document_id: str) -> None:
+        """
+        Drop a document's chunks from search indexes the FK CASCADE can't reach (vec0/FTS
+        virtual tables). No-op by default (the embeddings table cascades).
+        """
+        return None
+
+    async def _count_doc_embeddings(self, conn: AsyncConnection, document_id: str) -> int:
+        """
+        Vector count for a document — default: the embeddings table; SQLite counts ``vec_chunks``.
+        """
+        return (
+            await conn.execute(
+                select(func.count())
+                .select_from(self.embeddings)
+                .join(self.chunks, self.embeddings.c.chunk_id == self.chunks.c.chunk_id)
+                .where(self.chunks.c.document_id == document_id)
+            )
+        ).scalar_one()
+
+    async def _embedding_counts_by_document(self, conn: AsyncConnection) -> dict[str, int]:
+        """
+        Per-document vector counts — default: the embeddings table; SQLite counts ``vec_chunks``.
+        """
+        return dict(
+            (
+                await conn.execute(
+                    select(self.chunks.c.document_id, func.count(self.embeddings.c.id))
+                    .select_from(
+                        self.chunks.join(
+                            self.embeddings,
+                            self.embeddings.c.chunk_id == self.chunks.c.chunk_id,
+                        )
+                    )
+                    .group_by(self.chunks.c.document_id)
+                )
+            ).all()
+        )
 
     # ---------------- reads (shared Core) ----------------
 
@@ -444,14 +497,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     .where(self.chunks.c.document_id == document_id)
                 )
             ).scalar_one()
-            embedding_count = (
-                await conn.execute(
-                    select(func.count())
-                    .select_from(self.embeddings)
-                    .join(self.chunks, self.embeddings.c.chunk_id == self.chunks.c.chunk_id)
-                    .where(self.chunks.c.document_id == document_id)
-                )
-            ).scalar_one()
+            embedding_count = await self._count_doc_embeddings(conn, document_id)
         return DocumentFacts(True, chunk_count, embedding_count)
 
     async def documents_by_content_hash(self, content_hash: str) -> list[str]:
@@ -466,9 +512,12 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return [r[0] for r in rows]
 
     async def delete_document(self, document_id: str) -> bool:
-        """Delete the document; its chunks (and their embeddings) cascade off the FKs. Returns
-        True if the document existed."""
+        """
+        Delete the document; its chunks (and their embeddings) cascade off the FKs, and the
+        non-cascading search indexes (vec0/FTS) are cleared first. Returns True if it existed.
+        """
         async with self.engine.begin() as conn:
+            await self._clear_chunk_index(conn, document_id)
             res = await conn.execute(
                 self.documents.delete().where(self.documents.c.document_id == document_id)
             )
@@ -491,20 +540,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     )
                 ).all()
             )
-            embedding_counts = dict(
-                (
-                    await conn.execute(
-                        select(self.chunks.c.document_id, func.count(self.embeddings.c.id))
-                        .select_from(
-                            self.chunks.join(
-                                self.embeddings,
-                                self.embeddings.c.chunk_id == self.chunks.c.chunk_id,
-                            )
-                        )
-                        .group_by(self.chunks.c.document_id)
-                    )
-                ).all()
-            )
+            embedding_counts = await self._embedding_counts_by_document(conn)
         return [
             {
                 "document_id": document_id,
@@ -573,6 +609,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             )
         if rows:
             await conn.execute(insert(self.chunks), rows)
+            await self._index_chunk_text(conn, ids, chunks)
         return ids
 
     def _row_to_chunk(self, r) -> Chunk:

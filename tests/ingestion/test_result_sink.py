@@ -68,9 +68,11 @@ async def test_passthrough_persists_nothing(repo):
 
 
 async def test_finalize_reports_failure(repo):
-    # Embedding referencing a missing chunk -> FK violation -> finalize reports not-persisted.
-    emb = Embedding(chunk_id="missing", vector=[1.0, 0.0, 0.0], model="m", dimension=3)
-    outcome = await _finalize(EmbeddingResultSink(repo), [emb])
+    # A chunk referencing a missing document -> FK violation -> finalize reports not-persisted.
+    item = PipelineItem(
+        content="c", metadata={"doc_id": "missing", "chunk_index": 0, "total_chunks": 1}
+    )
+    outcome = await _finalize(ChunkResultSink(repo), [item])
     assert not outcome.persisted
     assert outcome.detail  # carries the DB error detail
 
