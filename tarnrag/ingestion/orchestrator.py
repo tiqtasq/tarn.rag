@@ -69,8 +69,8 @@ class PipelineOrchestrator(BatchCoordinator):
         self.repository = repository  # job_status projection (record_job)
         self.obs = observability
         self.sink_registry = sink_registry
-        # Where sinks persist document/chunk/embedding data. Defaults to the repository
-        # (unchanged Postgres/SQLite path); the §8 index build passes a SqliteIndexStore.
+        # Where sinks persist document/chunk/embedding data — the repository, which holds the §8
+        # retrieval index (sqlite-vec/FTS5 or pgvector). The param lets a test inject another store.
         self.chunk_store = chunk_store or repository
 
     async def ingest_documents(self, items: list[PipelineItem]) -> list[str]:

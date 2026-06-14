@@ -350,7 +350,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
         # §8 chunks carry no metadata column — enrichment is not persisted (the metadata bag is
-        # deferred; see the rag-chunk-metadata-deferred note). No-op, like SqliteIndexStore.
+        # deferred; see the rag-chunk-metadata-deferred note). No-op by design.
         return None
 
     # ---------------- dialect search-index hooks (vec0 / FTS live outside the FK graph) ----------------

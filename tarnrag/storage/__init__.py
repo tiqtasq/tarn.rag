@@ -1,30 +1,30 @@
 """
-Storage — the shared persistence layer (data models, the chunk/index stores, the
-document-status read model, and the document repository with Postgres / SQLite dialects).
+Storage — the shared persistence layer (data models, the chunk-store / status ports, and the
+document repository with Postgres / SQLite dialects).
 
-Three distinct stores back the system, and the **retrieval index is always SQLite** — only the
-document/queue backends change with ``Settings.MODE`` (``embedded`` | ``distributed``):
+One store backs the system: the **repository** (``DocumentRepository``) at
+``DATABASE__DOCUMENT_URL``. It holds the documents/chunks, the §8 retrieval index, the
+``index_meta`` build record, and the ``job_status`` projection — everything the ingestion sinks
+write and everything ``RetrievalEngine`` reads. Only the backend changes with ``Settings.MODE``
+(``embedded`` | ``distributed``); the job queue is the one separate piece:
 
-* **Retrieval index** — ``SqliteIndexStore`` at ``INDEX__DB_PATH`` (e.g. ``index.db``). The §8
-  index: ``documents`` (metadata), ``chunks`` (text + provenance), ``vec_chunks`` (vectors),
-  ``fts_chunks``, ``method_chunks``, ``index_meta``. Everything ``RetrievalEngine`` reads, and
-  where the ingestion sinks write — in **both** modes.
-* **Document store** — ``DocumentRepository`` at ``DATABASE__DOCUMENT_URL``. Holds the
-  ``job_status`` projection only: SQLite ``rag_docs.db`` (embedded) or Postgres (distributed). It
-  also defines ``documents``/``chunks``/``embeddings`` (pgvector) tables, but the engine routes
-  ingestion data to the index store, so those tables are created-but-unused.
+* **Repository** — ``DocumentRepository``. Embedded: a single SQLite file ``rag_docs.db`` whose
+  §8 tables (``documents`` / ``chunks`` / ``method_chunks`` / ``index_meta`` + the ``vec_chunks``
+  (sqlite-vec) and ``fts_chunks`` (FTS5) virtual tables) are the **portable retrieval artifact**
+  a future C++ port consumes — it reads only those tables and ignores the rest. Distributed:
+  Postgres, with dense retrieval on the ``embeddings`` table (pgvector). job_status lives here too.
 * **Job queue** — at ``DATABASE__QUEUE_URL``. In-process ``InMemoryJobQueue`` (embedded; nothing
   persisted) or pgQueuer-managed tables on Postgres (distributed).
 
-So Postgres only ever holds ``job_status`` (+ the queue); the retrieval index never leaves SQLite.
+The retrieval index is no longer a separate SQLite file — it lives wherever the repository does
+(sqlite-vec on SQLite, pgvector on Postgres); only the SQLite form is the C++-consumable artifact.
 
 What lives where, by mode:
 
-| Data                                          | Embedded               | Distributed                         |
-|-----------------------------------------------|------------------------|-------------------------------------|
-| Retrieval index (chunks, vectors, FTS, meta)  | SQLite `index.db`      | SQLite `index.db` (shared volume)   |
-| `job_status` projection                       | SQLite `rag_docs.db`   | Postgres (`DATABASE__DOCUMENT_URL`) |
-| Job queue                                     | in-process (not saved) | Postgres (`DATABASE__QUEUE_URL`)    |
-| Staged uploads (`UPLOAD_DIR`)                 | local dir              | shared-volume dir                   |
-| Repo `documents`/`chunks`/`embeddings` tables | created, unused        | created, unused                     |
+| Data                                          | Embedded                  | Distributed                         |
+|-----------------------------------------------|---------------------------|-------------------------------------|
+| Repository: docs/chunks/§8 index + job_status | SQLite `rag_docs.db`      | Postgres (`DATABASE__DOCUMENT_URL`) |
+| Dense vectors                                 | `vec_chunks` (sqlite-vec) | `embeddings` (pgvector)             |
+| Job queue                                     | in-process (not saved)    | Postgres (`DATABASE__QUEUE_URL`)    |
+| Staged uploads (`UPLOAD_DIR`)                 | local dir                 | shared-volume dir                   |
 """
