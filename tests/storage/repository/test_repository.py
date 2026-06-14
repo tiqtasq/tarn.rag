@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from tarnrag.storage.models import Chunk, Document, Embedding
 from tarnrag.storage.repository.sqlite import SqliteRepository
@@ -167,6 +168,14 @@ async def test_store_document_is_atomic(repo, monkeypatch):
 
     # The upsert to "B" shared the same transaction, so it was rolled back: still "A".
     assert (await repo.get_document(doc_id)).content == "A"
+
+
+async def test_license_class_enum_is_enforced(repo):
+    # license_class is a closed §8 enum guarded by a CHECK constraint.
+    with pytest.raises(IntegrityError):
+        await repo.store_document(
+            Document(content="d", metadata={"source_id": "s1", "license_class": "bogus"})
+        )
 
 
 async def test_index_meta_round_trip(repo):

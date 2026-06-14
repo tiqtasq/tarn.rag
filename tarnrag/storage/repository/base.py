@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     TIMESTAMP,
+    CheckConstraint,
     Column,
     ForeignKey,
     Index,
@@ -38,6 +39,17 @@ from tarnrag.storage.status import (
     DocumentStatusReader,
     JobStatusSource,
 )
+
+# §8 license_class is a closed enum (matches the strategy doc). Single source of truth for the
+# CHECK constraints on documents.license_class / chunks.license_class.
+LICENSE_CLASSES = (
+    "customer_licensed",
+    "public_domain",
+    "modusq_authored",
+    "third_party_copyrighted",
+    "third_party_licensed",
+)
+_LICENSE_CHECK = "license_class IN (" + ", ".join(f"'{c}'" for c in LICENSE_CLASSES) + ")"
 
 
 class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
@@ -138,6 +150,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("doc_version", Text),
             Column("license_class", Text, nullable=False, default="public_domain"),
             Column("content_hash", Text, index=True),        # content-dedup key
+            CheckConstraint(_LICENSE_CHECK, name="ck_documents_license_class"),
         )
         # §8 chunks: typed provenance + license denormalized for fast filtering. No metadata bag —
         # a positional/metadata field returns later (see the rag-chunk-metadata-deferred note).
@@ -158,6 +171,9 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("ai_grounding_allowed", Integer, nullable=False, default=1),
             Column("available", Integer, nullable=False, default=1),
             Column("content_hash", Text, nullable=False),    # sha256 of the chunk text
+            CheckConstraint(_LICENSE_CHECK, name="ck_chunks_license_class"),
+            CheckConstraint("ai_grounding_allowed IN (0, 1)", name="ck_chunks_ai_grounding"),
+            CheckConstraint("available IN (0, 1)", name="ck_chunks_available"),
             Index("idx_chunks_document", "document_id"),
             Index("idx_chunks_license", "license_class", "available"),
         )
