@@ -2,8 +2,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from tarnrag.storage.models import PipelineItem
-from tarnrag.ingestion.models import IngestionJob
+from tarnrag.contracts import PipelineItem
+from tarnrag.ingestion.jobs import IngestionJob
 from tarnrag.ingestion.queue import InMemoryJobQueue
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
-from tarnrag.storage.models import Embedding, PipelineItem
+from tarnrag.contracts import Embedding, PipelineItem
 from tarnrag.ingestion.pipeline import PipelineStage
 
 

@@ -4,8 +4,8 @@ Proves the unification — ingestion writes the §8 index and retrieval reads it
 store (no separate index file). InMemoryJobQueue + SQLite repo + a fake 3-d embedder.
 """
 
-from tarnrag.storage.index_meta import build_index_meta
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import build_index_meta
+from tarnrag.contracts import PipelineItem
 from tarnrag.retrieval import Query, RetrievalEngine
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.queue import InMemoryJobQueue

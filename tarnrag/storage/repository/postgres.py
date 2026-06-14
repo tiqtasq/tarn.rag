@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from pgvector.sqlalchemy import Vector
 
 from tarnrag.storage.repository.base import DocumentRepository
-from tarnrag.storage.retrieval import Candidate, ChunkRecord
+from tarnrag.contracts import Candidate, ChunkRecord
 
 
 class PostgresRepository(DocumentRepository):

@@ -2,8 +2,8 @@
 
 import pytest
 
-from tarnrag.storage.index_meta import build_index_meta
-from tarnrag.storage.models import Chunk, Document, Embedding
+from tarnrag.contracts import build_index_meta
+from tarnrag.contracts import Chunk, Document, Embedding
 from tarnrag.retrieval import Query, RetrievalEngine, RetrievalError
 
 FINGERPRINT = "fp-123"

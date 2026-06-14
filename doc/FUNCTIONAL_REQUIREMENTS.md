@@ -166,12 +166,14 @@ tarn.rag/
 │   │
 │   ├── embedder.py                              # Embedder ABC + OnnxEmbedder (shared)
 │   │
+│   ├── contracts/                               # cross-boundary shared kernel (leaf package)
+│   │   ├── dtos.py                              # Document, Chunk, Embedding, PipelineItem, DocumentFacts, MethodRef
+│   │   ├── ports.py                             # ChunkStore, DocumentFactsSource, JobStatusSource
+│   │   ├── results.py                           # Candidate, ChunkRecord, RetrievalResult
+│   │   └── index_meta.py                        # §8 build/identity record (schema + fingerprint)
+│   │
 │   ├── storage/                                 # persistence layer
-│   │   ├── models.py                            # Document, Chunk, Embedding, PipelineItem
-│   │   ├── chunk_store.py                       # ChunkStore ABC (the repository implements it)
-│   │   ├── index_meta.py                        # §8 build/identity record (schema + fingerprint)
-│   │   ├── retrieval.py                         # Candidate / ChunkRecord (dense_knn + hydrate types)
-│   │   ├── status.py                            # DocumentStatusReader (job_status + facts ports)
+│   │   ├── status.py                            # DocumentStatusReader (composes the status ports)
 │   │   └── repository/
 │   │       ├── base.py                          # DocumentRepository (SQLAlchemy Core, async; §8 index)
 │   │       ├── postgres.py                      # PostgreSQL (pgvector) dialect
@@ -185,14 +187,14 @@ tarn.rag/
 │   │   ├── queue.py                             # JobEnqueuer/JobConsumer ports + PgQueuer/InMemory
 │   │   ├── batch.py                             # BatchContext + BatchCoordinator (worker↔orch handshake)
 │   │   ├── result_sink.py                       # ResultSink + per-stage sinks
-│   │   ├── models.py                            # IngestionJob + Batch (homogeneous dispatch unit)
+│   │   ├── jobs.py                              # IngestionJob + Batch (homogeneous dispatch unit)
 │   │   ├── types.py                             # DocumentStatus (public result type)
 │   │   ├── factories.py                         # create_ingestion_pipeline / create_sink_registry
 │   │   └── stages/                              # load_parse, parsers, clean_normalize, chunk, enrich, embed
 │   │
 │   └── retrieval/
 │       ├── engine.py                            # RetrievalEngine facade
-│       └── types.py                             # Query, RetrievalResult, MethodRef
+│       └── types.py                             # Query, Purpose, ALL (result types live in contracts/)
 │
 ├── tests/                                       # mirrors the package; SQLite + InMemory queue
 ├── scripts/fetch_model.py                       # fetch the ONNX model + tokenizer into the model dir
@@ -242,8 +244,8 @@ inheritance.
 
 ### Model contracts
 
-Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/storage/models.py`,
-`tarnrag/ingestion/models.py`.
+Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/contracts/dtos.py`,
+`tarnrag/ingestion/jobs.py`.
 
 - **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`.
 - **`Document`**: `id`, `content`, `metadata` (carries `source_id`, the idempotency key).
@@ -497,7 +499,7 @@ small `job_status` projection in the repository.
 > to `PgQueuerJobQueue` and should be confirmed against the pinned pgQueuer version.
 
 `JobEnqueuer` (ABC): `enqueue(job)`. `JobConsumer` (ABC): `set_handler(handler)`, `run()`.
-The handler receives a **`Batch`** (`ingestion/models.py`) — a homogeneous unit whose jobs
+The handler receives a **`Batch`** (`ingestion/jobs.py`) — a homogeneous unit whose jobs
 all share one `stage_name`. Forming the Batch is the **consumer's** responsibility (it's what
 makes the worker a dead-simple "one batch → one stage" handler); `Batch`'s constructor
 enforces homogeneity (and rejects empties), so a mixed-stage claim fails loudly rather than

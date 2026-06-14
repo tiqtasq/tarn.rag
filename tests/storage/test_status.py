@@ -1,6 +1,7 @@
 """DocumentStatusReader — the rollup that composes job_status with data facts."""
 
-from tarnrag.storage.status import DocumentFacts, DocumentStatusReader
+from tarnrag.contracts import DocumentFacts
+from tarnrag.storage.status import DocumentStatusReader
 
 
 class _Facts:

@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from typing import Any
 
 from tarnrag.ingestion.batch import BatchCoordinator
-from tarnrag.ingestion.models import Batch
+from tarnrag.ingestion.jobs import Batch
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,8 @@
 import pytest
 
 from tarnrag.core.exceptions import IngestionError
-from tarnrag.storage.models import PipelineItem
-from tarnrag.ingestion.models import Batch
+from tarnrag.contracts import PipelineItem
+from tarnrag.ingestion.jobs import Batch
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import MapperStage
 from tarnrag.ingestion.queue import JobEnqueuer

@@ -29,10 +29,9 @@ from typing import Any, BinaryIO
 from tarnrag.core.config import IdPolicy, Settings, get_settings
 from tarnrag.core.observability import NoOpObservability
 from tarnrag.embedder import OnnxEmbedder
-from tarnrag.storage.index_meta import build_index_meta
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
 from tarnrag.storage.repository import DocumentRepository
-from tarnrag.storage.status import DocumentFactsSource, DocumentStatusReader
+from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import Pipeline
 from tarnrag.ingestion.queue import (

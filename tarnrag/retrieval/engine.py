@@ -15,9 +15,9 @@ from typing import Any
 
 from tarnrag.core.config import Settings, get_settings
 from tarnrag.embedder import Embedder, OnnxEmbedder
-from tarnrag.storage.index_meta import SCHEMA_VERSION
+from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
-from tarnrag.retrieval.types import MethodRef, Query, RetrievalResult
+from tarnrag.retrieval.types import Query
 
 
 class RetrievalError(Exception):

@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 
 
 class PipelineStage(ABC):

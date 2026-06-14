@@ -5,7 +5,7 @@ No Postgres, no pgQueuer, no embedding model — the embed stage uses a fake enc
 
 from sqlalchemy import func, select
 
-from tarnrag.storage.models import PipelineItem
+from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.queue import InMemoryJobQueue
 from tarnrag.ingestion.result_sink import create_sink_registry

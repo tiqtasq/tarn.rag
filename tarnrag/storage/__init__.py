@@ -1,6 +1,7 @@
 """
-Storage — the shared persistence layer (data models, the chunk-store / status ports, and the
-document repository with Postgres / SQLite dialects).
+Storage — the persistence layer: the document repository (Postgres / SQLite dialects) and the
+document-status read model. The cross-boundary contracts it implements (DTOs, the chunk-store /
+status ports, retrieval results, index_meta) live in ``tarnrag.contracts``.
 
 One store backs the system: the **repository** (``DocumentRepository``) at
 ``DATABASE__DOCUMENT_URL``. It holds the documents/chunks, the §8 retrieval index, the

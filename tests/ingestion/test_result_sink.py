@@ -1,4 +1,4 @@
-from tarnrag.storage.models import Chunk, Document, Embedding, PipelineItem
+from tarnrag.contracts import Chunk, Document, Embedding, PipelineItem
 from tarnrag.ingestion.result_sink import (
     ChunkMetadataResultSink,
     ChunkResultSink,

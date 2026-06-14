@@ -31,15 +31,18 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tarnrag.core.config import DatabaseSettings
-from tarnrag.storage.chunk_store import ChunkStore
-from tarnrag.storage.models import Chunk, Document, Embedding
-from tarnrag.storage.retrieval import Candidate, ChunkRecord
-from tarnrag.storage.status import (
+from tarnrag.contracts import (
+    Candidate,
+    Chunk,
+    ChunkRecord,
+    ChunkStore,
+    Document,
     DocumentFacts,
     DocumentFactsSource,
-    DocumentStatusReader,
+    Embedding,
     JobStatusSource,
 )
+from tarnrag.storage.status import DocumentStatusReader
 
 # §8 license_class is a closed enum (matches the strategy doc). Single source of truth for the
 # CHECK constraints on documents.license_class / chunks.license_class.

@@ -67,12 +67,13 @@ with RetrievalEngine.create() as r:                  # validates schema + embedd
 ```
 tarnrag/
 ├── core/         # infra only: config, exceptions, observability
+├── contracts/    # cross-boundary shared kernel: dtos · ports · results · index_meta
 ├── embedder.py   # Embedder ABC + OnnxEmbedder (shared by both engines)
 ├── storage/      # persistence layer
-│   ├── models.py · chunk_store.py · index_meta.py · retrieval.py · status.py
+│   ├── status.py     # DocumentStatusReader (composes the status ports)
 │   └── repository/   # base.py (DocumentRepository) · postgres.py · sqlite.py
 ├── ingestion/    # engine, worker, pipeline, orchestrator, queue, batch,
-│                 #   result_sink, models, types, factories, stages/
+│                 #   result_sink, jobs, types, factories, stages/
 └── retrieval/    # engine, types
 run_worker.py            # distributed consumer entry: asyncio.run(run_worker())
 scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
@@ -90,7 +91,7 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   registered handler, not a puller. **`PgQueuerJobQueue`** is the only file that imports pgQueuer
   (which owns SKIP LOCKED / retries / NOTIFY / dead-lettering); **`InMemoryJobQueue`** is the
   in-process double (embedded mode + tests, no Postgres). The consumer hands the worker a **`Batch`**
-  (`ingestion/models.py`) — homogeneous (all jobs share one `stage_name`, enforced by the
+  (`ingestion/jobs.py`) — homogeneous (all jobs share one `stage_name`, enforced by the
   constructor). Keep the port a delegating seam — never reimplement queue mechanics in it.
 - **Three-layer split:**
   - **Worker = compute only** (`ingestion/worker.py`). A pure handler holding only the coordinator
