@@ -40,14 +40,15 @@ async def test_chunk_sink_persists_and_threads_chunk_id(repo):
     assert [c.id for c in chunks] == [it.metadata["chunk_id"] for it in items]
 
 
-async def test_enrich_sink_updates_chunk_metadata(repo):
+async def test_enrich_sink_is_noop(repo):
+    # §8 has no chunk metadata column — the enrich sink finalizes successfully but stores nothing.
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
         [Chunk(parent_doc_id="", content="c", chunk_index=0, total_chunks=1, metadata={})],
     )
     item = PipelineItem(content="c", metadata={"chunk_id": cid, "char_count": 1, "word_count": 1})
     assert (await _finalize(ChunkMetadataResultSink(repo), [item])).persisted
-    assert (await repo.get_chunk(cid)).metadata["char_count"] == 1
+    assert "char_count" not in (await repo.get_chunk(cid)).metadata
 
 
 async def test_embedding_sink_persists(repo):
@@ -67,11 +68,11 @@ async def test_passthrough_persists_nothing(repo):
 
 
 async def test_finalize_reports_failure(repo):
-    # Enrich sink targeting a non-existent chunk -> ChunkNotFoundError -> not persisted.
-    item = PipelineItem(content="c", metadata={"chunk_id": "missing"})
-    outcome = await _finalize(ChunkMetadataResultSink(repo), [item])
+    # Embedding referencing a missing chunk -> FK violation -> finalize reports not-persisted.
+    emb = Embedding(chunk_id="missing", vector=[1.0, 0.0, 0.0], model="m", dimension=3)
+    outcome = await _finalize(EmbeddingResultSink(repo), [emb])
     assert not outcome.persisted
-    assert "missing" in outcome.detail
+    assert outcome.detail  # carries the DB error detail
 
 
 def test_registry_covers_all_stages():

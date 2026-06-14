@@ -1,6 +1,5 @@
 import pytest
 
-from tarnrag.core.exceptions import ChunkNotFoundError
 from tarnrag.storage.models import Chunk, Document, Embedding
 from tarnrag.storage.repository.sqlite import SqliteRepository
 
@@ -70,17 +69,16 @@ async def test_embeddings_and_vector_search(repo):
     assert top_sim > second_sim
 
 
-async def test_update_chunk_metadata(repo):
+async def test_update_chunk_metadata_is_noop(repo):
+    # §8 chunks carry no metadata column — update_chunk_metadata is a harmless no-op
+    # (enrichment is not persisted; the metadata bag is deferred).
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
-        [_chunk("a", 0, 1, k=1)],
+        [_chunk("a", 0, 1)],
     )
-    await repo.update_chunk_metadata(cid, {"k": 2, "extra": "x"})
-    ch = await repo.get_chunk(cid)
-    assert ch.metadata["k"] == 2 and ch.metadata["extra"] == "x"
-
-    with pytest.raises(ChunkNotFoundError):
-        await repo.update_chunk_metadata("missing", {"a": 1})
+    await repo.update_chunk_metadata(cid, {"k": 2})       # does not raise, stores nothing
+    await repo.update_chunk_metadata("missing", {"k": 2})  # also a no-op for unknown ids
+    assert "k" not in (await repo.get_chunk(cid)).metadata
 
 
 async def test_document_status_and_jobs(repo):

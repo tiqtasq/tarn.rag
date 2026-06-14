@@ -13,7 +13,6 @@ from typing import Any
 import numpy as np
 import sqlite_vec
 from sqlalchemy import Text, event, select
-from sqlalchemy.ext.asyncio import AsyncConnection
 
 from tarnrag.storage.models import Chunk
 from tarnrag.storage.repository.base import DocumentRepository
@@ -96,12 +95,6 @@ class SqliteRepository(DocumentRepository):
     def _decode_vector(self, stored) -> list[float]:
         return json.loads(stored)
 
-    async def _after_create_schema(self, conn: AsyncConnection) -> None:
-        await conn.exec_driver_sql(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_source_id "
-            "ON documents (json_extract(metadata, '$.source_id'))"
-        )
-
     async def vector_search(
         self,
         vector: list[float],
@@ -114,7 +107,7 @@ class SqliteRepository(DocumentRepository):
         (dev/small-scale; no ANN index).
         """
         stmt = select(self.chunks, self.embeddings.c.vector).join(
-            self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.id
+            self.embeddings, self.embeddings.c.chunk_id == self.chunks.c.chunk_id
         )
         if model:
             stmt = stmt.where(self.embeddings.c.model == model)
