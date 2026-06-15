@@ -1,4 +1,5 @@
-"""Component framework: self-registration, tag-dispatched construction,
+"""
+Component framework: self-registration, tag-dispatched construction,
 recursive child building, config validation, and the discriminated-union adapter.
 
 The Linear / Dropout / Sequential classes below are throwaway test doubles that

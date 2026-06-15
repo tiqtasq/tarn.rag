@@ -5,7 +5,6 @@ Class registry for components. The class registry owns the tag -> class mapping 
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Generic, TypeVar
 
 
 class DuplicateTagError(ValueError):

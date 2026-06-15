@@ -17,10 +17,13 @@ validated like any other field.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 from pydantic_core import PydanticUndefined
+
+if TYPE_CHECKING:
+    from tarnrag.core.components import ComponentFactory
 
 # --------------------------------------------------------------------------- #
 # Layer: base for config-driven classes.
@@ -54,7 +57,7 @@ class Component:
     def __init__(self, config: Component.Config) -> None:
         self.config = config
 
-    def _build_children(self, factory: 'ComponentFactory') -> None:
+    def _build_children(self, factory: ComponentFactory) -> None:
         """
         Hook for containers. No-op for leaf layers.
 

@@ -16,11 +16,10 @@ annotation, so guard that import with `if TYPE_CHECKING:` to avoid an import cyc
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
-from typing import Annotated, Any, ClassVar, Generic, Literal, TypeVar, Union
+from collections.abc import Mapping
+from typing import Annotated, Any, Union
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
-from pydantic_core import PydanticUndefined
+from pydantic import Field, TypeAdapter
 
 from .registry import Registry
 from .component import Component
