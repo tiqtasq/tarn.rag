@@ -5,6 +5,7 @@
 the engine's calls return. Everything else (orchestrator, queue, worker, stages) is internal.
 """
 
+from tarnrag.ingestion import stages  # noqa: F401  (registers the built-in stages on package import)
 from tarnrag.ingestion.engine import IngestionEngine, run_worker
 from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 

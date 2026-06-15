@@ -9,11 +9,11 @@ it). ``Pipeline`` is a thin ordered container of stages.
 from __future__ import annotations
 
 from abc import abstractmethod
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Iterator, Mapping
+from typing import Any, Literal
 
 from tarnrag.contracts import PipelineItem
-from tarnrag.core.components import Component
+from tarnrag.core.components import Component, ComponentFactory
 
 
 class PipelineStage(Component):
@@ -133,17 +133,64 @@ class FilterStage(PipelineStage):
             yield PipelineItem(content=new_text, metadata={**item.metadata, **updates})
 
 
-class Pipeline:
+class Pipeline(Component):
     """
-    An ordered list of stages. The DAG/orchestrator read ``.stages`` (name + config);
-    ``run`` is a convenience for in-process execution and local testing (the
-    distributed engine runs stages individually via the worker).
+    An ordered list of stages — a container ``Component``. Its ``Config`` lists raw stage specs and
+    ``_build_children`` instantiates them via the factory, so a whole pipeline is itself a spec:
+    ``{"class_name": "pipeline", "stages": [{"class_name": "Chunk", ...}, ...]}``. The
+    DAG/orchestrator read ``.stages``; ``run`` threads items through in-process (local testing — the
+    distributed engine runs stages individually via the worker). Two alternative constructors:
+    ``from_spec`` (a spec dict, via the factory) and ``from_stages`` (pre-made stage instances,
+    bypassing the factory — e.g. for tests that inject a fake embedder).
     """
 
-    def __init__(self, stages: list[PipelineStage]):
+    class Config(Component.Config):
+        class_name: Literal["pipeline"] = "pipeline"
+        stages: list[dict[str, Any]]
+
+    config: Pipeline.Config  # narrowed for type checkers (see Component)
+
+    def __init__(self, config: Pipeline.Config) -> None:
+        super().__init__(config)  # Component.__init__ stores self.config
+        self.stages: list[PipelineStage] = []
+
+    def _build_children(self, factory: ComponentFactory) -> None:
+        """Instantiate the stage specs via the SAME factory, asserting each is a PipelineStage."""
+        stages: list[PipelineStage] = []
+        for stage_spec in self.config.stages:
+            stage = factory.create(stage_spec)
+            if not isinstance(stage, PipelineStage):
+                raise TypeError(
+                    f"{stage_spec.get('class_name')!r} is a {type(stage).__name__}, "
+                    "not a PipelineStage"
+                )
+            stages.append(stage)
         if not stages:
             raise ValueError("Pipeline must have at least one stage")
         self.stages = stages
+
+    @classmethod
+    def from_spec(cls, spec: Mapping[str, Any]) -> Pipeline:
+        """Build a Pipeline (and its stages) from a spec —
+        ``{"class_name": "pipeline", "stages": [<stage spec>, ...]}`` — via ``ComponentFactory``.
+        The factory-driven companion to ``from_stages``; the referenced stage classes must be
+        imported (registered) first (importing ``tarnrag.ingestion`` registers the built-ins)."""
+        pipeline = ComponentFactory.get().create(dict(spec))
+        if not isinstance(pipeline, cls):
+            raise TypeError(
+                f"{spec.get('class_name')!r} built a {type(pipeline).__name__}, not a {cls.__name__}"
+            )
+        return pipeline
+
+    @classmethod
+    def from_stages(cls, stages: list[PipelineStage]) -> Pipeline:
+        """Build a Pipeline directly from already-constructed stages, bypassing the spec/factory —
+        for tests and advanced wiring that inject stage internals (e.g. a fake embedder)."""
+        if not stages:
+            raise ValueError("Pipeline must have at least one stage")
+        pipeline = cls(cls.Config(stages=[]))
+        pipeline.stages = list(stages)
+        return pipeline
 
     def run(self, items: Iterator[PipelineItem]) -> Iterator[Any]:
         """Thread each input item through every stage in order, yielding final results."""
