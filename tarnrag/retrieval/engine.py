@@ -15,7 +15,7 @@ from typing import Any
 
 from tarnrag.core.config import Settings, get_settings
 from tarnrag.core.engine import Engine
-from tarnrag.embedder import Embedder
+from tarnrag.core.embedder import Embedder
 from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.types import Query

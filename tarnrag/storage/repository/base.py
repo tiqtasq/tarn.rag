@@ -55,6 +55,27 @@ LICENSE_CLASSES = (
 )
 _LICENSE_CHECK = "license_class IN (" + ", ".join(f"'{c}'" for c in LICENSE_CLASSES) + ")"
 
+# Provenance columns carried in a DTO's ``metadata`` bag — the single source of truth for the
+# bag<->column mapping, used in BOTH directions: each entry's callable derives the column value
+# from the metadata bag on write, and (since column name == metadata key) the same name reads the
+# column back into the bag. Adding a provenance field is one entry here, not edits in four methods.
+# The identity (``document_id``), ``content`` / ``ordinal``, and the computed chunk ``content_hash``
+# are NOT passthrough, so they stay explicit in the write/read methods below.
+_DOC_PROVENANCE = {
+    "title": lambda md: md.get("title"),
+    "source_kind": lambda md: md.get("source_kind") or "document",
+    "standard_id": lambda md: md.get("standard_id"),
+    "doc_version": lambda md: md.get("doc_version"),
+    "license_class": lambda md: md.get("license_class") or "public_domain",
+    "content_hash": lambda md: md.get("content_hash"),
+}
+_CHUNK_PROVENANCE = {
+    "locator": lambda md: md.get("locator"),
+    "license_class": lambda md: md.get("license_class") or "public_domain",
+    "ai_grounding_allowed": lambda md: int(md.get("ai_grounding_allowed", 1)),
+    "available": lambda md: int(md.get("available", 1)),
+}
+
 
 class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     """
@@ -611,18 +632,13 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return document_id
 
     def _doc_values(self, doc: Document) -> dict:
-        """Map a Document DTO to §8 document columns — provenance read from its metadata bag with
-        safe defaults; the full ``content`` is kept Python-side."""
+        """Map a Document DTO to §8 document columns: identity + ``content`` explicit, the rest of
+        the provenance driven by ``_DOC_PROVENANCE`` (the bag<->column source of truth)."""
         md = doc.metadata or {}
         return {
             "document_id": md.get("source_id") or doc.id or str(uuid.uuid4()),
             "content": doc.content,
-            "title": md.get("title"),
-            "source_kind": md.get("source_kind") or "document",
-            "standard_id": md.get("standard_id"),
-            "doc_version": md.get("doc_version"),
-            "license_class": md.get("license_class") or "public_domain",
-            "content_hash": md.get("content_hash"),
+            **{col: derive(md) for col, derive in _DOC_PROVENANCE.items()},
         }
 
     async def _insert_chunks(
@@ -639,10 +655,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     "document_id": document_id or ch.parent_doc_id,
                     "ordinal": ch.chunk_index,
                     "text": ch.content,
-                    "locator": md.get("locator"),
-                    "license_class": md.get("license_class") or "public_domain",
-                    "ai_grounding_allowed": int(md.get("ai_grounding_allowed", 1)),
-                    "available": int(md.get("available", 1)),
+                    **{col: derive(md) for col, derive in _CHUNK_PROVENANCE.items()},
                     "content_hash": hashlib.sha256(ch.content.encode("utf-8")).hexdigest(),
                 }
             )
@@ -663,25 +676,15 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
 
     @staticmethod
     def _doc_metadata(r) -> dict[str, Any]:
-        """Reconstruct a metadata dict from §8 document columns (for the Document DTO)."""
-        return {
-            "source_id": r["document_id"],
-            "title": r["title"],
-            "source_kind": r["source_kind"],
-            "standard_id": r["standard_id"],
-            "doc_version": r["doc_version"],
-            "license_class": r["license_class"],
-            "content_hash": r["content_hash"],
-        }
+        """Reconstruct a metadata dict from §8 document columns (inverse of ``_doc_values``)."""
+        return {"source_id": r["document_id"], **{col: r[col] for col in _DOC_PROVENANCE}}
 
     @staticmethod
     def _chunk_metadata(r) -> dict[str, Any]:
-        """Reconstruct a metadata dict from §8 chunk columns (for the Chunk DTO)."""
+        """Reconstruct a metadata dict from §8 chunk columns: identity + the ``_CHUNK_PROVENANCE``
+        passthrough + the computed ``content_hash`` column."""
         return {
             "source_id": r["document_id"],
-            "locator": r["locator"],
-            "license_class": r["license_class"],
-            "ai_grounding_allowed": r["ai_grounding_allowed"],
-            "available": r["available"],
+            **{col: r[col] for col in _CHUNK_PROVENANCE},
             "content_hash": r["content_hash"],
         }

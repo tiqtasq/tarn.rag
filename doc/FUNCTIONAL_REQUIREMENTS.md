@@ -161,10 +161,10 @@ tarn.rag/
 │   │
 │   ├── core/                                    # infra only
 │   │   ├── config.py                            # Settings (nested sub-models, GROUP__FIELD env)
+│   │   ├── embedder.py                          # Embedder ABC + OnnxEmbedder (shared pipeline)
+│   │   ├── engine.py                            # Engine base (shared store+embedder construction + lifecycle)
 │   │   ├── exceptions.py
 │   │   └── observability.py                     # Observability ABC + NoOpObservability
-│   │
-│   ├── embedder.py                              # Embedder ABC + OnnxEmbedder (shared)
 │   │
 │   ├── contracts/                               # cross-boundary shared kernel (leaf package)
 │   │   ├── dtos.py                              # Document, Chunk, Embedding, PipelineItem, DocumentFacts, MethodRef
@@ -205,8 +205,7 @@ tarn.rag/
 
 ### Folder Rationale
 
-- **`tarnrag/core/`** — Infrastructure: config, exceptions, observability. No business logic.
-- **`tarnrag/embedder.py`** — The shared ONNX embedding pipeline (ingestion passages + retrieval queries).
+- **`tarnrag/core/`** — Infrastructure: config, the shared ONNX embedding pipeline (`embedder.py`), the `Engine` base (shared store+embedder construction + lifecycle), exceptions, observability. No business logic.
 - **`tarnrag/storage/`** — Persistence: data models, the chunk/index stores, the status read model, and `repository/` (Postgres/SQLite dialects).
 - **`tarnrag/ingestion/`** — Ingestion: stages, pipeline, orchestrator, worker, queue, and the `IngestionEngine` facade.
 - **`tarnrag/retrieval/`** — Retrieval: the `RetrievalEngine` facade + its types.
