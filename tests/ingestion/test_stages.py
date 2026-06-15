@@ -91,7 +91,8 @@ def test_stage_built_from_dict_spec_via_component_factory():
     chunk = ComponentFactory.get().create({"class_name": "Chunk", "chunk_size": 16, "overlap": 4})
     assert isinstance(chunk, ChunkStage)
     assert (chunk.config.chunk_size, chunk.config.overlap) == (16, 4)
-    assert chunk.name == "Chunk"
+    assert chunk.tag == "Chunk"  # the type tag (the sink/metrics key)
+    assert chunk.name.startswith("Chunk-")  # unnamed instance -> counter-suffixed unique id
     assert chunk.to_json()["class_name"] == "Chunk"  # round-trips back to a spec
 
 

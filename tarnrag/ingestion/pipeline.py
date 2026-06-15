@@ -27,17 +27,30 @@ class PipelineStage(Component):
     class Config(Component.Config):
         """Base stage config. Concrete stages pin ``class_name`` and add their own fields."""
 
+    # Global monotonic counter across all stage instances, used to disambiguate auto-derived
+    # names so two unnamed instances of one stage class don't clash.
+    _instance_counter: int = 0
+
     def __init__(self, config: PipelineStage.Config) -> None:
         super().__init__(config)  # Component.__init__ stores self.config
-        # Per-instance identity used as the DAG node / sink-registry key / job.stage_name.
-        # Defaults to the class_name tag, but a config-supplied ``name`` lets several instances
-        # of one stage class coexist in a pipeline.
-        self._name: str = config.name or getattr(config, "class_name", None) or type(self).__name__
+        # `name` is the per-instance identity (DAG node / job.stage_name) and must be unique: an
+        # explicit `config.name` wins, else the class_name tag gets the global counter appended so
+        # several unnamed instances of one stage class can coexist. Sinks and metrics key off
+        # `tag` (the type), not on this.
+        class_tag = getattr(config, "class_name", None) or type(self).__name__
+        self._name: str = config.name or f"{class_tag}-{PipelineStage._instance_counter}"
+        PipelineStage._instance_counter += 1
 
     @property
     def name(self) -> str:
-        """The stage's read-only identity within a pipeline."""
+        """The stage's read-only, unique identity within a pipeline (DAG node / job target)."""
         return self._name
+
+    @property
+    def tag(self) -> str:
+        """The stage's TYPE tag — the Config's ``class_name`` — the sink-registry and obs-metric
+        key (falls back to the instance name for un-tagged stages, e.g. test doubles)."""
+        return getattr(self.config, "class_name", None) or self._name
 
     @abstractmethod
     def process(self, item: PipelineItem) -> Iterator[Any]:

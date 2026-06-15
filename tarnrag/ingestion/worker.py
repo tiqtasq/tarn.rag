@@ -40,13 +40,15 @@ class IngestionWorker:
         """Process one dispatched ``Batch`` (homogeneous: one stage). Raising → requeue
         (recovery); returning normally → ack."""
         stage_name = batch.stage_name
+        tag = stage_name  # type tag for metrics; resolved from the stage instance below
         ctx = await self.coordinator.begin_batch(batch)
         produced = 0
         try:
             stage = self.coordinator.get_stage(stage_name)  # long-lived DAG instance
+            tag = stage.tag
             items = [job.item for job in batch.jobs]  # inline items (D1)
             # Time the pure compute (stages stay obs-free; the worker observes them).
-            timer = self.obs.timer(f"stage.{stage_name}.process") if self.obs else nullcontext()
+            timer = self.obs.timer(f"stage.{tag}.process") if self.obs else nullcontext()
             with timer:
                 for result in stage.process_batch(items):
                     if getattr(result, "id", None) is None:
@@ -54,18 +56,18 @@ class IngestionWorker:
                     ctx.submit([result])
                     produced += 1
             if self.obs:
-                self.obs.counter(f"stage.{stage_name}.batches")
-                self.obs.counter(f"stage.{stage_name}.items", produced)
+                self.obs.counter(f"stage.{tag}.batches")
+                self.obs.counter(f"stage.{tag}.items", produced)
         except Exception as e:  # noqa: BLE001 - record + re-raise so the queue requeues
             logger.error(
                 "Worker %s compute failed on %s: %s", self.worker_id, stage_name, e,
                 exc_info=True,
             )
             if self.obs:
-                self.obs.counter(f"stage.{stage_name}.errors")
+                self.obs.counter(f"stage.{tag}.errors")
                 await self.obs.log(
                     "error", "stage compute failed",
-                    stage=stage_name, worker=self.worker_id, error=str(e),
+                    stage=tag, worker=self.worker_id, error=str(e),
                 )
             await ctx.fail(e)
             raise
