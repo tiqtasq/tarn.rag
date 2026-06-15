@@ -89,7 +89,9 @@ class Chunk(BaseModel):
     parent_doc_id: str
     content: str
     chunk_index: int
-    total_chunks: int
+    # In-flight bookkeeping (set by ChunkerStage). §8 stores only the per-chunk ``ordinal``, not
+    # the total, so this is None when a Chunk is reconstructed from a stored row.
+    total_chunks: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -97,8 +99,10 @@ class Chunk(BaseModel):
 
 class Embedding(BaseModel):
     """
-    A chunk's dense vector — at-rest ONLY (terminal stage output; never flows).
-    Mapped to/from the ``embeddings`` table.
+    A chunk's dense vector — at-rest ONLY (terminal stage output; never flows). A write-side DTO:
+    nothing reconstructs an ``Embedding`` from storage. Persisted to the ``embeddings`` table on
+    Postgres; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
+    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` / ``metadata`` are dropped there.
     """
 
     id: str | None = None
