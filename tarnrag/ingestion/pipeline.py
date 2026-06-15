@@ -8,7 +8,7 @@ it). ``Pipeline`` is a thin ordered container of stages.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
@@ -16,7 +16,7 @@ from tarnrag.contracts import PipelineItem
 from tarnrag.core.components import Component
 
 
-class PipelineStage(Component, ABC):
+class PipelineStage(Component):
     """
     Base class for a pure transformation stage — a ``Component`` built from a typed ``Config``.
     Subclass a typed helper below (MapperStage / ChunkerStage / FilterStage) unless a stage needs

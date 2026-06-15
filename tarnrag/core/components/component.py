@@ -17,6 +17,7 @@ like any other field. Registration happens at class-definition time into the pro
 
 from __future__ import annotations
 
+from abc import ABC
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 # Component: base for config-driven classes.
 # --------------------------------------------------------------------------- #
-class Component:
+class Component(ABC):
 
     class Config(BaseModel):
         name: str | None = None                     # shared field for every layer
