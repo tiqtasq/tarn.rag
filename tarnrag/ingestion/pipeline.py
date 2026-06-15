@@ -8,24 +8,49 @@ it). ``Pipeline`` is a thin ordered container of stages.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
 from tarnrag.contracts import PipelineItem
+from tarnrag.core.components import Component
 
 
-class PipelineStage(ABC):
+class PipelineStage(Component):
     """
-    Base class for a pure transformation stage. Subclass a typed helper below
-    (MapperStage / ChunkerStage / FilterStage) unless a stage needs full control.
+    Base class for a pure transformation stage — a ``Component`` built from a typed ``Config``.
+    Subclass a typed helper below (MapperStage / ChunkerStage / FilterStage) unless a stage needs
+    full control. Construct from a config, e.g. ``ChunkStage(ChunkStage.Config(chunk_size=256))``;
+    field validation lives on the ``Config`` (pydantic), not in a separate ``validate()``.
     """
 
-    def __init__(self, name: str):
-        self.name = name
-        # validate() runs here: subclasses must set any attrs it reads BEFORE
-        # calling super().__init__().
-        self.validate()
+    class Config(Component.Config):
+        """Base stage config. Concrete stages pin ``class_name`` and add their own fields."""
+
+    # Global monotonic counter across all stage instances, used to disambiguate auto-derived
+    # names so two unnamed instances of one stage class don't clash.
+    _instance_counter: int = 0
+
+    def __init__(self, config: PipelineStage.Config) -> None:
+        super().__init__(config)  # Component.__init__ stores self.config
+        # `name` is the per-instance identity (DAG node / job.stage_name) and must be unique: an
+        # explicit `config.name` wins, else the class_name tag gets the global counter appended so
+        # several unnamed instances of one stage class can coexist. Sinks and metrics key off
+        # `tag` (the type), not on this.
+        class_tag = getattr(config, "class_name", None) or type(self).__name__
+        self._name: str = config.name or f"{class_tag}-{PipelineStage._instance_counter}"
+        PipelineStage._instance_counter += 1
+
+    @property
+    def name(self) -> str:
+        """The stage's read-only, unique identity within a pipeline (DAG node / job target)."""
+        return self._name
+
+    @property
+    def tag(self) -> str:
+        """The stage's TYPE tag — the Config's ``class_name`` — the sink-registry and obs-metric
+        key (falls back to the instance name for un-tagged stages, e.g. test doubles)."""
+        return getattr(self.config, "class_name", None) or self._name
 
     @abstractmethod
     def process(self, item: PipelineItem) -> Iterator[Any]:
@@ -37,10 +62,6 @@ class PipelineStage(ABC):
         size their own compute/model calls."""
         for item in items:
             yield from self.process(item)
-
-    @abstractmethod
-    def validate(self) -> None:
-        """Validate configuration at construction; raise on invalid config."""
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r})"

@@ -26,13 +26,10 @@ class RecordingEnqueuer(JobEnqueuer):
 
 class _NoopStage(MapperStage):
     def __init__(self, name: str):
-        super().__init__(name=name)
+        super().__init__(MapperStage.Config(name=name))
 
     def map(self, text, metadata):
         return text, {}
-
-    def validate(self) -> None:
-        return None
 
 
 def _dag(*names):

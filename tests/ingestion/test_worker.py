@@ -16,14 +16,11 @@ class BoomStage(PipelineStage):
     """A stage that always fails during compute."""
 
     def __init__(self):
-        super().__init__(name="Boom")
+        super().__init__(PipelineStage.Config(name="Boom"))
 
     def process(self, item):
         raise RuntimeError("boom")
         yield  # pragma: no cover - marks this a generator
-
-    def validate(self) -> None:
-        return None
 
 
 def _wire(queue, repo):
@@ -81,13 +78,10 @@ async def test_worker_reports_to_context_without_orchestrator():
 
     class EchoStage(PipelineStage):
         def __init__(self):
-            super().__init__(name="Echo")
+            super().__init__(PipelineStage.Config(name="Echo"))
 
         def process(self, item):
             yield item
-
-        def validate(self):
-            return None
 
     class FakeCoordinator(BatchCoordinator):
         def get_stage(self, stage_name):

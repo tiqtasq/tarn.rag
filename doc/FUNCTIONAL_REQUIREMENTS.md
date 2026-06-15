@@ -425,32 +425,39 @@ CREATE INDEX idx_job_status_document ON job_status (document_id);
 
 ### Stage base classes (`tarnrag/ingestion/pipeline.py`)
 
-ABCs. `PipelineStage(name, **config)` runs `validate()` in `__init__` — so a subclass
-must set any attrs `validate()` reads **before** `super().__init__()`. A stage exposes
+ABCs, and config-driven **`Component`s** (`tarnrag/core/components`): each stage declares a typed
+nested `Config` (a pydantic model that pins a `class_name` tag plus the stage's fields) and is
+built from it — `ChunkStage(ChunkStage.Config(chunk_size=256))`, or from a dict/JSON spec via
+`ComponentFactory.create({"class_name": "Chunk", …})`. Field validation lives on the `Config`
+(pydantic constraints + `model_validator`s), not a separate `validate()`. `stage.name` is a
+read-only property over `config.name or class_name`, so several instances of one stage class can
+coexist in a pipeline (each with its own `name`), defaulting to the tag. A stage exposes
 `process(item) -> Iterator` and the batch entrypoint `process_batch(items)` (default maps
-`process`; override for model batching). Typed helpers: `MapperStage` (1→1, override
-`map`), `ChunkerStage` (1→N, sets `chunk_index`/`total_chunks`), `FilterStage` (1→{0,1}).
+`process`; override for model batching). Typed helpers: `MapperStage` (1→1, override `map`),
+`ChunkerStage` (1→N, sets `chunk_index`/`total_chunks`), `FilterStage` (1→{0,1}).
 `Pipeline` is a thin ordered container (`run()` threads items through stages in-process,
 for local testing; the distributed engine runs stages individually). Stages stay pure —
 no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → ResultSink).
 
 ### Concrete stages (`tarnrag/ingestion/stages/`)
 
-Names below are the `stage.name` values (and the sink-registry keys):
+Names below are each stage's `class_name` tag (its default `stage.name`, and the sink-registry key):
 
 - **LoadAndParse** (`MapperStage`) — loads `metadata['source_path']` (txt; html via
   BeautifulSoup; pdf via a **pluggable backend registry**) or uses the given content; assigns a
-  provisional `doc_id`. The loaders live in `stages/parsers.py` (`pypdf` default, `pdfplumber`,
-  `load_html` (bs4); all permissive, lazily imported). The set of backends is **stage config** (built once); a
-  request picks one per call via `metadata['parser']` (**item data**, flows inline — *not* the
-  per-job `stage_config` we dropped). The API validates `parser` against the registry (422).
+  provisional `doc_id`. The loaders are a module-level registry in `stages/parsers.py`
+  (`DEFAULT_PDF_PARSERS`: `pypdf` default, `pdfplumber`, `load_html` (bs4); all permissive, lazily
+  imported). The Config's `default_pdf_parser` (validated against that registry) is the default; a
+  request overrides it per call via `metadata['parser']` (**item data**, flows inline). The API
+  validates `parser` against the registry (422).
 - **CleanAndNormalize** (`MapperStage`) — strips control chars, collapses whitespace.
 - **Chunk** (`ChunkerStage`) — recursive character splitting on coarse→fine separators,
   packed into `chunk_size` windows with `overlap`.
 - **EnrichMetadata** (`MapperStage`) — adds `char_count`/`word_count` (NLP is future).
 - **Embed** (`PipelineStage`, terminal) — vectorizes chunks → `Embedding`s; `process_batch`
-  groups items into `model_batch_size` model calls; `chunk_id` from `metadata['chunk_id']`.
-  Lazy-loads sentence-transformers (tests inject a fake `encode`).
+  groups items into `embedding.batch_size` model calls; `chunk_id` from `metadata['chunk_id']`.
+  Its Config holds the `embedding` (`EmbeddingSettings`) identity, kept in sync with the
+  retrieval-side embedder; the ONNX embedder lazy-loads (tests inject a fake via `stage._embedder`).
 ## Result Sinks
 
 Output-side sinks (D4). A worker `submit()`s produced results and `close()`s — both

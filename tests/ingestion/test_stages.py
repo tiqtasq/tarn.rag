@@ -1,6 +1,9 @@
 import pytest
+from pydantic import ValidationError
 
 from tarnrag.contracts import PipelineItem
+from tarnrag.core.components import ComponentFactory
+from tarnrag.core.config import EmbeddingSettings
 from tarnrag.ingestion.pipeline import Pipeline
 from tarnrag.ingestion.stages.chunk import ChunkStage
 from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
@@ -16,25 +19,26 @@ def _item(content, **meta):
 def test_load_from_file(tmp_path):
     p = tmp_path / "doc.txt"
     p.write_text("hello from a file")
-    out = list(LoadAndParseStage().process(_item("", source_path=str(p))))
+    out = list(LoadAndParseStage(LoadAndParseStage.Config()).process(_item("", source_path=str(p))))
     assert len(out) == 1
     assert out[0].content == "hello from a file"
     assert out[0].metadata["doc_id"] and out[0].metadata["loaded"] is True
 
 
 def test_load_passthrough_content():
-    out = list(LoadAndParseStage().process(_item("already loaded")))
+    out = list(LoadAndParseStage(LoadAndParseStage.Config()).process(_item("already loaded")))
     assert out[0].content == "already loaded"
 
 
 def test_clean_normalizes_whitespace_and_controls():
-    out = list(CleanAndNormalizeStage().process(_item("  a\x07b   c\t\td  ")))
+    stage = CleanAndNormalizeStage(CleanAndNormalizeStage.Config())
+    out = list(stage.process(_item("  a\x07b   c\t\td  ")))
     assert out[0].content == "ab c d"
     assert out[0].metadata["cleaned"] is True
 
 
 def test_chunk_splits_and_indexes():
-    stage = ChunkStage(chunk_size=20, overlap=4)
+    stage = ChunkStage(ChunkStage.Config(chunk_size=20, overlap=4))
     text = "abcdefghij " * 8  # ~88 chars -> several chunks
     out = list(stage.process(_item(text, doc_id="d1")))
     assert len(out) > 1
@@ -45,14 +49,15 @@ def test_chunk_splits_and_indexes():
 
 
 def test_chunk_validation():
-    with pytest.raises(ValueError):
-        ChunkStage(chunk_size=0)
-    with pytest.raises(ValueError):
-        ChunkStage(chunk_size=10, overlap=10)
+    # Validation now lives on the Config (pydantic), raised at config construction.
+    with pytest.raises(ValidationError):
+        ChunkStage.Config(chunk_size=0)
+    with pytest.raises(ValidationError):
+        ChunkStage.Config(chunk_size=10, overlap=10)
 
 
 def test_enrich_counts():
-    out = list(EnrichMetadataStage().process(_item("one two three")))
+    out = list(EnrichMetadataStage(EnrichMetadataStage.Config()).process(_item("one two three")))
     assert out[0].metadata["word_count"] == 3
     assert out[0].metadata["char_count"] == len("one two three")
 
@@ -69,7 +74,7 @@ class _FakeEmbedder:
 
 
 def test_embed_produces_embeddings_with_model_batching():
-    stage = EmbedStage(model_batch_size=2)
+    stage = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(batch_size=2)))
     stage._embedder = _FakeEmbedder()
     items = [
         _item(f"chunk {i}", chunk_id=f"c{i}", source_id="s1") for i in range(3)
@@ -77,17 +82,27 @@ def test_embed_produces_embeddings_with_model_batching():
     embs = list(stage.process_batch(items))
     assert [e.chunk_id for e in embs] == ["c0", "c1", "c2"]
     assert all(e.dimension == 3 and e.model.endswith("all-MiniLM-L6-v2") for e in embs)
-    # model_batch_size=2 over 3 items -> two embed calls (two-tier batching)
+    # batch_size=2 over 3 items -> two embed calls (two-tier batching)
     assert len(stage._embedder.calls) == 2
+
+
+def test_stage_built_from_dict_spec_via_component_factory():
+    """The migration's goal: a stage instantiated from a plain dict spec by its class_name tag."""
+    chunk = ComponentFactory.get().create({"class_name": "Chunk", "chunk_size": 16, "overlap": 4})
+    assert isinstance(chunk, ChunkStage)
+    assert (chunk.config.chunk_size, chunk.config.overlap) == (16, 4)
+    assert chunk.tag == "Chunk"  # the type tag (the sink/metrics key)
+    assert chunk.name.startswith("Chunk-")  # unnamed instance -> counter-suffixed unique id
+    assert chunk.to_json()["class_name"] == "Chunk"  # round-trips back to a spec
 
 
 def test_pipeline_composition_doc_to_chunks():
     pipe = Pipeline(
         [
-            LoadAndParseStage(),
-            CleanAndNormalizeStage(),
-            ChunkStage(chunk_size=20, overlap=4),
-            EnrichMetadataStage(),
+            LoadAndParseStage(LoadAndParseStage.Config()),
+            CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
+            ChunkStage(ChunkStage.Config(chunk_size=20, overlap=4)),
+            EnrichMetadataStage(EnrichMetadataStage.Config()),
         ]
     )
     item = _item("  Hello   world.  " * 6, source_id="s1")
