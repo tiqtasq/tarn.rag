@@ -14,7 +14,7 @@ import asyncio
 from typing import Any
 
 from tarnrag.core.config import Settings, get_settings
-from tarnrag.composition import build_repository_and_embedder
+from tarnrag.core.engine import Engine
 from tarnrag.embedder import Embedder
 from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
@@ -27,7 +27,7 @@ class RetrievalError(Exception):
     """
 
 
-class RetrievalEngine:
+class RetrievalEngine(Engine):
     """
     Async query facade over the §8 repository (ModusQ §5): embed → KNN → hydrate → assemble. Built
     via ``create`` (or the ``open`` seam), which refuses an index whose embedding fingerprint or
@@ -68,7 +68,7 @@ class RetrievalEngine:
         ``open``. The easy entry point; ``open`` is the lower-level seam for injecting your own
         repository/embedder."""
         settings = settings or get_settings()
-        repository, embedder = await build_repository_and_embedder(settings)
+        repository, embedder = await cls._build_repository_and_embedder(settings)
         return await cls.open(repository, embedder, config=settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:
@@ -107,13 +107,3 @@ class RetrievalEngine:
     ) -> list[RetrievalResult]:
         """Convenience over :meth:`search`: build a :class:`Query` from a raw string."""
         return await self.search(Query(text=text, top_k=top_k, dense_k=dense_k))
-
-    async def aclose(self) -> None:
-        """Release the repository (its async engine pool)."""
-        await self.repository.disconnect()
-
-    async def __aenter__(self) -> RetrievalEngine:
-        return self
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self.aclose()
