@@ -11,6 +11,9 @@ class EnrichMetadataStage(MapperStage):
     """
     Attach cheap, content-derived metadata. Richer NLP enrichment (NER, noun
     phrases) is a future extension — see the metadata conventions in Core Models.
+
+    Note: the derived fields are not persisted yet — the downstream ChunkMetadataResultSink
+    write is a deliberate no-op (§8 chunks have no metadata column).
     """
 
     def __init__(self) -> None:

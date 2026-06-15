@@ -339,8 +339,10 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return ids
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
-        # §8 chunks carry no metadata column — enrichment is not persisted (the metadata bag is
-        # deferred; see the rag-chunk-metadata-deferred note). No-op by design.
+        # No-op BY DESIGN (not unfinished): §8 chunks carry no metadata column, so chunk
+        # enrichment is not persisted. A general chunk-metadata bag is deferred to a later
+        # schema revision; the method stays on the port — and the EnrichMetadata →
+        # ChunkMetadataResultSink path stays wired — so re-enabling it is a one-method change.
         return None
 
     # ---------------- dialect search-index hooks (vec0 / FTS live outside the FK graph) ----------------
@@ -650,12 +652,12 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return ids
 
     def _row_to_chunk(self, r) -> Chunk:
+        # total_chunks is left at its None default: §8 stores ordinal, not the total.
         return Chunk(
             id=r["chunk_id"],
             parent_doc_id=r["document_id"],
             content=r["text"],
             chunk_index=r["ordinal"],
-            total_chunks=0,  # not stored in §8 (derive from a count if ever needed)
             metadata=self._chunk_metadata(r),
         )
 

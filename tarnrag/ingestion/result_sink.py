@@ -111,7 +111,6 @@ class ChunkResultSink(_BufferingSink):
                 parent_doc_id=item.metadata["doc_id"],
                 content=item.content,
                 chunk_index=item.metadata["chunk_index"],
-                total_chunks=item.metadata["total_chunks"],
                 metadata=item.metadata,
             )
             for item in results
@@ -123,7 +122,11 @@ class ChunkResultSink(_BufferingSink):
 
 class ChunkMetadataResultSink(_BufferingSink):
     """
-    After EnrichMetadata: merge enrichment into the chunk via update_chunk_metadata.
+    After EnrichMetadata: merges enrichment into the chunk via ``update_chunk_metadata``.
+
+    Intentionally inert today — §8 chunks have no metadata column, so the repository's
+    ``update_chunk_metadata`` is a no-op by design (not unfinished). The stage → sink → port
+    wiring is kept intact so re-enabling chunk metadata is a one-method change, not a rebuild.
     """
 
     async def _persist(self, results: list[Any]) -> None:

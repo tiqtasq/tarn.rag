@@ -28,7 +28,7 @@ from typing import Any, BinaryIO
 
 from tarnrag.core.config import IdPolicy, Settings, get_settings
 from tarnrag.core.observability import NoOpObservability
-from tarnrag.embedder import OnnxEmbedder
+from tarnrag.composition import build_repository_and_embedder
 from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
@@ -105,10 +105,7 @@ class IngestionEngine:
         the constructor is the lower-level seam for injecting your own wiring."""
         settings = settings or get_settings()
         obs = NoOpObservability() if settings.observability.enabled else None
-        repository = await DocumentRepository.create(
-            settings.database, settings.EMBEDDING_DIMENSION
-        )
-        embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
+        repository, embedder = await build_repository_and_embedder(settings)
         # The engine is the index producer: stamp the §8 build/identity record onto the
         # repository (RetrievalEngine.open validates it). The sinks persist document/chunk/
         # embedding data into the same repository; job_status lives there too.
@@ -273,9 +270,7 @@ class IngestionEngine:
 
     async def aclose(self) -> None:
         """Release resources owned by the engine (the repository's DB engine pool)."""
-        engine = getattr(self.repository, "engine", None)
-        if engine is not None:
-            await engine.dispose()
+        await self.repository.disconnect()
 
     async def __aenter__(self) -> IngestionEngine:
         return self

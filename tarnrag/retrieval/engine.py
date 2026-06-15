@@ -14,7 +14,8 @@ import asyncio
 from typing import Any
 
 from tarnrag.core.config import Settings, get_settings
-from tarnrag.embedder import Embedder, OnnxEmbedder
+from tarnrag.composition import build_repository_and_embedder
+from tarnrag.embedder import Embedder
 from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.types import Query
@@ -67,10 +68,7 @@ class RetrievalEngine:
         ``open``. The easy entry point; ``open`` is the lower-level seam for injecting your own
         repository/embedder."""
         settings = settings or get_settings()
-        repository = await DocumentRepository.create(
-            settings.database, settings.EMBEDDING_DIMENSION
-        )
-        embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
+        repository, embedder = await build_repository_and_embedder(settings)
         return await cls.open(repository, embedder, config=settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:

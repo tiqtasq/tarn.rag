@@ -18,6 +18,7 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
+from typing import Any
 
 from tarnrag.core.config import EmbeddingSettings
 
@@ -106,12 +107,14 @@ class OnnxEmbedder(Embedder):
     def _tokenizer_sha256(self) -> str:
         return hashlib.sha256(self.tokenizer_path.read_bytes()).hexdigest()
 
-    def config_fingerprint(self) -> str:
+    def _identity(self) -> dict[str, Any]:
         """
-        Stable hash of the pipeline identity (model/tokenizer/pooling/normalize/prefixes/…),
-        recorded in ``index_meta`` — retrieval refuses to open an index whose fingerprint differs.
+        The embedding-pipeline identity — the single source of truth for both
+        ``config_fingerprint`` (which hashes it) and ``embed_meta`` (which records it). The keys
+        and value types here are FROZEN: they are exactly what gets hashed, so changing any of
+        them changes every index's fingerprint. Add a new identity-bearing field here once.
         """
-        identity = {
+        return {
             "model_id": self.model_id,
             "revision": self.revision,
             "embedding_dim": self.embedding_dim,
@@ -122,20 +125,30 @@ class OnnxEmbedder(Embedder):
             "passage_prefix": self.passage_prefix,
             "max_length": self.max_length,
         }
-        blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+
+    def config_fingerprint(self) -> str:
+        """
+        Stable hash of the pipeline identity (model/tokenizer/pooling/normalize/prefixes/…),
+        recorded in ``index_meta`` — retrieval refuses to open an index whose fingerprint differs.
+        """
+        blob = json.dumps(self._identity(), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def embed_meta(self) -> dict[str, str]:
+        """The ``index_meta`` embedding keys (incl. ``embedding_config_fingerprint``): the
+        ``_identity`` values stringified, with model id/revision under their ``embedding_*``
+        column names."""
+        ident = self._identity()
         return {
-            "embedding_model_id": self.model_id,
-            "embedding_model_revision": self.revision,
-            "embedding_dim": str(self.embedding_dim),
-            "tokenizer_sha256": self._tokenizer_sha256(),
-            "pooling": self.pooling,
-            "normalize": self.normalize,
-            "query_prefix": self.query_prefix,
-            "passage_prefix": self.passage_prefix,
-            "max_length": str(self.max_length),
+            "embedding_model_id": ident["model_id"],
+            "embedding_model_revision": ident["revision"],
+            "embedding_dim": str(ident["embedding_dim"]),
+            "tokenizer_sha256": ident["tokenizer_sha256"],
+            "pooling": ident["pooling"],
+            "normalize": ident["normalize"],
+            "query_prefix": ident["query_prefix"],
+            "passage_prefix": ident["passage_prefix"],
+            "max_length": str(ident["max_length"]),
             "embedding_config_fingerprint": self.config_fingerprint(),
         }
 
