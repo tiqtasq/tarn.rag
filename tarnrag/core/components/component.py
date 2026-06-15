@@ -1,18 +1,18 @@
-"""
+"""Base class for config-driven classes — the ``Component`` family.
 
-Component class is the base class for ckasses that can be instantiated from
-configs. This base for buildable classes; declares a typed nested Config and
-registers itself by reading its Config's `class_name` discriminator.
-
-Every concrete component pins its tag as a Literal field on its Config:
+A ``Component`` declares a typed nested ``Config`` and self-registers by reading its Config's
+``class_name`` discriminator, so it can be built from a plain dict/JSON spec via
+``ComponentFactory``. Every concrete component pins its tag as a ``Literal`` field on its Config,
+equal to the field's default:
 
     class MyComponent(Component):
         class Config(Component.Config):
-            class_name: Literal["linear"] = "my_component"
-            other_variables: ...
+            class_name: Literal["my_component"] = "my_component"
+            ...other fields...
 
-so the tag travels with the serialized config (model_dump round-trips it) and is
-validated like any other field.
+so the tag travels with the serialized config (``model_dump`` round-trips it) and is validated
+like any other field. Registration happens at class-definition time into the process-global
+``ComponentFactory``, so a component must be IMPORTED before the factory can build it from a spec.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from tarnrag.core.components import ComponentFactory
 
 # --------------------------------------------------------------------------- #
-# Layer: base for config-driven classes.
+# Component: base for config-driven classes.
 # --------------------------------------------------------------------------- #
 class Component:
 
@@ -59,17 +59,17 @@ class Component:
 
     def _build_children(self, factory: ComponentFactory) -> None:
         """
-        Hook for containers. No-op for leaf layers.
+        Hook for container components. No-op for leaf components.
 
-        Override to construct nested layers from `self.config` using the SAME
+        Override to construct nested components from ``self.config`` using the SAME
         factory, so the whole tree is built against one registry:
 
             def _build_children(self, factory):
-                self.layers = [factory.create(s) for s in self.config.layers]
+                self.children = [factory.create(spec) for spec in self.config.children]
         """
 
     def to_json(self) -> dict[str, Any]:
-        """Serialize back to the dict shape that LayerFactory.create consumes."""
+        """Serialize back to the dict shape that ``ComponentFactory.create`` consumes."""
         return self.config.model_dump()
 
     def __repr__(self) -> str:

@@ -1,17 +1,17 @@
-"""Tag-dispatched factory for a family of config-driven classes.
+"""Tag-dispatched factory that turns a serialized spec dict into a ``Component``.
 
-Three pieces, each with one job:
+The framework is three small modules, each with one job:
 
-  Registry      owns the tag -> class mapping (a pure lookup table)
-  Layer         base for buildable classes; declares a typed nested Config and
-                registers itself by reading its Config's `class_name` discriminator
-  LayerFactory  turns a serialized spec dict into a Layer instance (validate then
-                construct, recursing into nested children)
+  Registry          (registry.py)         the tag -> class mapping, a pure lookup table
+  Component         (component.py)        base for buildable classes; declares a typed nested
+                                          Config and self-registers by its ``class_name`` tag
+  ComponentFactory  (this module)         validate a spec into its Config, construct the
+                                          Component, recursing into nested children
 
-
-To split across modules: Registry and the exceptions go in one file, Layer in a
-second, LayerFactory in a third. Layer references LayerFactory only inside an
-annotation, so guard that import with `if TYPE_CHECKING:` to avoid an import cycle.
+A ``ComponentFactory`` holds a ``Registry`` and is also reachable as a process-global singleton
+via ``ComponentFactory.get()`` — which is where ``Component`` subclasses self-register on import.
+``Component`` only references ``ComponentFactory`` inside a ``TYPE_CHECKING`` annotation (plus a
+lazy import in ``__init_subclass__``), which avoids the import cycle between the two modules.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ class ComponentFactory:
 
     @staticmethod
     def get() -> ComponentFactory:
-        return _componentFactory
+        return _component_factory
 
     def __init__(self, registry: Registry[Component] | None = None) -> None:
         self.registry: Registry[Component] = registry if registry is not None else Registry[Component]()
@@ -85,4 +85,4 @@ class ComponentFactory:
         self.registry.register(tag, cls)
 
 
-_componentFactory = ComponentFactory()
+_component_factory = ComponentFactory()
