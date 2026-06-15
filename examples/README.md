@@ -1,0 +1,64 @@
+# tarnrag examples
+
+Runnable, self-contained examples that teach the `tarnrag` architecture one piece at a time.
+
+- **Part I** (`part_i/`) — minimal examples over **SQLite / embedded mode** (zero infra). Each
+  shows one aspect of the pipeline: ingestion + retrieval, chunking, id policy, enrichment, …
+- **Part II** (`part_ii/`) — production concerns: deployment, evaluation, fine-tuning *(coming)*.
+
+## Setup (once, from the repo root)
+
+```bash
+pip install -e ".[onnx]"       # the tarnrag package + the ONNX embedding runtime
+python scripts/fetch_model.py  # download the embedding model + tokenizer (needs network)
+```
+
+## Running an example
+
+Examples are a Python package; run them as modules **from the repo root**:
+
+```bash
+python -m examples.part_i.example_01.ingestion   # ingest the sample corpus into a local SQLite store
+python -m examples.part_i.example_01.retrieval   # query that store
+```
+
+Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
+no `PYTHONPATH` or `sys.path` tweaks. (Directory names use underscores because they are module names.)
+
+## Layout
+
+```
+examples/
+├── common.py            # shared helpers used by every example
+├── docs/                # sample corpora, ingested by path
+│   └── corpus-1/        # add more as docs/corpus-2/, docs/<name>/ …
+├── part_i/              # SQLite teaching examples
+│   └── example_01/
+│       ├── ingestion.py
+│       └── retrieval.py
+└── part_ii/             # production / eval / fine-tuning (coming)
+```
+
+## Conventions (`common.py`)
+
+The incidental setup every example repeats lives in `examples/common.py`, so each example file keeps
+only the part it is teaching:
+
+| Helper | What it gives you |
+|--------|-------------------|
+| `base_settings(db_path, **overrides)` | Default embedded/SQLite `Settings`; override just the knob you are demonstrating, e.g. `base_settings(db, chunking=ChunkingSettings(size=128))`. |
+| `example_db(__file__)` | A `rag_docs.db` next to the example — each example gets its **own** store, so they run independently and in any order. |
+| `corpus("corpus-1")` | Path to a named corpus under `docs/`. |
+| `require_model()` | Friendly error if the embedding model has not been fetched. |
+
+An example's ingestion and retrieval **must** build from the same `db_path` + `embedding` config —
+retrieval validates an embedding *fingerprint* before opening the index. Reusing
+`base_settings(example_db(__file__))` on both sides guarantees it.
+
+## Adding things
+
+- **A corpus:** drop files in `examples/docs/<name>/` and select it with `corpus("<name>")`.
+- **An example:** create `examples/part_i/example_NN/` with an `__init__.py` and your script(s), and
+  import what you need from `examples.common`.
+
+Generated stores (`*.db`) and `__pycache__/` are gitignored.

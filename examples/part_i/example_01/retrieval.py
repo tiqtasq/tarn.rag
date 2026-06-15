@@ -1,44 +1,24 @@
 """Example 01 — Retrieval (embedded mode, SQLite).
 
 Query the store that ``ingestion.py`` built. ``RetrievalEngine`` embeds the query with the SAME
-pipeline ingestion used, runs a dense k-NN search over the SQLite vector index, and returns
-ranked, provenance-bearing hits.
+pipeline ingestion used (the config is shared via ``examples/common.py``), runs a dense k-NN
+search over the SQLite vector index, and returns ranked, provenance-bearing hits.
 
-Run it after ``ingestion.py`` has populated the store (same one-time setup — see ingestion.py):
+Run it after the ingestion example has populated the store (same one-time setup — see
+``ingestion.py``):
 
-    python examples/part-i/example-01/retrieval.py
+    python -m examples.part_i.example_01.retrieval
 """
 
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from tarnrag import RetrievalEngine
-from tarnrag.core.config import DatabaseSettings, EmbeddingSettings, Settings
 
-# These paths MUST match ingestion.py: retrieval opens the very index ingestion wrote.
-HERE = Path(__file__).resolve().parent
-REPO_ROOT = Path(__file__).resolve().parents[3]
-DB_PATH = HERE / "rag_docs.db"
-MODEL_DIR = REPO_ROOT / "models" / "all-MiniLM-L6-v2"
+from examples.common import base_settings, example_db, require_model
 
-
-def build_settings() -> Settings:
-    """The same ``database`` + ``embedding`` config as ingestion.py.
-
-    Retrieval only needs those two to match (the id policy, chunking, etc. are ingestion-only):
-    it reads from the same SQLite store, and the embedding *fingerprint* recorded at ingestion
-    must equal this engine's — so the model, dimension, and prefixes have to be identical.
-    """
-    return Settings(
-        _env_file=None,  # explicit config only — ignore any ambient .env, for reproducibility
-        MODE="embedded",
-        EMBEDDING_DIMENSION=384,
-        database=DatabaseSettings(document_url=f"sqlite:///{DB_PATH}"),
-        embedding=EmbeddingSettings(model_dir=str(MODEL_DIR)),
-    )
-
+DB_PATH = example_db(__file__)  # the same store the ingestion example wrote
 
 QUERIES = [
     "How do I check a storage tank for corrosion?",
@@ -47,10 +27,14 @@ QUERIES = [
 
 
 async def main() -> None:
+    require_model()
     if not DB_PATH.exists():
-        raise SystemExit(f"No store at {DB_PATH}. Run ingestion.py first.")
+        raise SystemExit(
+            f"No store at {DB_PATH}. Run the ingestion example first:\n"
+            f"  python -m examples.part_i.example_01.ingestion"
+        )
 
-    settings = build_settings()
+    settings = base_settings(DB_PATH)
 
     # `create` connects the SQLite store and validates compatibility (schema + embedding
     # fingerprint); it raises RetrievalError if the index was built with a different pipeline.
