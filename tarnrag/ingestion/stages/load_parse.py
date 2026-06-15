@@ -1,16 +1,18 @@
 """LoadAndParseStage — load a document from a file (or use given content).
 
-The PDF backend is pluggable: the stage holds a registry of parser strategies (built once —
-stage config), and a request picks one per call via ``metadata['parser']`` (item data, flows
-inline). Unknown/absent → the default. txt/html have a single obvious loader and ignore
-``parser``. Stages stay pure (D6): this just dispatches on its input.
+The PDF backend is pluggable: the loaders live in ``stages/parsers.py`` (a name -> callable
+registry), and a request picks one per call via ``metadata['parser']`` (item data, flows inline).
+Unknown/absent → the config's ``default_pdf_parser``. txt/html have a single obvious loader and
+ignore ``parser``. Stages stay pure (D6): this just dispatches on its input.
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import model_validator
 
 from tarnrag.ingestion.pipeline import MapperStage
 from tarnrag.ingestion.stages.parsers import (
@@ -27,18 +29,21 @@ class LoadAndParseStage(MapperStage):
     DocumentResultSink overwrites it with the stored id).
     """
 
-    def __init__(
-        self,
-        supported_types: list[str] | None = None,
-        pdf_parsers: dict[str, Callable[[str], str]] | None = None,
-        default_pdf_parser: str = DEFAULT_PDF_PARSER,
-    ):
-        # Set before super().__init__(), which runs validate().
-        types = supported_types or ["txt", "pdf", "html"]
-        self.supported_types = types
-        self.pdf_parsers = pdf_parsers or dict(DEFAULT_PDF_PARSERS)
-        self.default_pdf_parser = default_pdf_parser
-        super().__init__(name="LoadAndParse")
+    class Config(MapperStage.Config):
+        class_name: Literal["LoadAndParse"] = "LoadAndParse"
+        supported_types: list[str] = ["txt", "pdf", "html"]
+        default_pdf_parser: str = DEFAULT_PDF_PARSER
+
+        @model_validator(mode="after")
+        def _known_pdf_parser(self) -> LoadAndParseStage.Config:
+            if self.default_pdf_parser not in DEFAULT_PDF_PARSERS:
+                raise ValueError(
+                    f"default_pdf_parser {self.default_pdf_parser!r} not in registry "
+                    f"{sorted(DEFAULT_PDF_PARSERS)}"
+                )
+            return self
+
+    config: LoadAndParseStage.Config
 
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         source_path = metadata.get("source_path")
@@ -62,17 +67,10 @@ class LoadAndParseStage(MapperStage):
         raise ValueError(f"Unsupported file type: {ext!r}")
 
     def _pdf_loader(self, parser: str | None) -> Callable[[str], str]:
-        name = parser or self.default_pdf_parser
+        name = parser or self.config.default_pdf_parser
         try:
-            return self.pdf_parsers[name]
+            return DEFAULT_PDF_PARSERS[name]
         except KeyError:
             raise ValueError(
-                f"Unknown pdf parser {name!r}; available: {sorted(self.pdf_parsers)}"
+                f"Unknown pdf parser {name!r}; available: {sorted(DEFAULT_PDF_PARSERS)}"
             ) from None
-
-    def validate(self) -> None:
-        if self.default_pdf_parser not in self.pdf_parsers:
-            raise ValueError(
-                f"default_pdf_parser {self.default_pdf_parser!r} not in registry "
-                f"{sorted(self.pdf_parsers)}"
-            )

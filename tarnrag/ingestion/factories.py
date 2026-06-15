@@ -24,14 +24,19 @@ def create_ingestion_pipeline(settings: Settings | None = None) -> Pipeline:
     settings = settings or get_settings()
     return Pipeline(
         [
-            LoadAndParseStage(),
-            CleanAndNormalizeStage(),
-            ChunkStage(chunk_size=settings.chunking.size, overlap=settings.chunking.overlap),
-            EnrichMetadataStage(),
+            LoadAndParseStage(LoadAndParseStage.Config()),
+            CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
+            ChunkStage(
+                ChunkStage.Config(
+                    chunk_size=settings.chunking.size, overlap=settings.chunking.overlap
+                )
+            ),
+            EnrichMetadataStage(EnrichMetadataStage.Config()),
             EmbedStage(
-                settings.embedding,
-                settings.EMBEDDING_DIMENSION,
-                model_batch_size=settings.embedding.batch_size,
+                EmbedStage.Config(
+                    embedding=settings.embedding,
+                    embedding_dimension=settings.EMBEDDING_DIMENSION,
+                )
             ),
         ]
     )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from tarnrag.ingestion.pipeline import MapperStage
 
@@ -16,16 +16,15 @@ class CleanAndNormalizeStage(MapperStage):
     chunking.
     """
 
-    def __init__(self, collapse_whitespace: bool = True):
-        super().__init__(name="CleanAndNormalize")
-        self.collapse_whitespace = collapse_whitespace
+    class Config(MapperStage.Config):
+        class_name: Literal["CleanAndNormalize"] = "CleanAndNormalize"
+        collapse_whitespace: bool = True
+
+    config: CleanAndNormalizeStage.Config
 
     def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         cleaned = _C0_CONTROL.sub("", text.replace("\x00", ""))
-        if self.collapse_whitespace:
+        if self.config.collapse_whitespace:
             cleaned = re.sub(r"[ \t]+", " ", cleaned)
             cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
         return cleaned.strip(), {"cleaned": True}
-
-    def validate(self) -> None:
-        return None

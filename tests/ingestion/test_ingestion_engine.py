@@ -16,6 +16,7 @@ from tarnrag.ingestion.queue import InMemoryJobQueue, JobEnqueuer
 from tarnrag.ingestion.result_sink import create_sink_registry
 from tarnrag.ingestion.stages.chunk import ChunkStage
 from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
+from tarnrag.core.config import EmbeddingSettings
 from tarnrag.ingestion.stages.embed import EmbedStage
 from tarnrag.ingestion.stages.enrich import EnrichMetadataStage
 from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
@@ -27,18 +28,20 @@ class _FakeEmbedder:
         return [[float(len(t)), 1.0, 0.0] for t in texts]
 
 
-class FakeEmbedStage(EmbedStage):
-    def _get_embedder(self):
-        return _FakeEmbedder()
+def _embed_stage():
+    """A real EmbedStage with the fake encoder injected (no model needed)."""
+    stage = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(batch_size=2)))
+    stage._embedder = _FakeEmbedder()
+    return stage
 
 
 def _stages():
     return [
-        LoadAndParseStage(),
-        CleanAndNormalizeStage(),
-        ChunkStage(chunk_size=30, overlap=5),
-        EnrichMetadataStage(),
-        FakeEmbedStage(model_batch_size=2),
+        LoadAndParseStage(LoadAndParseStage.Config()),
+        CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
+        ChunkStage(ChunkStage.Config(chunk_size=30, overlap=5)),
+        EnrichMetadataStage(EnrichMetadataStage.Config()),
+        _embed_stage(),
     ]
 
 

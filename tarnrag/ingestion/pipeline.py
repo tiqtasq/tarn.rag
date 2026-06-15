@@ -13,19 +13,31 @@ from collections.abc import Iterator
 from typing import Any
 
 from tarnrag.contracts import PipelineItem
+from tarnrag.core.components import Component
 
 
-class PipelineStage(ABC):
+class PipelineStage(Component, ABC):
     """
-    Base class for a pure transformation stage. Subclass a typed helper below
-    (MapperStage / ChunkerStage / FilterStage) unless a stage needs full control.
+    Base class for a pure transformation stage — a ``Component`` built from a typed ``Config``.
+    Subclass a typed helper below (MapperStage / ChunkerStage / FilterStage) unless a stage needs
+    full control. Construct from a config, e.g. ``ChunkStage(ChunkStage.Config(chunk_size=256))``;
+    field validation lives on the ``Config`` (pydantic), not in a separate ``validate()``.
     """
 
-    def __init__(self, name: str):
-        self.name = name
-        # validate() runs here: subclasses must set any attrs it reads BEFORE
-        # calling super().__init__().
-        self.validate()
+    class Config(Component.Config):
+        """Base stage config. Concrete stages pin ``class_name`` and add their own fields."""
+
+    def __init__(self, config: PipelineStage.Config) -> None:
+        super().__init__(config)  # Component.__init__ stores self.config
+        # Per-instance identity used as the DAG node / sink-registry key / job.stage_name.
+        # Defaults to the class_name tag, but a config-supplied ``name`` lets several instances
+        # of one stage class coexist in a pipeline.
+        self._name: str = config.name or getattr(config, "class_name", None) or type(self).__name__
+
+    @property
+    def name(self) -> str:
+        """The stage's read-only identity within a pipeline."""
+        return self._name
 
     @abstractmethod
     def process(self, item: PipelineItem) -> Iterator[Any]:
@@ -37,10 +49,6 @@ class PipelineStage(ABC):
         size their own compute/model calls."""
         for item in items:
             yield from self.process(item)
-
-    @abstractmethod
-    def validate(self) -> None:
-        """Validate configuration at construction; raise on invalid config."""
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(name={self.name!r})"
