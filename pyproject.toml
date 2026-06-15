@@ -32,3 +32,8 @@ include = ["tarnrag*"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "requires_model: needs the ONNX model fetched (python scripts/fetch_model.py) + onnxruntime/tokenizers; auto-skipped otherwise",
+    "slow: long-running; excluded by default in CI via `-m 'not slow'`, run on a nightly/manual job",
+    "requires_postgres: needs a reachable PostgreSQL (distributed-mode examples/tests)",
+]

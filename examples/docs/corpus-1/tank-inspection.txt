@@ -1,0 +1,3 @@
+Storage tank inspection procedure: visually inspect the shell and roof for corrosion, measure
+shell thickness by ultrasonic testing, and check the foundation for settlement before returning
+the tank to service.
