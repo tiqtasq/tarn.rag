@@ -24,24 +24,25 @@ from __future__ import annotations
 
 import asyncio
 
-from tarnrag import IngestionEngine
+from tarnrag import DocumentStatus, IngestionEngine
 
 from examples.common import base_settings, corpus, example_db, require_model
 
-# This example's own SQLite store (next to these scripts), and the shared corpus to ingest.
-DB_PATH = example_db(__file__)
+# The shared corpus this example ingests (examples/docs/corpus-1/*.txt).
 CORPUS = corpus("corpus-1")
 DOC_PATHS = sorted(CORPUS.glob("*.txt"))
 
 
-async def main() -> None:
+async def main() -> list[DocumentStatus]:
+    """Ingest the corpus and return each document's terminal status (also printed)."""
     require_model()
-    settings = base_settings(DB_PATH)
+    db_path = example_db(__file__)  # next to this script (or under $EXAMPLES_DATA_DIR)
+    settings = base_settings(db_path)
 
     # Under ID_POLICY="caller" (the base_settings default) each document needs a stable id; we use
     # the filename stem (e.g. "tank-inspection"). Re-running upserts in place — idempotent per id.
     source_ids = [path.stem for path in DOC_PATHS]
-    print(f"Ingesting {len(DOC_PATHS)} documents from {CORPUS} into {DB_PATH}\n")
+    print(f"Ingesting {len(DOC_PATHS)} documents from {CORPUS} into {db_path}\n")
 
     # `create` builds the embedded engine (SQLite repository + in-process worker) and stamps the
     # index's build/identity record. `async with` disposes the DB connection pool on exit.
@@ -49,17 +50,17 @@ async def main() -> None:
         document_ids = await engine.ingest_paths(
             [str(path) for path in DOC_PATHS], source_ids=source_ids
         )
-
         # Embedded mode completes the whole pipeline before returning, so status is terminal here.
-        for doc_id in document_ids:
-            status = await engine.status(doc_id)
-            print(
-                f"  {doc_id:16}  {status.status:9}  "
-                f"chunks={status.chunk_count}  embeddings={status.embedding_count}"
-            )
+        statuses = [await engine.status(doc_id) for doc_id in document_ids]
 
-    print(f"\nStored {len(document_ids)} documents. Now query the same store:")
+    for status in statuses:
+        print(
+            f"  {status.document_id:16}  {status.status:9}  "
+            f"chunks={status.chunk_count}  embeddings={status.embedding_count}"
+        )
+    print(f"\nStored {len(statuses)} documents. Now query the same store:")
     print("  python -m examples.part_i.example_01.retrieval")
+    return statuses
 
 
 if __name__ == "__main__":

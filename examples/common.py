@@ -12,6 +12,7 @@ part — the config knob or API it demonstrates — explicit and inline.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from tarnrag.core.config import DatabaseSettings, EmbeddingSettings, Settings
@@ -40,8 +41,14 @@ def require_model() -> None:
 
 def example_db(example_file: str) -> Path:
     """The SQLite store for ONE example: a ``rag_docs.db`` next to the calling script, so each
-    example keeps its own isolated, re-runnable store. Pass ``__file__`` from the example."""
-    return Path(example_file).resolve().parent / "rag_docs.db"
+    example keeps its own isolated, re-runnable store. Pass ``__file__`` from the example.
+
+    Set ``EXAMPLES_DATA_DIR`` to redirect the store out of the source tree (tests point it at a
+    temp dir). The path is namespaced by the example's directory name so several examples can share
+    one data dir without colliding. Call this inside ``main()`` so the override takes effect."""
+    here = Path(example_file).resolve().parent
+    data_dir = os.environ.get("EXAMPLES_DATA_DIR")
+    return (Path(data_dir) / here.name if data_dir else here) / "rag_docs.db"
 
 
 def base_settings(db_path: Path, **overrides: object) -> Settings:
