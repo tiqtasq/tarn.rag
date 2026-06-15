@@ -60,7 +60,7 @@ class EmbedStage(PipelineStage):
 
     def _get_embedder(self):
         if self._embedder is None:
-            from tarnrag.embedder import OnnxEmbedder
+            from tarnrag.core.embedder import OnnxEmbedder
 
             self._embedder = OnnxEmbedder.create(self.embedding, self.embedding_dimension)
         return self._embedder

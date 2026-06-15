@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
 def _embedder():
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
-    from tarnrag.embedder import OnnxEmbedder
+    from tarnrag.core.embedder import OnnxEmbedder
 
     return OnnxEmbedder(
         str(MODEL_DIR), model_id="sentence-transformers/all-MiniLM-L6-v2", embedding_dim=384
