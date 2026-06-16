@@ -5,7 +5,9 @@
 the engine's calls return. Everything else (orchestrator, queue, worker, stages) is internal.
 """
 
-from tarnrag.ingestion import stages  # noqa: F401  (registers the built-in stages on package import)
+# Importing each capability package / stage module self-registers its stages + components with the
+# global ComponentFactory, so Pipeline.from_spec can build them from Settings.components.
+from tarnrag.ingestion import chunking, clean_normalize, embed, enrichment, extraction  # noqa: F401
 from tarnrag.ingestion.engine import IngestionEngine, run_worker
 from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 

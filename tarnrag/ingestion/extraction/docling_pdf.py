@@ -38,13 +38,21 @@ class DoclingExtractor(Extractor):
 
     config: DoclingExtractor.Config
 
+    def __init__(self, config: DoclingExtractor.Config) -> None:
+        super().__init__(config)
+        self._conv = None  # the DocumentConverter — built + cached on first use (models load once)
+
     def extract(self, source: Source) -> StructuredDocument:
         if not source.path:
             raise ValueError("the 'docling' extractor needs a document file path (source.path)")
-        from docling.document_converter import DocumentConverter  # heavy; lazily imported
+        return self._map(self._converter().convert(source.path).document, source)
 
-        result = DocumentConverter().convert(source.path)
-        return self._map(result.document, source)
+    def _converter(self):
+        if self._conv is None:
+            from docling.document_converter import DocumentConverter  # heavy; lazily imported once
+
+            self._conv = DocumentConverter()
+        return self._conv
 
     # ------------------------------------------------------------------ mapping (docling-core only)
     @staticmethod

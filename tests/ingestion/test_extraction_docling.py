@@ -98,11 +98,10 @@ def test_mapping_table_cells_geometry_and_header_addressing():
     importlib.util.find_spec("docling") is None, reason="docling (the converter) not installed"
 )
 def test_docling_end_to_end_on_fixture():
-    from tarnrag.ingestion.extraction import extract
-
     fixture = Path(__file__).resolve().parents[1] / "fixtures" / "sample.pdf"
-    doc = extract(Source(source_id="d1", source_kind="pdf", path=str(fixture),
-                         metadata={"extractor": "docling"}))
+    doc = DoclingExtractor(DoclingExtractor.Config()).extract(
+        Source(source_id="d1", source_kind="pdf", path=str(fixture))
+    )
     assert doc.extractor == "docling" and doc.elements
 
 
