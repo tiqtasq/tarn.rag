@@ -20,6 +20,9 @@ Examples are a Python package; run them as modules **from the repo root**:
 ```bash
 python -m examples.part_i.example_01.ingestion   # ingest the sample corpus into a local SQLite store
 python -m examples.part_i.example_01.retrieval   # query that store
+
+python -m examples.part_i.example_02.ingestion   # same, but the pipeline is configured from pipeline.json
+python -m examples.part_i.example_02.retrieval   # query the JSON-configured store
 ```
 
 Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
@@ -33,7 +36,11 @@ examples/
 ├── docs/                # sample corpora, ingested by path
 │   └── corpus-1/        # add more as docs/corpus-2/, docs/<name>/ …
 ├── part_i/              # SQLite teaching examples
-│   └── example_01/
+│   ├── example_01/      # minimal ingestion + retrieval (the default pipeline)
+│   │   ├── ingestion.py
+│   │   └── retrieval.py
+│   └── example_02/      # the ingestion pipeline configured from JSON
+│       ├── pipeline.json
 │       ├── ingestion.py
 │       └── retrieval.py
 └── part_ii/             # production / eval / fine-tuning (coming)
