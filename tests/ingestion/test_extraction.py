@@ -1,6 +1,10 @@
 """The extraction seam: a Source becomes a StructuredDocument via registered Extractor Components,
 with routing (override → per-kind default → plain-text fallback)."""
 
+import importlib.util
+
+import pytest
+
 from tarnrag.contracts import ElementKind
 from tarnrag.ingestion.extraction import Source, extract
 
@@ -67,3 +71,14 @@ def test_extractor_reads_from_path(tmp_path):
     doc = extract(Source(source_id="d1", source_kind="md", path=str(p)))
     assert doc.extractor == "markdown"
     assert any(e.kind == ElementKind.HEADING and e.text == "Title" for e in doc.elements)
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("bs4") is None, reason="beautifulsoup4 (parsers extra) not installed"
+)
+def test_html_strips_markup_to_text():
+    doc = extract(Source(source_id="d1", source_kind="html",
+                         content="<h1>Hi</h1><p>Body &amp; more.</p>"))
+    assert doc.extractor == "html"
+    assert "Hi" in doc.text and "Body & more." in doc.text
+    assert "<h1>" not in doc.text  # markup stripped

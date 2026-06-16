@@ -57,6 +57,8 @@ DEFAULT_ROUTES: dict[str, str] = {
     "txt": "plain_text",
     "markdown": "markdown",
     "md": "markdown",
+    "html": "html",
+    "htm": "html",
     "pdf": "pdf_text",  # fast born-digital tier; high-fidelity Docling is opt-in (a follow-on)
 }
 
