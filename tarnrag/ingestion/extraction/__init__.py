@@ -10,6 +10,7 @@ from tarnrag.ingestion.extraction.extractor import (
     Source,
     extract,
 )
+from tarnrag.ingestion.extraction.docling_pdf import DoclingExtractor
 from tarnrag.ingestion.extraction.markdown import MarkdownExtractor
 from tarnrag.ingestion.extraction.pdf import PdfTextExtractor
 from tarnrag.ingestion.extraction.plain_text import PlainTextExtractor
@@ -19,6 +20,7 @@ __all__ = [
     "Source",
     "extract",
     "DEFAULT_ROUTES",
+    "DoclingExtractor",
     "MarkdownExtractor",
     "PdfTextExtractor",
     "PlainTextExtractor",

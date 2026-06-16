@@ -47,14 +47,19 @@ def extract(source: Source) -> StructuredDocument:   # the router
   **page + bbox** geometry (highlight-grade) *and* char offsets. No semantic structure (headings/tables)
   or OCR — that is Docling. `pdfplumber` is the optional `parsers` extra (lazily imported). Route:
   `pdf → pdf_text`.
+- **`docling`** — high-fidelity tier: maps a `DoclingDocument` → heading hierarchy, paragraphs/lists/code,
+  and **structured tables (cell-level geometry + header addressing)**, with page+bbox provenance. The
+  `DoclingDocument → StructuredDocument` mapping (`_map`) depends only on `docling-core` and is
+  unit-tested against a *constructed* document; the heavy converter (`docling`, the optional `[docling]`
+  extra) is imported lazily and exercised by a converter-gated e2e test. Opt-in via
+  `metadata['extractor'] = "docling"`. *(pymupdf4llm intentionally skipped: its Markdown output loses
+  highlight-grade bbox geometry, and it is AGPL.)*
 
 ## Deferred (next slices on this branch)
 
-- **`docling` PDF extractor (high-fidelity tier)** — maps `DoclingDocument` → `StructuredDocument`
-  (heading hierarchy, structured tables with cell geometry, page+bbox). Heavy dep (model weights,
-  optional GPU) and not installed in this env, so it must be built + **verified against the real Docling
-  API**, not written blind; opt-in over the fast `pdf_text` path. Tiered routing (`pdf → {fast, high}`)
-  lands with it.
+- **Tiered routing config** — today `pdf → pdf_text` (fast) with `docling` opt-in per document; a
+  per-format `{fast, high}` map (chosen via Settings/config) is the small remaining piece. Markdown
+  lists/pipe-tables are the other extractor follow-on (the `Table` model is already in place).
 - **`LoadAndParse` rewiring** — `LoadAndParseStage` becomes the structured-extraction stage: detect
   `source_kind`, call `extract(source)`, set `item.document` + `item.content = document.text`. Done as
   its own slice because it changes the live pipeline (the old string `content` path stays working —
