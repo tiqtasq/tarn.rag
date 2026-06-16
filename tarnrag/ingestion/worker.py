@@ -39,16 +39,16 @@ class IngestionWorker:
     async def handle_batch(self, batch: Batch) -> None:
         """Process one dispatched ``Batch`` (homogeneous: one stage). Raising → requeue
         (recovery); returning normally → ack."""
-        stage_name = batch.stage_name
-        tag = stage_name  # type tag for metrics; resolved from the stage instance below
-        ctx = await self.coordinator.begin_batch(batch)
-        produced = 0
+        stage_name  = batch.stage_name
+        tag         = stage_name  # type tag for metrics; resolved from the stage instance below
+        ctx         = await self.coordinator.begin_batch(batch)
+        produced    = 0
         try:
-            stage = self.coordinator.get_stage(stage_name)  # long-lived DAG instance
-            tag = stage.tag
-            items = [job.item for job in batch.jobs]  # inline items (D1)
+            stage   = self.coordinator.get_stage(stage_name)  # long-lived DAG instance
+            tag     = stage.tag
+            items   = [job.item for job in batch.jobs]  # inline items (D1)
             # Time the pure compute (stages stay obs-free; the worker observes them).
-            timer = self.obs.timer(f"stage.{tag}.process") if self.obs else nullcontext()
+            timer   = self.obs.timer(f"stage.{tag}.process") if self.obs else nullcontext()
             with timer:
                 for result in stage.process_batch(items):
                     if getattr(result, "id", None) is None:

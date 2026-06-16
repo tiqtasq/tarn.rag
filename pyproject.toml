@@ -19,6 +19,7 @@ queue = ["pgqueuer"]
 api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
 onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # ONNX embedding pipeline (R4)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
+docling = ["docling"]  # high-fidelity layout-aware PDF extraction (heavy; pulls docling-core + models)
 dev = ["pytest", "pytest-asyncio", "httpx"]
 
 [build-system]

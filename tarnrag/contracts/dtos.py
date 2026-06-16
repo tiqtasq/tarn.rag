@@ -48,6 +48,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from tarnrag.contracts.structure import ChunkProvenance, StructuredDocument
+
 
 class PipelineItem(BaseModel):
     """
@@ -62,6 +64,11 @@ class PipelineItem(BaseModel):
     id: str | None = None  # assigned by the storage layer
     content: str
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # Document-phase payload (set by the structured-extraction stage, refined by enrichers); the
+    # chunk-phase payload (set by the Chunk stage) is ``provenance``. Both default None, so the
+    # plain-text path and every existing caller are unaffected. See ``contracts/structure.py``.
+    document: StructuredDocument | None = None
+    provenance: ChunkProvenance | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
