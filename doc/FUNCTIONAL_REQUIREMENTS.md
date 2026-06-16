@@ -189,8 +189,7 @@ tarn.rag/
 │   │   ├── result_sink.py                       # ResultSink + per-stage sinks
 │   │   ├── jobs.py                              # IngestionJob + Batch (homogeneous dispatch unit)
 │   │   ├── types.py                             # DocumentStatus (public result type)
-│   │   ├── factories.py                         # create_ingestion_pipeline / create_sink_registry
-│   │   └── stages/                              # load_parse, parsers, clean_normalize, chunk, enrich, embed
+│   │   └── stages/                              # load_parse, parsers, clean_normalize, chunk, enrich, embed (self-register via __init__)
 │   │
 │   └── retrieval/
 │       ├── engine.py                            # RetrievalEngine facade
@@ -435,9 +434,12 @@ coexist in a pipeline (each with its own `name`), defaulting to the tag. A stage
 `process(item) -> Iterator` and the batch entrypoint `process_batch(items)` (default maps
 `process`; override for model batching). Typed helpers: `MapperStage` (1→1, override `map`),
 `ChunkerStage` (1→N, sets `chunk_index`/`total_chunks`), `FilterStage` (1→{0,1}).
-`Pipeline` is a thin ordered container (`run()` threads items through stages in-process,
-for local testing; the distributed engine runs stages individually). Stages stay pure —
-no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → ResultSink).
+`Pipeline` is itself a container **`Component`** (`class_name: "pipeline"`): its Config lists raw
+stage specs and `_build_children` instantiates them, so a whole pipeline is a spec —
+`{"class_name": "pipeline", "stages": [{"class_name": "Chunk", …}, …]}`. `run()` threads items
+through stages in-process for local testing; the distributed engine runs stages individually.
+`Pipeline.from_stages([...])` builds one from pre-made stages (tests/advanced wiring). Stages stay
+pure — no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → ResultSink).
 
 ### Concrete stages (`tarnrag/ingestion/stages/`)
 
@@ -600,9 +602,14 @@ never leak into the contract.
 assigned) stay top-level/flat; `EMBEDDING_DIMENSION` must match
 the model (and sets the pgvector column width). A `model_validator` pins the backend to the mode:
 `distributed` requires a Postgres `DATABASE__DOCUMENT_URL` + `DATABASE__QUEUE_URL`; `embedded`
-requires SQLite. The composition **factories** live in **`tarnrag/ingestion/factories.py`**
-(wiring, not config): `create_ingestion_pipeline(settings=None)` builds the configured stages, and
-`create_sink_registry` is re-exported from `result_sink.py`. See **`.env.example`** for the
+requires SQLite. **`components`** (`dict[str, Any]`) holds named component specs that build
+pluggable parts of the system — the ingestion pipeline under `"ingestion_pipeline"` — each a raw
+spec validated when built via `ComponentFactory`; a `model_validator` fills the ingestion-pipeline
+default so a Settings is self-complete (consumers read it directly). Pipeline **composition** is
+`IngestionEngine.build_pipeline(settings)` (static) — it reads `Settings.components[INGESTION_PIPELINE]`
+(a Pipeline spec, always present) and injects the Embed stage's embedding identity from `Settings`.
+The built-in stages **self-register** on import of `tarnrag.ingestion` (via the stages package);
+`create_sink_registry` (output-side wiring) lives in `result_sink.py`. See **`.env.example`** for the
 environment template.
 
 ---

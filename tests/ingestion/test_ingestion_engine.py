@@ -53,7 +53,7 @@ def _wire(repo, *, auto_drain=False, debug=False, policy="caller"):
     worker = IngestionWorker(orch)
     queue.set_handler(worker.handle_batch)
     engine = IngestionEngine(
-        Pipeline(stages), orch, repo, queue=queue, auto_drain=auto_drain, debug=debug,
+        Pipeline.from_stages(stages), orch, repo, queue=queue, auto_drain=auto_drain, debug=debug,
         id_policy=policy,
     )
     return engine, queue
@@ -126,7 +126,7 @@ async def test_parser_choice_rides_in_item_metadata(repo):
     enq = _RecordingEnqueuer()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
-    engine = IngestionEngine(Pipeline(stages), orch, repo, id_policy="caller")
+    engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo, id_policy="caller")
 
     await engine.ingest_content([{"content": "x", "source_id": "s1"}], parser="pdfplumber")
     assert enq.jobs[0].item.metadata["parser"] == "pdfplumber"
@@ -141,7 +141,7 @@ async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
     enq = _RecordingEnqueuer()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
-    engine = IngestionEngine(Pipeline(stages), orch, repo, staging_dir=str(tmp_path / "uploads"))
+    engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo, staging_dir=str(tmp_path / "uploads"))
 
     result = await engine.ingest_streams(
         [("report.pdf", io.BytesIO(b"%PDF-fake-bytes"))], parser="pdfplumber"
@@ -159,7 +159,7 @@ async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
 async def test_ingest_streams_requires_staging_dir(repo):
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), InMemoryJobQueue(), repo, create_sink_registry())
-    engine = IngestionEngine(Pipeline(stages), orch, repo)  # no staging_dir
+    engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo)  # no staging_dir
     with pytest.raises(RuntimeError, match="not configured"):
         await engine.ingest_streams([("x.txt", io.BytesIO(b"hi"))])
 
@@ -169,7 +169,7 @@ async def test_ingest_paths_uses_supplied_source_ids(repo, tmp_path):
     enq = _RecordingEnqueuer()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
-    engine = IngestionEngine(Pipeline(stages), orch, repo, id_policy="caller")
+    engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo, id_policy="caller")
 
     a = tmp_path / "a.txt"
     a.write_text("aaa", encoding="utf-8")
@@ -187,7 +187,7 @@ async def test_ingest_streams_uses_supplied_source_ids(repo, tmp_path):
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
     engine = IngestionEngine(
-        Pipeline(stages), orch, repo, staging_dir=str(tmp_path / "up"), id_policy="caller"
+        Pipeline.from_stages(stages), orch, repo, staging_dir=str(tmp_path / "up"), id_policy="caller"
     )
 
     result = await engine.ingest_streams(

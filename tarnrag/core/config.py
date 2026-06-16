@@ -7,13 +7,13 @@ component depends only on its slice — env vars use the ``GROUP__FIELD`` conven
 ``EMBEDDING__MODEL``). The few cross-cutting knobs (``MODE``, ``EMBEDDING_DIMENSION``,
 ``UPLOAD_DIR``) stay top-level.
 
-The pipeline/sink *factories* live in ``tarnrag/ingestion/factories.py`` (they consume ``Settings``).
+Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``Settings``).
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -26,6 +26,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Content dedup is independent of identity: every document also stores a ``content_hash``
 # (sha256 of its submitted bytes/text), queryable to detect duplicate or unchanged content.
 IdPolicy = Literal["caller", "uuid"]
+
+# Key under ``Settings.components`` holding the ingestion pipeline spec (a Pipeline-component spec).
+INGESTION_PIPELINE = "ingestion_pipeline"
 
 
 class AppSettings(BaseModel):
@@ -122,6 +125,36 @@ class Settings(BaseSettings):
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
+
+    # Named component specs that build pluggable parts of the system — e.g. the ingestion pipeline
+    # under ``INGESTION_PIPELINE``. Each value is a raw spec, validated when built via
+    # ``ComponentFactory`` (not here). ``_fill_default_components`` ensures the ingestion pipeline is
+    # always present (default below), so a Settings is self-complete and consumers read it directly.
+    components: dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def _fill_default_components(self) -> Settings:
+        """Make a Settings self-complete: ensure the ingestion pipeline spec is present (a
+        user-supplied one wins), so consumers read ``components[INGESTION_PIPELINE]`` directly
+        instead of recomputing a default elsewhere. Chunk params come from ``self.chunking``."""
+        self.components.setdefault(
+            INGESTION_PIPELINE,
+            {
+                "class_name": "pipeline",
+                "stages": [
+                    {"class_name": "LoadAndParse"},
+                    {"class_name": "CleanAndNormalize"},
+                    {
+                        "class_name": "Chunk",
+                        "chunk_size": self.chunking.size,
+                        "overlap": self.chunking.overlap,
+                    },
+                    {"class_name": "EnrichMetadata"},
+                    {"class_name": "Embed"},
+                ],
+            },
+        )
+        return self
 
     @model_validator(mode="after")
     def _check_database_for_mode(self) -> Settings:

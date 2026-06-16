@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from tarnrag.core.config import IdPolicy, Settings, get_settings
+from tarnrag.core.config import INGESTION_PIPELINE, IdPolicy, Settings, get_settings
 from tarnrag.core.observability import NoOpObservability
 from tarnrag.core.engine import Engine
 from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
@@ -42,7 +42,7 @@ from tarnrag.ingestion.queue import (
 )
 from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 from tarnrag.ingestion.worker import IngestionWorker
-from tarnrag.ingestion.factories import create_ingestion_pipeline, create_sink_registry
+from tarnrag.ingestion.result_sink import create_sink_registry
 
 logger = logging.getLogger(__name__)
 
@@ -101,8 +101,9 @@ class IngestionEngine(Engine):
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> IngestionEngine:
-        """Build a ready-to-use engine from ``Settings`` (mode-driven). The easy entry point;
-        the constructor is the lower-level seam for injecting your own wiring."""
+        """Build a ready-to-use engine from ``Settings`` (mode-driven). The easy entry point; the
+        constructor is the lower-level seam for injecting your own wiring. The pipeline composition
+        comes from ``Settings.components`` (see :meth:`build_pipeline`)."""
         settings = settings or get_settings()
         obs = NoOpObservability() if settings.observability.enabled else None
         repository, embedder = await cls._build_repository_and_embedder(settings)
@@ -110,7 +111,7 @@ class IngestionEngine(Engine):
         # repository (RetrievalEngine.open validates it). The sinks persist document/chunk/
         # embedding data into the same repository; job_status lives there too.
         await repository.write_index_meta(build_index_meta(embedder))
-        pipeline = create_ingestion_pipeline(settings)
+        pipeline = cls.build_pipeline(settings)
 
         if settings.MODE == "distributed":
             queue: JobEnqueuer = await PgQueuerJobQueue.connect(settings.database.queue_url)
@@ -133,6 +134,30 @@ class IngestionEngine(Engine):
             worker = IngestionWorker(orchestrator, observability=obs)
             queue.set_handler(worker.handle_batch)
         return engine
+
+    @staticmethod
+    def build_pipeline(settings: Settings) -> Pipeline:
+        """Build the ingestion pipeline from ``Settings`` — the spec at
+        ``settings.components[INGESTION_PIPELINE]`` (``Settings`` guarantees it is present, default or
+        user-supplied). The Embed stage's embedding identity is always taken from ``Settings`` (not
+        the spec), so a pipeline spec can't drift from the retrieval-side fingerprint."""
+        spec = IngestionEngine._with_embedding_from_settings(
+            settings.components[INGESTION_PIPELINE], settings
+        )
+        return Pipeline.from_spec(spec)
+
+    @staticmethod
+    def _with_embedding_from_settings(spec: dict[str, Any], settings: Settings) -> dict[str, Any]:
+        """Return a copy of ``spec`` with every Embed stage's ``embedding`` / ``embedding_dimension``
+        set from ``settings`` — the embedding identity is cross-cutting (shared with retrieval)."""
+        stages = []
+        for stage_spec in spec["stages"]:
+            stage_spec = dict(stage_spec)
+            if stage_spec.get("class_name") == "Embed":
+                stage_spec["embedding"] = settings.embedding.model_dump()
+                stage_spec["embedding_dimension"] = settings.EMBEDDING_DIMENSION
+            stages.append(stage_spec)
+        return {**spec, "stages": stages}
 
     # ----- ingest -----
 
@@ -348,7 +373,8 @@ class IngestionEngine(Engine):
 async def run_worker(settings: Settings | None = None) -> None:
     """Consumer entry point for ``MODE='distributed'`` — build the wiring via
     :meth:`IngestionEngine.create` and run the consume loop until the queue stops, then release
-    resources. (In ``embedded`` mode ingestion runs in-process, so there is no separate worker.)"""
+    resources. (In ``embedded`` mode ingestion runs in-process, so there is no separate worker.)
+    A distributed worker must use the SAME ``Settings`` — incl. ``components`` — as the producer."""
     engine = await IngestionEngine.create(settings)
     if not isinstance(engine._queue, JobConsumer):
         raise RuntimeError("this engine has no consumable queue to run a worker on")

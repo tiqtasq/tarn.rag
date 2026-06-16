@@ -97,7 +97,7 @@ def test_stage_built_from_dict_spec_via_component_factory():
 
 
 def test_pipeline_composition_doc_to_chunks():
-    pipe = Pipeline(
+    pipe = Pipeline.from_stages(
         [
             LoadAndParseStage(LoadAndParseStage.Config()),
             CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
