@@ -36,19 +36,25 @@ def extract(source: Source) -> StructuredDocument:   # the router
     return ComponentFactory.get().create({"class_name": name}).extract(source)
 ```
 
-## Built-in extractors (this slice)
+## Built-in extractors
 
 - **`plain_text`** — graceful default (FR-2.5): any text → one paragraph element spanning the whole
   document. No dependencies; the fallback for unknown kinds.
 - **`markdown`** — structure-aware first cut: ATX headings, paragraphs, fenced code, with char-offset
   geometry into the normalized text and precomputed `header_path` / `parent_id`. **Follow-on:** lists
   and pipe-tables (→ `Table`/`TableCell` with cell geometry; the model is already in place and tested).
+- **`pdf_text`** — fast born-digital tier (FR-1.4): pdfplumber text lines → paragraph elements with
+  **page + bbox** geometry (highlight-grade) *and* char offsets. No semantic structure (headings/tables)
+  or OCR — that is Docling. `pdfplumber` is the optional `parsers` extra (lazily imported). Route:
+  `pdf → pdf_text`.
 
 ## Deferred (next slices on this branch)
 
-- **`docling` PDF extractor** — maps `DoclingDocument` → `StructuredDocument` (page+bbox geometry,
-  structured tables). Heavy dep (model weights, optional GPU); lazily imported; tiered behind the fast
-  born-digital path.
+- **`docling` PDF extractor (high-fidelity tier)** — maps `DoclingDocument` → `StructuredDocument`
+  (heading hierarchy, structured tables with cell geometry, page+bbox). Heavy dep (model weights,
+  optional GPU) and not installed in this env, so it must be built + **verified against the real Docling
+  API**, not written blind; opt-in over the fast `pdf_text` path. Tiered routing (`pdf → {fast, high}`)
+  lands with it.
 - **`LoadAndParse` rewiring** — `LoadAndParseStage` becomes the structured-extraction stage: detect
   `source_kind`, call `extract(source)`, set `item.document` + `item.content = document.text`. Done as
   its own slice because it changes the live pipeline (the old string `content` path stays working —
