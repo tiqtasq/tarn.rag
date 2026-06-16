@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from examples.part_i.example_01 import ingestion, retrieval
+from examples.part_i.example_02 import ingestion as ingestion_02, retrieval as retrieval_02
 
 pytestmark = pytest.mark.requires_model
 
@@ -35,3 +36,16 @@ async def test_example_01_ingest_then_retrieve():
     answers = await retrieval.main()
     corrosion_query = retrieval.QUERIES[0]
     assert answers[corrosion_query][0].document_id == "tank-inspection"
+
+
+async def test_example_02_json_pipeline_makes_more_chunks():
+    # pipeline.json uses small chunks, so the same corpus splits into more chunks than example 01's
+    # default (one chunk per short doc) — proof the JSON actually drove the pipeline composition.
+    statuses = await ingestion_02.main()
+    assert len(statuses) == 3
+    assert all(s.status == "complete" for s in statuses)
+    assert sum(s.chunk_count for s in statuses) > 3  # more than the default's one-per-doc
+
+    # Retrieval over the small-chunk store still ranks the corrosion query onto the tank doc.
+    answers = await retrieval_02.main()
+    assert answers[retrieval_02.QUERIES[0]][0].document_id == "tank-inspection"
