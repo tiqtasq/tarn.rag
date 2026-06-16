@@ -21,6 +21,18 @@ from tarnrag.contracts.index_meta import (
 )
 from tarnrag.contracts.ports import ChunkStore, DocumentFactsSource, JobStatusSource
 from tarnrag.contracts.results import Candidate, ChunkRecord, RetrievalResult
+from tarnrag.contracts.structure import (
+    Annotation,
+    ChunkProvenance,
+    Element,
+    ElementKind,
+    Geometry,
+    PageBox,
+    Span,
+    StructuredDocument,
+    Table,
+    TableCell,
+)
 
 __all__ = [
     # dtos
@@ -30,6 +42,17 @@ __all__ = [
     "Embedding",
     "DocumentFacts",
     "MethodRef",
+    # structure (layout-aware extraction)
+    "StructuredDocument",
+    "Element",
+    "ElementKind",
+    "Table",
+    "TableCell",
+    "Annotation",
+    "Span",
+    "PageBox",
+    "Geometry",
+    "ChunkProvenance",
     # ports
     "ChunkStore",
     "DocumentFactsSource",
