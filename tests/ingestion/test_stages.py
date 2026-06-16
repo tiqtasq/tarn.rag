@@ -5,11 +5,11 @@ from tarnrag.contracts import PipelineItem
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import EmbeddingSettings
 from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.stages.chunk import ChunkStage
-from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
-from tarnrag.ingestion.stages.embed import EmbedStage
-from tarnrag.ingestion.stages.enrich import EnrichMetadataStage
-from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
+from tarnrag.ingestion.chunking.chunk import ChunkStage
+from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
+from tarnrag.ingestion.embed import EmbedStage
+from tarnrag.ingestion.enrichment.enrich import EnrichMetadataStage
+from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 
 
 def _item(content, **meta):

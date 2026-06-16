@@ -25,7 +25,7 @@ from pydantic import Field
 
 from tarnrag.contracts import PipelineItem
 from tarnrag.core.components import ComponentFactory
-from tarnrag.ingestion.extraction import Extractor, Source
+from tarnrag.ingestion.extraction.extractor import Extractor, Source
 from tarnrag.ingestion.pipeline import PipelineStage
 
 # Default source_kind -> extractor spec. Config-driven: override per format via Settings.components.

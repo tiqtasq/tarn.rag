@@ -2,8 +2,8 @@
 
 from tarnrag.contracts import ElementKind, PipelineItem
 from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
-from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
+from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
+from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 
 
 def _run(item: PipelineItem, **config) -> PipelineItem:

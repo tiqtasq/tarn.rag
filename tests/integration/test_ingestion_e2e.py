@@ -9,12 +9,12 @@ from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.queue import InMemoryJobQueue
 from tarnrag.ingestion.result_sink import create_sink_registry
-from tarnrag.ingestion.stages.chunk import ChunkStage
-from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
+from tarnrag.ingestion.chunking.chunk import ChunkStage
+from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
 from tarnrag.core.config import EmbeddingSettings
-from tarnrag.ingestion.stages.embed import EmbedStage
-from tarnrag.ingestion.stages.enrich import EnrichMetadataStage
-from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
+from tarnrag.ingestion.embed import EmbedStage
+from tarnrag.ingestion.enrichment.enrich import EnrichMetadataStage
+from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 from tarnrag.ingestion.worker import IngestionWorker
 
 
