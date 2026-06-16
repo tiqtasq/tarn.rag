@@ -4,12 +4,7 @@ Importing this package registers the built-in extractors with the global ``Compo
 self-registers under its ``class_name``), so ``extract`` / ``ComponentFactory`` can build them.
 """
 
-from tarnrag.ingestion.extraction.extractor import (
-    DEFAULT_ROUTES,
-    Extractor,
-    Source,
-    extract,
-)
+from tarnrag.ingestion.extraction.extractor import Extractor, Source
 from tarnrag.ingestion.extraction.docling_pdf import DoclingExtractor
 from tarnrag.ingestion.extraction.html import HtmlExtractor
 from tarnrag.ingestion.extraction.markdown import MarkdownExtractor
@@ -19,8 +14,6 @@ from tarnrag.ingestion.extraction.plain_text import PlainTextExtractor
 __all__ = [
     "Extractor",
     "Source",
-    "extract",
-    "DEFAULT_ROUTES",
     "DoclingExtractor",
     "HtmlExtractor",
     "MarkdownExtractor",

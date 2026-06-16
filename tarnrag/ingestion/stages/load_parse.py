@@ -1,76 +1,97 @@
-"""LoadAndParseStage — load a document from a file (or use given content).
+"""LoadAndParseStage — the structured-extraction stage: a source becomes a ``StructuredDocument``.
 
-The PDF backend is pluggable: the loaders live in ``stages/parsers.py`` (a name -> callable
-registry), and a request picks one per call via ``metadata['parser']`` (item data, flows inline).
-Unknown/absent → the config's ``default_pdf_parser``. txt/html have a single obvious loader and
-ignore ``parser``. Stages stay pure (D6): this just dispatches on its input.
+Routing is **config-driven**: ``Config.routes`` maps a ``source_kind`` to an extractor component spec
+(``class_name`` + options), so choosing e.g. Docling for PDFs — with its options — is a config edit
+(no code/call change), part of the pipeline in ``Settings.components``. A per-document
+``metadata['extractor']`` override (a class_name) wins when present; an unrouted kind falls back to
+``default_extractor`` (graceful degradation, FR-1.3). Extractor instances are **long-lived** —
+instantiated once and cached on the stage (so e.g. Docling loads its models once, not per document).
+
+The stage sets ``item.content = document.text`` (so the existing text path keeps working) and
+``item.document`` (which the enrichers and the structure-aware chunker consume next).
 """
 
 from __future__ import annotations
 
+import json
 import uuid
-from collections.abc import Callable
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import model_validator
+from pydantic import Field
 
-from tarnrag.ingestion.pipeline import MapperStage
-from tarnrag.ingestion.stages.parsers import (
-    DEFAULT_PDF_PARSER,
-    DEFAULT_PDF_PARSERS,
-    load_html,
-)
+from tarnrag.contracts import PipelineItem
+from tarnrag.core.components import ComponentFactory
+from tarnrag.ingestion.extraction import Extractor, Source
+from tarnrag.ingestion.pipeline import PipelineStage
+
+# Default source_kind -> extractor spec. Config-driven: override per format via Settings.components.
+_DEFAULT_ROUTES: dict[str, dict[str, Any]] = {
+    "text": {"class_name": "plain_text"},
+    "txt": {"class_name": "plain_text"},
+    "markdown": {"class_name": "markdown"},
+    "md": {"class_name": "markdown"},
+    "html": {"class_name": "html"},
+    "htm": {"class_name": "html"},
+    "pdf": {"class_name": "pdf_text"},  # the fast tier; route to {"class_name": "docling"} for high-fidelity
+}
 
 
-class LoadAndParseStage(MapperStage):
-    """
-    If ``metadata['source_path']`` is set, load and parse the file; otherwise treat
-    the incoming content as already loaded. Assigns a provisional ``doc_id`` (the
-    DocumentResultSink overwrites it with the stored id).
-    """
+class LoadAndParseStage(PipelineStage):
+    """Load + structured-parse a document, setting ``item.document`` + ``item.content = document.text``."""
 
-    class Config(MapperStage.Config):
+    class Config(PipelineStage.Config):
         class_name: Literal["LoadAndParse"] = "LoadAndParse"
-        supported_types: list[str] = ["txt", "pdf", "html"]
-        default_pdf_parser: str = DEFAULT_PDF_PARSER
-
-        @model_validator(mode="after")
-        def _known_pdf_parser(self) -> LoadAndParseStage.Config:
-            if self.default_pdf_parser not in DEFAULT_PDF_PARSERS:
-                raise ValueError(
-                    f"default_pdf_parser {self.default_pdf_parser!r} not in registry "
-                    f"{sorted(DEFAULT_PDF_PARSERS)}"
-                )
-            return self
+        # source_kind -> extractor spec (class_name + options); the config-driven route map.
+        routes: dict[str, dict[str, Any]] = Field(
+            default_factory=lambda: {k: dict(v) for k, v in _DEFAULT_ROUTES.items()}
+        )
+        # fallback when the source_kind isn't routed.
+        default_extractor: dict[str, Any] = Field(default_factory=lambda: {"class_name": "plain_text"})
 
     config: LoadAndParseStage.Config
 
-    def map(self, text: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        source_path = metadata.get("source_path")
-        content = (
-            self._load_file(source_path, metadata.get("parser")) if source_path else text
+    def __init__(self, config: LoadAndParseStage.Config) -> None:
+        super().__init__(config)
+        self._cache: dict[str, Extractor] = {}  # long-lived extractor instances, keyed by canonical spec
+
+    def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
+        md = item.metadata
+        path = md.get("source_path")
+        source_kind = self._infer_kind(path) or md.get("source_type") or ""
+        spec = (
+            {"class_name": md["extractor"]} if md.get("extractor")
+            else self.config.routes.get(source_kind, self.config.default_extractor)
         )
-        return content, {"doc_id": metadata.get("doc_id") or str(uuid.uuid4()), "loaded": True}
+        document = self._extractor(spec).extract(
+            Source(
+                source_id=md.get("source_id") or md.get("doc_id") or str(uuid.uuid4()),
+                source_kind=source_kind,
+                path=path,
+                content=None if path else item.content,
+                metadata=md,
+            )
+        )
+        yield PipelineItem(
+            content=document.text,
+            metadata={**md, "doc_id": md.get("doc_id") or document.source_id, "loaded": True},
+            document=document,
+            provenance=item.provenance,
+        )
 
-    def _load_file(self, path: str, parser: str | None = None) -> str:
-        """
-        Read a file by extension: txt/md plain, pdf via the selected parser, html via ``load_html``.
-        """
-        ext = path.rsplit(".", 1)[-1].lower()
-        if ext in ("txt", "text", "md"):
-            with open(path, encoding="utf-8", errors="replace") as f:
-                return f.read()
-        if ext == "pdf":
-            return self._pdf_loader(parser)(path)
-        if ext in ("html", "htm"):
-            return load_html(path)
-        raise ValueError(f"Unsupported file type: {ext!r}")
+    def _extractor(self, spec: dict[str, Any]) -> Extractor:
+        key = json.dumps(spec, sort_keys=True)
+        if key not in self._cache:
+            built = ComponentFactory.get().create(dict(spec))
+            if not isinstance(built, Extractor):
+                raise TypeError(
+                    f"{spec.get('class_name')!r} is a {type(built).__name__}, not an Extractor"
+                )
+            self._cache[key] = built
+        return self._cache[key]
 
-    def _pdf_loader(self, parser: str | None) -> Callable[[str], str]:
-        name = parser or self.config.default_pdf_parser
-        try:
-            return DEFAULT_PDF_PARSERS[name]
-        except KeyError:
-            raise ValueError(
-                f"Unknown pdf parser {name!r}; available: {sorted(DEFAULT_PDF_PARSERS)}"
-            ) from None
+    @staticmethod
+    def _infer_kind(path: str | None) -> str:
+        """The routing key from a file path: its extension (``txt``/``md``/``pdf``/``html``/…)."""
+        return Path(path).suffix.lower().lstrip(".") if path else ""

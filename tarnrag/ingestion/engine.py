@@ -162,10 +162,11 @@ class IngestionEngine(Engine):
     # ----- ingest -----
 
     async def ingest_paths(
-        self, paths: list[str], *, source_ids: list[str] | None = None, parser: str | None = None
+        self, paths: list[str], *, source_ids: list[str] | None = None, extractor: str | None = None
     ) -> list[str]:
-        """Ingest documents loaded from file paths (LoadAndParse reads them). ``parser``
-        selects the PDF backend (None → default).
+        """Ingest documents loaded from file paths (LoadAndParse reads them). ``extractor`` overrides
+        the configured extractor for these documents (e.g. ``'docling'``; None → the LoadAndParse
+        stage's configured route for the detected source kind).
 
         ``source_ids`` (parallel to ``paths``) sets each document's ``source_id`` (==
         ``document_id``), which is **stable**: re-ingesting the same id upserts in place. Under
@@ -181,7 +182,7 @@ class IngestionEngine(Engine):
                     "source_path": path,
                     "source_type": self._infer_source_type(path),
                     "content_hash": _sha256_file(path),  # dedup key (sha256 of the file bytes)
-                    **({"parser": parser} if parser else {}),
+                    **({"extractor": extractor} if extractor else {}),
                 },
             )
             for i, path in enumerate(paths)
@@ -189,7 +190,7 @@ class IngestionEngine(Engine):
         return await self._submit(items)
 
     async def ingest_content(
-        self, documents: list[dict[str, str]], *, parser: str | None = None
+        self, documents: list[dict[str, str]], *, extractor: str | None = None
     ) -> list[str]:
         """Ingest pre-loaded content. Each doc's ``source_id`` is governed by ``ID_POLICY``
         (required under ``'caller'``, forbidden under ``'uuid'``). The document's
@@ -199,15 +200,15 @@ class IngestionEngine(Engine):
         ids = self._resolve_document_ids([d.pop("source_id", None) for d in docs], len(docs))
         items = []
         for i, doc in enumerate(docs):
-            if parser:
-                doc.setdefault("parser", parser)
+            if extractor:
+                doc.setdefault("extractor", extractor)
             doc["content_hash"] = _sha256_bytes(contents[i].encode("utf-8"))
             items.append(self._item(ids[i], content=contents[i], extra=doc))
         return await self._submit(items)
 
     async def ingest_streams(
         self, streams: list[tuple[str, BinaryIO]], *, source_ids: list[str] | None = None,
-        parser: str | None = None,
+        extractor: str | None = None,
     ) -> list[str]:
         """Ingest binary streams (e.g. HTTP uploads): **stream** each ``(filename, source)``
         to the staging dir, then ingest by path (parsing happens in the worker). ``source`` is
@@ -227,7 +228,7 @@ class IngestionEngine(Engine):
             await asyncio.to_thread(self._stage_stream, filename, source)
             for filename, source in streams
         ]
-        return await self.ingest_paths(paths, source_ids=source_ids, parser=parser)
+        return await self.ingest_paths(paths, source_ids=source_ids, extractor=extractor)
 
     async def status(self, document_id: str) -> DocumentStatus | None:
         """Document-level status derived from persisted data (pending | in_progress |

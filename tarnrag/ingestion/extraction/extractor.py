@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from tarnrag.contracts import StructuredDocument
-from tarnrag.core.components import Component, ComponentFactory
+from tarnrag.core.components import Component
 
 
 class Source(BaseModel):
@@ -49,25 +49,3 @@ class Extractor(Component):
         if source.path:
             return Path(source.path).read_text(encoding="utf-8", errors="replace")
         return ""
-
-
-# format -> extractor class_name. Tiered routing (fast/high-fidelity) extends this to per-format maps.
-DEFAULT_ROUTES: dict[str, str] = {
-    "text": "plain_text",
-    "txt": "plain_text",
-    "markdown": "markdown",
-    "md": "markdown",
-    "html": "html",
-    "htm": "html",
-    "pdf": "pdf_text",  # fast born-digital tier; high-fidelity Docling is opt-in (a follow-on)
-}
-
-
-def extract(source: Source) -> StructuredDocument:
-    """Route a ``Source`` to its extractor and run it: an explicit ``metadata['extractor']`` wins, else
-    ``DEFAULT_ROUTES[source_kind]``, else the plain-text fallback (graceful degradation, FR-1.3)."""
-    name = source.metadata.get("extractor") or DEFAULT_ROUTES.get(source.source_kind, "plain_text")
-    extractor = ComponentFactory.get().create({"class_name": name})
-    if not isinstance(extractor, Extractor):
-        raise TypeError(f"{name!r} is a {type(extractor).__name__}, not an Extractor")
-    return extractor.extract(source)

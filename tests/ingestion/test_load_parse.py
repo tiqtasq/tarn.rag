@@ -1,81 +1,65 @@
-"""LoadAndParseStage: per-request PDF backend selection via metadata['parser']."""
+"""LoadAndParseStage: config-driven extractor routing -> a StructuredDocument on item.document."""
 
-from pathlib import Path
-
-import pytest
-from pydantic import ValidationError
-
-import tarnrag.ingestion.stages.parsers as parsers
-from tarnrag.contracts import PipelineItem
+from tarnrag.contracts import ElementKind, PipelineItem
+from tarnrag.ingestion.pipeline import Pipeline
+from tarnrag.ingestion.stages.clean_normalize import CleanAndNormalizeStage
 from tarnrag.ingestion.stages.load_parse import LoadAndParseStage
 
-# A tiny real PDF whose only text is "Quokka ingestion smoke 7" (committed fixture).
-SAMPLE_PDF = Path(__file__).parents[1] / "fixtures" / "sample.pdf"
+
+def _run(item: PipelineItem, **config) -> PipelineItem:
+    stage = LoadAndParseStage(LoadAndParseStage.Config(**config))
+    return next(iter(stage.process(item)))
 
 
-@pytest.fixture
-def stage(monkeypatch):
-    """A stage whose registry has two fake PDF backends ('a', 'b'), default 'a'.
-
-    Pure-config stages resolve PDF backends by name from the module registry, so tests inject
-    fakes by monkeypatching ``parsers.DEFAULT_PDF_PARSERS`` (no real PDFs needed for selection).
-    """
-    monkeypatch.setitem(parsers.DEFAULT_PDF_PARSERS, "a", lambda p: f"A:{p}")
-    monkeypatch.setitem(parsers.DEFAULT_PDF_PARSERS, "b", lambda p: f"B:{p}")
-    return LoadAndParseStage(LoadAndParseStage.Config(default_pdf_parser="a"))
+def test_routes_by_extension_to_the_right_extractor(tmp_path):
+    p = tmp_path / "doc.md"
+    p.write_text("# Title\n\nBody.", encoding="utf-8")
+    out = _run(PipelineItem(content="", metadata={"source_path": str(p), "source_id": "d1"}))
+    assert out.document is not None and out.document.extractor == "markdown"
+    assert out.content == out.document.text  # content is the normalized text view
+    assert any(e.kind == ElementKind.HEADING and e.text == "Title" for e in out.document.elements)
 
 
-def _run(stage, path, parser=None):
-    meta = {"source_path": path}
-    if parser is not None:
-        meta["parser"] = parser
-    [out] = list(stage.process(PipelineItem(content="", metadata=meta)))
-    return out.content
+def test_content_only_falls_back_to_plain_text():
+    out = _run(PipelineItem(content="hello world", metadata={"source_id": "d1"}))
+    assert out.document.extractor == "plain_text"
+    assert out.content == "hello world"
 
 
-def test_metadata_parser_selects_the_backend(stage, tmp_path):
-    pdf = str(tmp_path / "doc.pdf")
-    assert _run(stage, pdf, parser="b") == f"B:{pdf}"
+def test_metadata_extractor_override_wins(tmp_path):
+    p = tmp_path / "doc.md"
+    p.write_text("# H\n\nx", encoding="utf-8")
+    out = _run(PipelineItem(content="", metadata={"source_path": str(p), "extractor": "plain_text"}))
+    assert out.document.extractor == "plain_text"  # the override beats the .md route
 
 
-def test_absent_parser_uses_the_default(stage, tmp_path):
-    pdf = str(tmp_path / "doc.pdf")
-    assert _run(stage, pdf) == f"A:{pdf}"
+def test_route_is_config_driven(tmp_path):
+    # point the pdf route at a different extractor via config (plain_text here, to avoid pdf deps)
+    p = tmp_path / "doc.pdf"
+    p.write_text("raw text", encoding="utf-8")
+    out = _run(
+        PipelineItem(content="", metadata={"source_path": str(p)}),
+        routes={"pdf": {"class_name": "plain_text"}},
+    )
+    assert out.document.extractor == "plain_text"
 
 
-def test_unknown_parser_raises_listing_available(stage, tmp_path):
-    pdf = str(tmp_path / "doc.pdf")
-    with pytest.raises(ValueError, match="Unknown pdf parser 'nope'"):
-        _run(stage, pdf, parser="nope")
+def test_unknown_kind_falls_back_to_default_extractor():
+    out = _run(PipelineItem(content="x", metadata={"source_type": "rtf"}))
+    assert out.document.extractor == "plain_text"
 
 
-def test_txt_ignores_parser_and_reads_text(stage, tmp_path):
-    f = tmp_path / "note.txt"
-    f.write_text("hello world", encoding="utf-8")
-    assert _run(stage, str(f), parser="b") == "hello world"
+def test_extractor_instances_are_cached():
+    stage = LoadAndParseStage(LoadAndParseStage.Config())
+    list(stage.process(PipelineItem(content="a", metadata={"source_id": "1"})))
+    list(stage.process(PipelineItem(content="b", metadata={"source_id": "2"})))
+    assert len(stage._cache) == 1  # one long-lived plain_text instance reused
 
 
-def test_html_is_extracted_with_tags_stripped(tmp_path):
-    f = tmp_path / "page.html"
-    f.write_text("<h1>Hello</h1><p>World &amp; more</p>", encoding="utf-8")
-    out = _run(LoadAndParseStage(LoadAndParseStage.Config()), str(f))  # real bs4 loader
-    assert "Hello" in out and "World" in out
-    assert "<h1>" not in out  # tags stripped
-    assert "&" in out and "&amp;" not in out  # entities decoded
-
-
-def test_invalid_default_parser_fails_validation():
-    with pytest.raises(ValidationError, match="default_pdf_parser"):
-        LoadAndParseStage.Config(default_pdf_parser="missing")
-
-
-def test_default_registry_has_pypdf_and_pdfplumber():
-    assert {"pypdf", "pdfplumber"} <= set(parsers.DEFAULT_PDF_PARSERS)
-    assert LoadAndParseStage.Config().default_pdf_parser == "pypdf"
-
-
-@pytest.mark.parametrize("parser", [None, "pypdf", "pdfplumber"])
-def test_real_pdf_backends_extract_text(parser):
-    """Each real backend extracts text from the committed sample PDF (None → default pypdf)."""
-    text = _run(LoadAndParseStage(LoadAndParseStage.Config()), str(SAMPLE_PDF), parser=parser)
-    assert "Quokka" in text
+def test_document_survives_a_mapper_stage():
+    pipe = Pipeline.from_stages([
+        LoadAndParseStage(LoadAndParseStage.Config()),
+        CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
+    ])
+    [out] = list(pipe.run([PipelineItem(content="hello", metadata={"source_id": "d1"})]))
+    assert out.document is not None and out.document.extractor == "plain_text"  # survived Clean

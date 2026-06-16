@@ -121,20 +121,20 @@ class _RecordingEnqueuer(JobEnqueuer):
         self.jobs.append(job)
 
 
-async def test_parser_choice_rides_in_item_metadata(repo):
-    """The per-request parser selection flows inline on the root job's item (not stage config)."""
+async def test_extractor_override_rides_in_item_metadata(repo):
+    """The per-request extractor override flows inline on the root job's item (not stage config)."""
     enq = _RecordingEnqueuer()
     stages = _stages()
     orch = PipelineOrchestrator(PipelineDAG(stages), enq, repo, create_sink_registry())
     engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo, id_policy="caller")
 
-    await engine.ingest_content([{"content": "x", "source_id": "s1"}], parser="pdfplumber")
-    assert enq.jobs[0].item.metadata["parser"] == "pdfplumber"
+    await engine.ingest_content([{"content": "x", "source_id": "s1"}], extractor="docling")
+    assert enq.jobs[0].item.metadata["extractor"] == "docling"
 
-    # Omitted -> no parser key (stage falls back to its default).
+    # Omitted -> no extractor key (the stage uses its configured route).
     enq.jobs.clear()
     await engine.ingest_content([{"content": "x", "source_id": "s2"}])
-    assert "parser" not in enq.jobs[0].item.metadata
+    assert "extractor" not in enq.jobs[0].item.metadata
 
 
 async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
@@ -144,7 +144,7 @@ async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
     engine = IngestionEngine(Pipeline.from_stages(stages), orch, repo, staging_dir=str(tmp_path / "uploads"))
 
     result = await engine.ingest_streams(
-        [("report.pdf", io.BytesIO(b"%PDF-fake-bytes"))], parser="pdfplumber"
+        [("report.pdf", io.BytesIO(b"%PDF-fake-bytes"))], extractor="docling"
     )
     assert len(result) == 1
 
@@ -153,7 +153,7 @@ async def test_ingest_streams_stages_bytes_and_queues_by_path(repo, tmp_path):
     assert staged.endswith(".pdf")  # extension preserved so the loader dispatches
     assert open(staged, "rb").read() == b"%PDF-fake-bytes"  # streamed to disk
     assert meta["source_type"] == "pdf"
-    assert meta["parser"] == "pdfplumber"
+    assert meta["extractor"] == "docling"
 
 
 async def test_ingest_streams_requires_staging_dir(repo):
