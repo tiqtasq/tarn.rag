@@ -49,11 +49,24 @@ def test_unknown_kind_falls_back_to_default_extractor():
     assert out.document.extractor == "plain_text"
 
 
-def test_extractor_instances_are_cached():
+def test_extractors_are_long_lived_built_once():
     stage = LoadAndParseStage(LoadAndParseStage.Config())
     list(stage.process(PipelineItem(content="a", metadata={"source_id": "1"})))
+    plain = stage._default
     list(stage.process(PipelineItem(content="b", metadata={"source_id": "2"})))
-    assert len(stage._cache) == 1  # one long-lived plain_text instance reused
+    assert stage._default is plain  # built once in _build_children, reused (not per item)
+
+
+def test_extractors_build_through_the_factory_when_built_via_components():
+    # via the framework (ComponentFactory.create -> _build_children): the container's children are
+    # already built, so process needs no on-the-fly instantiation for a routed kind.
+    from tarnrag.core.components import ComponentFactory
+
+    stage = ComponentFactory.get().create({"class_name": "LoadAndParse"})
+    assert isinstance(stage, LoadAndParseStage)
+    assert stage._default is not None  # _build_children ran during the factory build
+    out = next(iter(stage.process(PipelineItem(content="hi", metadata={"source_id": "d1"}))))
+    assert out.document.extractor == "plain_text"
 
 
 def test_document_survives_a_mapper_stage():
