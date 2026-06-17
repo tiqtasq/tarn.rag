@@ -46,8 +46,7 @@ class ComponentFactory:
             raise ValueError(f"spec must be a mapping with a 'class_name' key: {spec!r}")
         klass = self.registry.get(spec["class_name"])
         obj = klass(klass.Config.model_validate(dict(spec)))
-        obj._build_children(self)
-        obj._children_built = True  # so a later _ensure_children() is a no-op (don't rebuild)
+        obj._ensure_children(self)  # build the tree against THIS factory + mark built (one owner)
         return obj
 
     def create_as(self, spec: Mapping[str, Any], expected: type[_C]) -> _C:
