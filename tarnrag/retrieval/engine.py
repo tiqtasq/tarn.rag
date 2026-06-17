@@ -33,16 +33,16 @@ class RetrievalEngine(Engine):
     → assemble). ``search`` / ``search_text`` are async — they await the store.
     """
 
-    def __init__(self, repository: DocumentRepository, embedder: Embedder, config: Any = None):
+    def __init__(self, repository: DocumentRepository, embedder: Embedder, settings: Settings | None = None):
         self.repository = repository
         self.embedder = embedder
-        self.config = config
-        spec = getattr(config, "components", {}).get(RETRIEVAL_PIPELINE) if config is not None else None
+        self.settings = settings
+        spec = settings.components.get(RETRIEVAL_PIPELINE) if settings is not None else None
         self._pipeline = ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, RetrievalPipeline)
 
     @classmethod
     async def open(
-        cls, repository: DocumentRepository, embedder: Embedder, config: Any = None
+        cls, repository: DocumentRepository, embedder: Embedder, settings: Settings | None = None
     ) -> RetrievalEngine:
         """Validate compatibility, then return a query-ready engine. Refuses on mismatch."""
         meta = await repository.index_meta()
@@ -60,7 +60,7 @@ class RetrievalEngine(Engine):
                 "embedding_config_fingerprint mismatch — the index was built with a different "
                 f"embedding pipeline (index {index_fp!r} != engine {engine_fp!r})"
             )
-        return cls(repository, embedder, config)
+        return cls(repository, embedder, settings)
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> RetrievalEngine:
@@ -68,7 +68,7 @@ class RetrievalEngine(Engine):
         store ingestion writes) and the shared embedder, then validates compatibility via ``open``."""
         settings = settings or get_settings()
         repository, embedder = await cls._build_repository_and_embedder(settings)
-        return await cls.open(repository, embedder, config=settings)
+        return await cls.open(repository, embedder, settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:
         """Run the configured retrieval pipeline (retrieve → fuse → top_k → hydrate → assemble)."""

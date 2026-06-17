@@ -2,11 +2,9 @@
 
 import pytest
 
-from types import SimpleNamespace
-
 from tarnrag.contracts import build_index_meta
 from tarnrag.contracts import Chunk, Document, Embedding
-from tarnrag.core.config import RETRIEVAL_PIPELINE
+from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval import Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline
 
 FINGERPRINT = "fp-123"
@@ -115,16 +113,17 @@ async def test_pipeline_hybrid_fuses_dense_and_sparse(repo):
 
 async def test_engine_uses_configured_pipeline_spec(repo):
     cids = await _index(repo)
-    cfg = SimpleNamespace(
+    settings = Settings(
+        _env_file=None,
         components={
             RETRIEVAL_PIPELINE: {
                 "class_name": "retrieval_pipeline",
                 "retrievers": [{"class_name": "sparse"}],
                 "fuser": {"class_name": "identity"},
             }
-        }
+        },
     )
-    engine = await RetrievalEngine.open(repo, _FakeEmbedder(), config=cfg)
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(), settings=settings)
     results = await engine.search(Query(text="tank inspection", top_k=5))
     assert [r.chunk_id for r in results] == [cids[0]]  # sparse-only -> just the lexical match
     assert set(results[0].component_scores) == {"sparse"}
