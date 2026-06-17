@@ -17,11 +17,11 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tarnrag.contracts import MethodRef, RetrievalResult
+from tarnrag.contracts import ChunkRecord, MethodRef, RetrievalResult
 from tarnrag.core.components import Component, ComponentFactory
 from tarnrag.retrieval.fuser import Fuser
 from tarnrag.retrieval.retriever import RetrievalContext, Retriever
-from tarnrag.retrieval.types import Query
+from tarnrag.retrieval.types import ALL, Purpose, Query
 
 
 class RetrievalPipeline(Component):
@@ -48,12 +48,12 @@ class RetrievalPipeline(Component):
         self._ensure_children()
         lists = await asyncio.gather(*(r.retrieve(query, ctx) for r in self._retrievers))
         per_retriever = {r.config.class_name: candidates for r, candidates in zip(self._retrievers, lists)}
-        fused = self._fuser.fuse(per_retriever)[: query.top_k]
+        fused = self._fuser.fuse(per_retriever)  # ranked, over-fetched; filter then take top_k
         records = {rec.chunk_id: rec for rec in await ctx.store.hydrate([h.chunk_id for h in fused])}
         results: list[RetrievalResult] = []
         for h in fused:
             rec = records.get(h.chunk_id)
-            if rec is None:
+            if rec is None or not self._passes(rec, query):
                 continue
             results.append(
                 RetrievalResult(
@@ -70,4 +70,29 @@ class RetrievalPipeline(Component):
                     provenance=rec.provenance,
                 )
             )
+            if len(results) >= query.top_k:
+                break
         return results
+
+    @staticmethod
+    def _passes(record: ChunkRecord, query: Query) -> bool:
+        """The license/scope filter (query-driven): drop unavailable chunks; drop non-grounding chunks
+        for a GENERATION_GROUNDING query; restrict to the query's method scope. (License-class-by-purpose
+        policy is a deferred extension — it needs a purpose → allowed-classes mapping.)"""
+        if not record.available:
+            return False
+        if query.purpose == Purpose.GENERATION_GROUNDING and not record.ai_grounding_allowed:
+            return False
+        return RetrievalPipeline._in_scope(record, query.scope)
+
+    @staticmethod
+    def _in_scope(record: ChunkRecord, scope: object) -> bool:
+        """Whether ``record`` is in the query's method ``scope`` (``ALL`` ⇒ unrestricted). A scoped
+        ``MethodRef`` with no version matches any version of its method id."""
+        if scope == ALL:
+            return True
+        return any(
+            ref.method_id == mid and (ref.method_version is None or ref.method_version == ver)
+            for ref in scope  # type: ignore[union-attr]
+            for mid, ver in record.methods
+        )

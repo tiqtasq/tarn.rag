@@ -192,7 +192,7 @@ class SqliteRepository(DocumentRepository):
             rows = (
                 await conn.exec_driver_sql(
                     "SELECT c.chunk_id, c.text, c.document_id, d.source_kind, d.standard_id, "
-                    "c.locator, c.license_class FROM chunks c "
+                    "c.locator, c.license_class, c.ai_grounding_allowed, c.available FROM chunks c "
                     "JOIN documents d ON c.document_id = d.document_id "
                     f"WHERE c.chunk_id IN ({marks})",
                     tuple(chunk_ids),
@@ -215,6 +215,7 @@ class SqliteRepository(DocumentRepository):
                     ChunkRecord(
                         chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
                         standard_id=r[4], locator=r[5], license_class=r[6],
+                        ai_grounding_allowed=bool(r[7]), available=bool(r[8]),
                         methods=[(m, v) for m, v in methods],
                         provenance=prov.get(cid),
                     )
