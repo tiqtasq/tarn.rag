@@ -318,6 +318,38 @@ async def test_fts_index_is_populated(repo):
     assert len(rows) == 1
 
 
+async def test_sparse_search_ranks_lexical_matches(repo):
+    await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("storage tank corrosion inspection", 0, 2), _chunk("quokka marsupial habitat", 1, 2)],
+    )
+    hits = await repo.sparse_search("tank corrosion", k=5)
+    assert hits and hits[0].rank == 1
+    [rec] = await repo.hydrate([hits[0].chunk_id])
+    assert rec.text == "storage tank corrosion inspection"  # the lexical match ranks first
+    assert await repo.sparse_search("zzznomatch", k=5) == []  # no terms match -> empty
+
+
+async def test_hydrate_carries_layout_aware_provenance(repo):
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(
+                parent_doc_id="", content="Wear PPE.", chunk_index=0,
+                provenance=ChunkProvenance(
+                    content_hash=_h("Wear PPE."), header_path=["Safety"], level=1,
+                    geometry=[Span(start=5, end=8)],
+                ),
+                metadata={"source_id": "s1"},
+            )
+        ],
+    )
+    [rec] = await repo.hydrate([cid])
+    assert rec.provenance is not None
+    assert (rec.provenance.header_path, rec.provenance.level) == (["Safety"], 1)
+    assert rec.provenance.geometry[0].start == 5
+
+
 async def test_license_class_enum_is_enforced(repo):
     # license_class is a closed §8 enum guarded by a CHECK constraint.
     with pytest.raises(IntegrityError):

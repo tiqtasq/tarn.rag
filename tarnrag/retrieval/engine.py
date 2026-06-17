@@ -93,6 +93,7 @@ class RetrievalEngine(Engine):
                     locator=rec.locator,
                     license_class=rec.license_class,
                     methods=[MethodRef(m, v) for m, v in rec.methods],
+                    provenance=rec.provenance,
                 )
             )
         return results
