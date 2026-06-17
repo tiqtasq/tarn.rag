@@ -4,6 +4,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 
 from tarnrag.contracts import (
+    Annotation,
     Chunk,
     ChunkProvenance,
     Document,
@@ -142,6 +143,33 @@ async def test_table_chunk_persists_cells_and_round_trips(repo):
     assert [c.text for c in t.column_headers_for(data)] == ["Torque"]  # query by column header
     assert [c.text for c in t.row_headers_for(data)] == ["M6"]  # query by row header
     assert t.cell_at(0, 0).geometry[0].start == 0  # cell geometry round-trips
+
+
+async def test_chunk_annotations_round_trip(repo):
+    chunk = Chunk(
+        parent_doc_id="",
+        content="Wear PPE.",
+        chunk_index=0,
+        provenance=ChunkProvenance(
+            content_hash=_h("Wear PPE."),
+            annotations=[
+                Annotation(
+                    producer="acronyms", type="entity", value={"text": "PPE"},
+                    span=[Span(start=5, end=8)], deterministic=True,
+                ),
+                Annotation(producer="topics", type="topic", value={"label": "safety"}, deterministic=False),
+            ],
+        ),
+        metadata={"source_id": "s1"},
+    )
+    doc_id, _ = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [got] = await repo.get_chunks_by_document(doc_id)
+    entity, topic = got.provenance.annotations  # position-ordered
+    assert (entity.producer, entity.type, entity.value) == ("acronyms", "entity", {"text": "PPE"})
+    assert (entity.span[0].start, entity.span[0].end) == (5, 8) and entity.deterministic is True
+    assert topic.type == "topic" and topic.span is None and topic.deterministic is False  # doc-level, generative
 
 
 async def test_update_chunk_metadata_is_noop(repo):

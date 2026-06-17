@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 
 from tarnrag.core.config import DatabaseSettings
 from tarnrag.contracts import (
+    Annotation,
     Candidate,
     Chunk,
     ChunkProvenance,
@@ -257,6 +258,28 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             Column("geometry", Text),                         # JSON Geometry for the cell
             PrimaryKeyConstraint("chunk_id", "cell_id"),
             Index("idx_table_cells_chunk", "chunk_id"),
+        )
+        # Enricher annotations on a chunk (NER / topic / classification …) — one row per annotation,
+        # cascades with the chunk. ``type`` is indexed for filter-by-annotation retrieval; ``span`` is
+        # the optional sub-region (JSON Geometry); ``deterministic`` flags generative findings (FR-5.3).
+        self.chunk_annotations = Table(
+            "chunk_annotations",
+            self.metadata,
+            Column(
+                "chunk_id",
+                Text,
+                ForeignKey("chunks.chunk_id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            Column("ordinal", Integer, nullable=False),       # position within the chunk's annotations
+            Column("producer", Text, nullable=False),         # the enricher's name
+            Column("type", Text, nullable=False),             # "entity" | "topic" | "classification" | …
+            Column("value", Text, nullable=False, default="{}"),  # JSON payload
+            Column("span", Text),                             # JSON Geometry sub-span; null = whole chunk
+            Column("deterministic", Integer, nullable=False, default=1),
+            PrimaryKeyConstraint("chunk_id", "ordinal"),
+            Index("idx_chunk_annotations_chunk", "chunk_id"),
+            Index("idx_chunk_annotations_type", "type"),
         )
         # §8 method_chunks: resolved reference bundles (method version -> chunk).
         self.method_chunks = Table(
@@ -489,6 +512,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                 return None
             chunk = self._row_to_chunk(row)
             await self._attach_tables(conn, [chunk])
+            await self._attach_annotations(conn, [chunk])
             return chunk
 
     async def get_chunks_by_document(self, doc_id: str) -> list[Chunk]:
@@ -502,6 +526,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             ).mappings().all()
             chunks = [self._row_to_chunk(r) for r in rows]
             await self._attach_tables(conn, chunks)
+            await self._attach_annotations(conn, chunks)
             return chunks
 
     async def query_chunks(
@@ -708,6 +733,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         # Pass 2: build the chunk rows (resolving parent_chunk_id) + the table_cell rows.
         rows: list[dict[str, Any]] = []
         cell_rows: list[dict[str, Any]] = []
+        annotation_rows: list[dict[str, Any]] = []
         for ch, cid in zip(chunks, ids):
             doc = document_id or ch.parent_doc_id
             md = ch.metadata or {}
@@ -731,12 +757,32 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             )
             if prov and prov.table:
                 cell_rows.extend(self._table_cell_rows(cid, prov.table))
+            if prov and prov.annotations:
+                annotation_rows.extend(self._annotation_rows(cid, prov.annotations))
         if rows:
             await conn.execute(insert(self.chunks), rows)
             if cell_rows:
                 await conn.execute(insert(self.table_cells), cell_rows)
+            if annotation_rows:
+                await conn.execute(insert(self.chunk_annotations), annotation_rows)
             await self._index_chunk_text(conn, ids, chunks)
         return ids
+
+    @staticmethod
+    def _annotation_rows(chunk_id: str, annotations: list[Annotation]) -> list[dict[str, Any]]:
+        """The ``chunk_annotations`` rows for a chunk's annotations (position-ordered)."""
+        return [
+            {
+                "chunk_id": chunk_id,
+                "ordinal": i,
+                "producer": a.producer,
+                "type": a.type,
+                "value": json.dumps(a.value),
+                "span": _encode_geometry(a.span) if a.span else None,
+                "deterministic": int(a.deterministic),
+            }
+            for i, a in enumerate(annotations)
+        ]
 
     @staticmethod
     def _table_cell_rows(chunk_id: str, table: TableModel) -> list[dict[str, Any]]:
@@ -821,6 +867,37 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             cell_rows = cells_by_chunk.get(chunk.id)
             if cell_rows and chunk.provenance is not None:
                 chunk.provenance.table = self._rebuild_table(cell_rows)
+
+    async def _attach_annotations(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
+        """Rebuild each chunk's ``provenance.annotations`` from its ``chunk_annotations`` rows (one query)."""
+        ids = [c.id for c in chunks if c.id]
+        if not ids:
+            return
+        rows = (
+            await conn.execute(
+                select(self.chunk_annotations)
+                .where(self.chunk_annotations.c.chunk_id.in_(ids))
+                .order_by(self.chunk_annotations.c.chunk_id, self.chunk_annotations.c.ordinal)
+            )
+        ).mappings().all()
+        by_chunk: dict[str, list[Any]] = {}
+        for r in rows:
+            by_chunk.setdefault(r["chunk_id"], []).append(r)
+        for chunk in chunks:
+            ann_rows = by_chunk.get(chunk.id)
+            if ann_rows and chunk.provenance is not None:
+                chunk.provenance.annotations = [self._row_to_annotation(r) for r in ann_rows]
+
+    @staticmethod
+    def _row_to_annotation(r) -> Annotation:
+        """Rebuild an ``Annotation`` from a ``chunk_annotations`` row."""
+        return Annotation(
+            producer=r["producer"],
+            type=r["type"],
+            value=json.loads(r["value"]),
+            span=_decode_geometry(r["span"]) if r["span"] else None,
+            deterministic=bool(r["deterministic"]),
+        )
 
     @staticmethod
     def _doc_metadata(r) -> dict[str, Any]:
