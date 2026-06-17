@@ -111,6 +111,7 @@ class ChunkResultSink(_BufferingSink):
                 parent_doc_id=item.metadata["doc_id"],
                 content=item.content,
                 chunk_index=item.metadata["chunk_index"],
+                provenance=item.provenance,  # geometry / header_path / tree / table → persisted columns
                 metadata=item.metadata,
             )
             for item in results

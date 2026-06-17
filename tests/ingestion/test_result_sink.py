@@ -1,4 +1,6 @@
-from tarnrag.contracts import Chunk, Document, Embedding, PipelineItem
+import hashlib
+
+from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, PipelineItem
 from tarnrag.ingestion.result_sink import (
     ChunkMetadataResultSink,
     ChunkResultSink,
@@ -13,6 +15,10 @@ async def _finalize(sink, results):
     sink.submit(results)
     sink.close()
     return await sink.finalize()
+
+
+def _h(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 async def test_document_sink_persists_and_threads_doc_id(repo):
@@ -38,6 +44,24 @@ async def test_chunk_sink_persists_and_threads_chunk_id(repo):
     chunks = await repo.get_chunks_by_document(doc_id)
     assert [c.content for c in chunks] == ["c0", "c1"]
     assert [c.id for c in chunks] == [it.metadata["chunk_id"] for it in items]
+
+
+async def test_chunk_sink_threads_provenance_and_resolves_the_tree(repo):
+    doc_id = await repo.store_document(Document(content="d", metadata={"source_id": "s1"}))
+    parent = PipelineItem(
+        content="Safety",
+        metadata={"source_id": "s1", "doc_id": doc_id, "chunk_index": 0, "parent_ordinal": None},
+        provenance=ChunkProvenance(content_hash=_h("Safety"), header_path=["Safety"], level=1),
+    )
+    leaf = PipelineItem(
+        content="Wear PPE.",
+        metadata={"source_id": "s1", "doc_id": doc_id, "chunk_index": 1, "parent_ordinal": 0},
+        provenance=ChunkProvenance(content_hash=_h("Wear PPE."), header_path=["Safety"], level=0),
+    )
+    assert (await _finalize(ChunkResultSink(repo), [parent, leaf])).persisted
+    stored_parent, stored_leaf = await repo.get_chunks_by_document(doc_id)
+    assert stored_parent.provenance.level == 1 and stored_parent.provenance.header_path == ["Safety"]
+    assert stored_leaf.provenance.parent_chunk_id == stored_parent.id  # sink + repo resolved the tree
 
 
 async def test_enrich_sink_is_noop(repo):
