@@ -1,10 +1,13 @@
-"""Enrichment: annotate a loaded document with extra metadata (NER, topic, language, …).
+"""Enrichment: annotate the loaded ``StructuredDocument`` with typed annotations (NER, topic, …).
 
-Importing this package registers the built-in enrich stage with the global ``ComponentFactory`` (it
-self-registers under its ``class_name``), so ``Pipeline.from_spec`` / ``ComponentFactory`` can build it.
-User-supplied enrichers (an ``Enricher`` component family run alongside the extractor) will land here.
+Importing this package registers the ``Enrich`` stage and the built-in enrichers (``acronyms``) with
+the global ``ComponentFactory``, so ``Pipeline.from_spec`` / ``ComponentFactory`` can build them. Users
+register their own ``Enricher`` components on the same framework. The enrichers are imported before
+``EnrichStage`` (the driver builds enricher children).
 """
 
-from tarnrag.ingestion.enrichment.enrich import EnrichMetadataStage
+from tarnrag.ingestion.enrichment.enricher import Enricher
+from tarnrag.ingestion.enrichment.acronyms import AcronymEnricher
+from tarnrag.ingestion.enrichment.enrich import EnrichStage
 
-__all__ = ["EnrichMetadataStage"]
+__all__ = ["Enricher", "AcronymEnricher", "EnrichStage"]

@@ -411,10 +411,9 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
         return ids
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
-        # No-op BY DESIGN (not unfinished): §8 chunks carry no metadata column, so chunk
-        # enrichment is not persisted. A general chunk-metadata bag is deferred to a later
-        # schema revision; the method stays on the port — and the EnrichMetadata →
-        # ChunkMetadataResultSink path stays wired — so re-enabling it is a one-method change.
+        # No-op BY DESIGN (not unfinished): §8 chunks carry no free-form metadata column. Enrichment
+        # now annotates the document (the Enrich stage) and rides into chunks via ChunkProvenance;
+        # a general chunk-metadata bag is deferred. The method stays on the port as a latent capability.
         return None
 
     # ---------------- dialect search-index hooks (vec0 / FTS live outside the FK graph) ----------------

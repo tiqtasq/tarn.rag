@@ -2,7 +2,6 @@ import hashlib
 
 from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, PipelineItem
 from tarnrag.ingestion.result_sink import (
-    ChunkMetadataResultSink,
     ChunkResultSink,
     DocumentResultSink,
     EmbeddingResultSink,
@@ -64,17 +63,6 @@ async def test_chunk_sink_threads_provenance_and_resolves_the_tree(repo):
     assert stored_leaf.provenance.parent_chunk_id == stored_parent.id  # sink + repo resolved the tree
 
 
-async def test_enrich_sink_is_noop(repo):
-    # §8 has no chunk metadata column — the enrich sink finalizes successfully but stores nothing.
-    _, (cid,) = await repo.store_document_with_chunks(
-        Document(content="d", metadata={"source_id": "s1"}),
-        [Chunk(parent_doc_id="", content="c", chunk_index=0, total_chunks=1, metadata={})],
-    )
-    item = PipelineItem(content="c", metadata={"chunk_id": cid, "char_count": 1, "word_count": 1})
-    assert (await _finalize(ChunkMetadataResultSink(repo), [item])).persisted
-    assert "char_count" not in (await repo.get_chunk(cid)).metadata
-
-
 async def test_embedding_sink_persists(repo):
     _, (cid,) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
@@ -105,8 +93,8 @@ def test_registry_covers_all_stages():
     registry = create_sink_registry()
     assert set(registry) == {
         "LoadAndParse",
+        "Enrich",
         "CleanAndNormalize",
         "Chunk",
-        "EnrichMetadata",
         "Embed",
     }
