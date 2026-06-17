@@ -13,7 +13,6 @@ without text are skipped for now (text-only normalized text).
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Literal
 
 from tarnrag.contracts import (
@@ -118,14 +117,7 @@ class DoclingExtractor(Extractor):
                 ))
 
         doc_text = _SEP.join(parts)
-        return StructuredDocument(
-            source_id=source.source_id,
-            source_kind=source.source_kind or "pdf",
-            extractor="docling",
-            text=doc_text,
-            elements=elements,
-            content_hash=hashlib.sha256(doc_text.encode("utf-8")).hexdigest(),
-        )
+        return DoclingExtractor._create_document(source, doc_text, elements, extractor="docling", default_kind="pdf")
 
     @staticmethod
     def _kind(item, TitleItem, SectionHeaderItem, ListItem, CodeItem):

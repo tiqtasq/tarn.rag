@@ -57,6 +57,7 @@ class Component(ABC):
 
     def __init__(self, config: Component.Config) -> None:
         self.config = config
+        self._children_built = False  # flipped True by _ensure_children once the children are built
 
     def _build_children(self, factory: ComponentFactory) -> None:
         """
@@ -68,6 +69,18 @@ class Component(ABC):
             def _build_children(self, factory):
                 self.children = [factory.create(spec) for spec in self.config.children]
         """
+
+    def _ensure_children(self, factory: ComponentFactory | None = None) -> None:
+        """Build the children once and mark them built — the single owner of both the build and the
+        ``_children_built`` flag, so they can't drift apart. ``ComponentFactory.create`` calls this with
+        itself, so the tree builds against the one registry; a directly-constructed container (tests,
+        ``Pipeline.from_stages``) calls it with no factory before first use and falls back to the global
+        one. Idempotent: a second call is a no-op."""
+        if not self._children_built:
+            from tarnrag.core.components import ComponentFactory
+
+            self._children_built = True  # commit before building: a re-entrant call won't rebuild
+            self._build_children(factory or ComponentFactory.get())
 
     def to_json(self) -> dict[str, Any]:
         """Serialize back to the dict shape that ``ComponentFactory.create`` consumes."""

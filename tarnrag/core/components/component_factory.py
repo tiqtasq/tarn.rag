@@ -17,13 +17,14 @@ lazy import in ``__init_subclass__``), which avoids the import cycle between the
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Annotated, Any, Union
+from typing import Annotated, Any, TypeVar, Union
 
 from pydantic import Field, TypeAdapter
 
 from .registry import Registry
 from .component import Component
 
+_C = TypeVar("_C", bound=Component)
 
 
 # -------------------------------------------------------------------------------------- #
@@ -45,7 +46,17 @@ class ComponentFactory:
             raise ValueError(f"spec must be a mapping with a 'class_name' key: {spec!r}")
         klass = self.registry.get(spec["class_name"])
         obj = klass(klass.Config.model_validate(dict(spec)))
-        obj._build_children(self)
+        obj._ensure_children(self)  # build the tree against THIS factory + mark built (one owner)
+        return obj
+
+    def create_as(self, spec: Mapping[str, Any], expected: type[_C]) -> _C:
+        """Build a component and assert it is an ``expected`` instance — a typed ``create`` for
+        container components validating their children (e.g. a ``Chunk`` stage's chunker)."""
+        obj = self.create(spec)
+        if not isinstance(obj, expected):
+            raise TypeError(
+                f"{spec.get('class_name')!r} is a {type(obj).__name__}, not a {expected.__name__}"
+            )
         return obj
 
     def create_many(self, specs: Mapping[str, Mapping[str, Any]]) -> dict[str, Component]:

@@ -9,7 +9,6 @@ optional dep (the ``parsers`` extra); it is imported lazily, so importing this m
 
 from __future__ import annotations
 
-import hashlib
 from typing import Literal
 
 from tarnrag.contracts import Element, ElementKind, PageBox, Span, StructuredDocument
@@ -30,14 +29,7 @@ class PdfTextExtractor(Extractor):
         if not source.path:
             raise ValueError("the 'pdf_text' extractor needs a PDF file path (source.path)")
         elements, text = self._extract(source.path)
-        return StructuredDocument(
-            source_id=source.source_id,
-            source_kind=source.source_kind or "pdf",
-            extractor=self.config.class_name,
-            text=text,
-            elements=elements,
-            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        )
+        return self._create_document(source, text, elements, extractor=self.config.class_name, default_kind="pdf")
 
     @staticmethod
     def _extract(path: str) -> tuple[list[Element], str]:

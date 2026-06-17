@@ -8,7 +8,6 @@ optional ``parsers`` extra, imported lazily.
 
 from __future__ import annotations
 
-import hashlib
 from typing import Literal
 
 from tarnrag.contracts import StructuredDocument, Table, TableCell
@@ -34,14 +33,7 @@ class HtmlExtractor(Extractor):
         blocks: list[Block] = []
         self._walk(soup.body or soup, blocks)  # a full doc has <body>; a fragment is walked whole
         elements, text = assemble(blocks)
-        return StructuredDocument(
-            source_id=source.source_id,
-            source_kind=source.source_kind or "html",
-            extractor=self.config.class_name,
-            text=text,
-            elements=elements,
-            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        )
+        return self._create_document(source, text, elements, extractor=self.config.class_name, default_kind="html")
 
     @staticmethod
     def _walk(node: object, blocks: list[Block]) -> None:

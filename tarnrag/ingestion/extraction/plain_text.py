@@ -6,7 +6,6 @@ dependencies; this is the fallback for unknown/unsupported source kinds.
 
 from __future__ import annotations
 
-import hashlib
 from typing import Literal
 
 from tarnrag.contracts import Element, ElementKind, Span, StructuredDocument
@@ -29,11 +28,4 @@ class PlainTextExtractor(Extractor):
             if text
             else []
         )
-        return StructuredDocument(
-            source_id=source.source_id,
-            source_kind=source.source_kind or "text",
-            extractor=self.config.class_name,
-            text=text,
-            elements=elements,
-            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        )
+        return self._create_document(source, text, elements, extractor=self.config.class_name, default_kind="text")

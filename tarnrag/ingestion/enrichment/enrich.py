@@ -36,11 +36,10 @@ class EnrichStage(PipelineStage):
 
     def _build_children(self, factory: ComponentFactory) -> None:
         """Build the enricher children through the framework factory (the container hook)."""
-        self._enrichers = [self._build(spec, factory) for spec in self.config.enrichers]
+        self._enrichers = [factory.create_as(spec, Enricher) for spec in self.config.enrichers]
 
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
-        if self._enrichers is None:  # built once when constructed directly (not through the factory)
-            self._build_children(ComponentFactory.get())
+        self._ensure_children()
         if item.document is not None:
             for enricher in self._enrichers:
                 enricher.enrich(item.document)  # mutates the document in place
@@ -50,10 +49,3 @@ class EnrichStage(PipelineStage):
             document=item.document,
             provenance=item.provenance,
         )
-
-    def _build(self, spec: dict[str, Any], factory: ComponentFactory) -> Enricher:
-        """Build an enricher from its spec, asserting the component really is an ``Enricher``."""
-        built = factory.create(dict(spec))
-        if not isinstance(built, Enricher):
-            raise TypeError(f"{spec.get('class_name')!r} is a {type(built).__name__}, not an Enricher")
-        return built

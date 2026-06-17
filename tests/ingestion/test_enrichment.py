@@ -55,7 +55,7 @@ def test_enrich_stage_rejects_a_non_enricher_spec():
         list(stage.process(PipelineItem(content="x", metadata={}, document=_single("x"))))
         raise AssertionError("expected a TypeError")
     except TypeError as e:
-        assert "not an Enricher" in str(e)
+        assert "not a" in str(e) and "Enricher" in str(e)
 
 
 # --- AC-2: a custom enricher runs purely by config, at both levels, without editing any base class ---

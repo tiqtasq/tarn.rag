@@ -10,7 +10,6 @@ document so chunking still runs.
 
 from __future__ import annotations
 
-import hashlib
 import uuid
 from collections.abc import Iterator
 from typing import Any, Literal
@@ -19,6 +18,7 @@ from pydantic import Field
 
 from tarnrag.contracts import Element, ElementKind, PipelineItem, Span, StructuredDocument
 from tarnrag.core.components import ComponentFactory
+from tarnrag.core.hashing import content_hash
 from tarnrag.ingestion.chunking.chunker import Chunker
 from tarnrag.ingestion.pipeline import PipelineStage
 
@@ -39,11 +39,10 @@ class ChunkStage(PipelineStage):
 
     def _build_children(self, factory: ComponentFactory) -> None:
         """Build the chunker child through the framework factory (the hook containers override)."""
-        self._chunker = self._build(self.config.chunker, factory)
+        self._chunker = factory.create_as(self.config.chunker, Chunker)
 
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
-        if self._chunker is None:  # built once when constructed directly (not through the factory)
-            self._build_children(ComponentFactory.get())
+        self._ensure_children()
         document = item.document or self._synthesize(item)
         chunks = self._chunker.chunk(document)
         if not chunks:
@@ -62,13 +61,6 @@ class ChunkStage(PipelineStage):
                 provenance=chunk.provenance,
             )
 
-    def _build(self, spec: dict[str, Any], factory: ComponentFactory) -> Chunker:
-        """Build the chunker from its spec, asserting the component really is a ``Chunker``."""
-        built = factory.create(dict(spec))
-        if not isinstance(built, Chunker):
-            raise TypeError(f"{spec.get('class_name')!r} is a {type(built).__name__}, not a Chunker")
-        return built
-
     @staticmethod
     def _synthesize(item: PipelineItem) -> StructuredDocument:
         """Wrap raw ``item.content`` as a single-paragraph document, so chunking runs even when no
@@ -85,5 +77,5 @@ class ChunkStage(PipelineStage):
                 if text
                 else []
             ),
-            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+            content_hash=content_hash(text),
         )

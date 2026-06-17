@@ -12,12 +12,12 @@ from the at-rest ``tarnrag.contracts.Chunk`` DTO (built only at storage time).
 
 from __future__ import annotations
 
-import hashlib
 from abc import abstractmethod
 
 from pydantic import BaseModel
 
 from tarnrag.contracts import Annotation, ChunkProvenance, Element, Span, StructuredDocument
+from tarnrag.core.hashing import content_hash
 from tarnrag.core.components import Component
 
 
@@ -45,8 +45,8 @@ class Chunker(Component):
 
     @staticmethod
     def _hash(text: str) -> str:
-        """The chunk content hash (sha256 of its text) — the dedup/identity key."""
-        return hashlib.sha256(text.encode("utf-8")).hexdigest()
+        """The chunk content hash — the dedup/identity key."""
+        return content_hash(text)
 
     @staticmethod
     def _union_geometry(elements: list[Element]) -> list[Span]:
