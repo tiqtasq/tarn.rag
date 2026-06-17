@@ -1,4 +1,4 @@
-"""Custom exception classes."""
+"""Custom exception classes — the domain errors raised across the system."""
 
 
 class IngestionError(Exception):
@@ -9,17 +9,7 @@ class IngestionError(Exception):
     """
 
 
-class DocumentStorageError(IngestionError):
+class RetrievalError(Exception):
     """
-    A document / chunk / embedding write failed.
+    The retrieval engine cannot serve queries against this index (incompatibility at ``open()``).
     """
-
-
-class ChunkNotFoundError(IngestionError):
-    """
-    ``update_chunk_metadata`` targeted a chunk id that does not exist.
-    """
-
-    def __init__(self, chunk_id: str):
-        super().__init__(f"chunk not found: {chunk_id}")
-        self.chunk_id = chunk_id
