@@ -29,6 +29,7 @@ IdPolicy = Literal["caller", "uuid"]
 
 # Key under ``Settings.components`` holding the ingestion pipeline spec (a Pipeline-component spec).
 INGESTION_PIPELINE = "ingestion_pipeline"
+RETRIEVAL_PIPELINE = "retrieval_pipeline"
 
 
 class AppSettings(BaseModel):
@@ -139,6 +140,16 @@ class Settings(BaseSettings):
                     {"class_name": "Chunk"},  # chunker defaults to structure_aware on ChunkStage.Config
                     {"class_name": "Embed"},
                 ],
+            },
+        )
+        # The retrieval composition (the analog of INGESTION_PIPELINE): dense-only by default; set
+        # ``retrievers`` + a ``fuser: {"class_name": "rrf"}`` for hybrid. Comparing methods = vary this.
+        self.components.setdefault(
+            RETRIEVAL_PIPELINE,
+            {
+                "class_name": "retrieval_pipeline",
+                "retrievers": [{"class_name": "dense"}],
+                "fuser": {"class_name": "identity"},
             },
         )
         return self

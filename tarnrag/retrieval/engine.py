@@ -1,38 +1,44 @@
 """RetrievalEngine — turns a query into ranked, provenance-bearing results (ModusQ §5).
 
-Step A is **dense-only**: embed the query → dense KNN → hydrate → assemble. Retrieval runs on the
-``DocumentRepository`` (the same store ingestion writes — sqlite-vec on SQLite, pgvector on
-Postgres), so the engine is **async**: ``create`` / ``open`` / ``search`` await the repository.
-``open()`` is the one place compatibility is checked — it refuses to run against an index built
-with a different embedding pipeline (fingerprint) or schema. Step B adds the sparse retriever,
-RRF fusion, and the license/scope filter behind the ``Retriever``/``Fuser`` seams.
+A thin async facade over the §8 repository: it does the compatibility check + store/embedder
+construction (the ``Engine`` base), builds the ``RetrievalPipeline`` from ``Settings`` (the
+``RETRIEVAL_PIPELINE`` spec — dense by default; configure ``retrievers`` + a ``fuser`` for hybrid), and
+delegates ``search`` to it. ``open()`` is the one place compatibility is checked — it refuses an index
+built with a different embedding pipeline (fingerprint) or schema. **Comparing retrieval methods = varying
+the ``RETRIEVAL_PIPELINE`` spec.**
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from tarnrag.core.config import Settings, get_settings
-from tarnrag.core.engine import Engine
+from tarnrag.core.components import ComponentFactory
+from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.embedder import Embedder
+from tarnrag.core.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
-from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
+from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
+from tarnrag.retrieval.pipeline import RetrievalPipeline
+from tarnrag.retrieval.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query
+
+_DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser
 
 
 class RetrievalEngine(Engine):
     """
-    Async query facade over the §8 repository (ModusQ §5): embed → KNN → hydrate → assemble. Built
-    via ``create`` (or the ``open`` seam), which refuses an index whose embedding fingerprint or
-    schema differs. ``search`` / ``search_text`` are async — they await the repository.
+    Async query facade over the §8 repository. ``create`` / ``open`` validate index compatibility; the
+    engine then delegates ``search`` to a config-driven ``RetrievalPipeline`` (retrieve → fuse → hydrate
+    → assemble). ``search`` / ``search_text`` are async — they await the store.
     """
 
     def __init__(self, repository: DocumentRepository, embedder: Embedder, config: Any = None):
         self.repository = repository
         self.embedder = embedder
         self.config = config
+        spec = getattr(config, "components", {}).get(RETRIEVAL_PIPELINE) if config is not None else None
+        self._pipeline = ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, RetrievalPipeline)
 
     @classmethod
     async def open(
@@ -58,45 +64,15 @@ class RetrievalEngine(Engine):
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> RetrievalEngine:
-        """Open a query-ready engine straight from ``Settings`` — connects the repository (the
-        same store ingestion writes) and the shared embedder, then validates compatibility via
-        ``open``. The easy entry point; ``open`` is the lower-level seam for injecting your own
-        repository/embedder."""
+        """Open a query-ready engine straight from ``Settings`` — connects the repository (the same
+        store ingestion writes) and the shared embedder, then validates compatibility via ``open``."""
         settings = settings or get_settings()
         repository, embedder = await cls._build_repository_and_embedder(settings)
         return await cls.open(repository, embedder, config=settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:
-        """Dense-only (Step A): embed → KNN → truncate top_k → hydrate → assemble. The embedding
-        is offloaded to a thread (ONNX is CPU-bound and releases the GIL) so it doesn't block the
-        event loop; the KNN + hydrate are the repository's async calls."""
-        query_vec = await asyncio.to_thread(self.embedder.embed_query, query.text)
-        candidates = (await self.repository.dense_knn(query_vec, query.dense_k))[: query.top_k]
-        records = {
-            r.chunk_id: r
-            for r in await self.repository.hydrate([c.chunk_id for c in candidates])
-        }
-        results: list[RetrievalResult] = []
-        for c in candidates:
-            rec = records.get(c.chunk_id)
-            if rec is None:
-                continue
-            results.append(
-                RetrievalResult(
-                    chunk_id=rec.chunk_id,
-                    text=rec.text,
-                    score=-c.raw_score,  # distance → higher is better
-                    component_scores={"dense": c.raw_score},
-                    document_id=rec.document_id,
-                    source_kind=rec.source_kind,
-                    standard_id=rec.standard_id,
-                    locator=rec.locator,
-                    license_class=rec.license_class,
-                    methods=[MethodRef(m, v) for m, v in rec.methods],
-                    provenance=rec.provenance,
-                )
-            )
-        return results
+        """Run the configured retrieval pipeline (retrieve → fuse → top_k → hydrate → assemble)."""
+        return await self._pipeline.search(query, RetrievalContext(self.repository, self.embedder))
 
     async def search_text(
         self, text: str, *, top_k: int = 8, dense_k: int = 50
