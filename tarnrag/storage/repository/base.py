@@ -6,12 +6,9 @@ subclasses supply only the Postgres/SQLite specifics via a small set of hooks.
 
 from __future__ import annotations
 
-import json
 import uuid
 from abc import abstractmethod
 from typing import Any
-
-from pydantic import TypeAdapter
 
 from sqlalchemy import (
     TIMESTAMP,
@@ -34,11 +31,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 
 from tarnrag.core.config import DatabaseSettings
 from tarnrag.core.hashing import content_hash
+from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
-    Annotation,
     Candidate,
     Chunk,
-    ChunkProvenance,
     ChunkRecord,
     ChunkStore,
     Document,
@@ -46,10 +42,7 @@ from tarnrag.contracts import (
     DocumentFactsSource,
     Embedding,
     JobStatusSource,
-    Span,
-    TableCell,
 )
-from tarnrag.contracts import Table as TableModel
 from tarnrag.storage.status import DocumentStatusReader
 
 # §8 license_class is a closed enum (matches the strategy doc). Single source of truth for the
@@ -83,20 +76,6 @@ _CHUNK_PROVENANCE = {
     "ai_grounding_allowed": lambda md: int(md.get("ai_grounding_allowed", 1)),
     "available": lambda md: int(md.get("available", 1)),
 }
-
-# Layout-aware geometry (char spans + page boxes) is nested + variable, so it persists as JSON in a
-# Text column rather than a §8 scalar column. One codec, used on both write and read (chunk + cell).
-_GEOMETRY = TypeAdapter(list[Span])
-
-
-def _encode_geometry(geometry: list[Span]) -> str:
-    """A ``Geometry`` (char spans + page boxes) as a JSON string for a ``geometry`` column."""
-    return _GEOMETRY.dump_json(geometry).decode("utf-8")
-
-
-def _decode_geometry(blob: str) -> list[Span]:
-    """Inverse of ``_encode_geometry``."""
-    return list(_GEOMETRY.validate_json(blob))
 
 
 class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
@@ -739,6 +718,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             md = ch.metadata or {}
             prov = ch.provenance
             parent_ordinal = md.get("parent_ordinal")
+            parent_chunk_id = id_by_ordinal.get((doc, parent_ordinal)) if parent_ordinal is not None else None
             rows.append(
                 {
                     "chunk_id": cid,
@@ -747,18 +727,13 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     "text": ch.content,
                     **{col: derive(md) for col, derive in _CHUNK_PROVENANCE.items()},
                     "content_hash": content_hash(ch.content),
-                    "header_path": json.dumps(prov.header_path) if prov else None,
-                    "level": prov.level if prov else 0,
-                    "parent_chunk_id": (
-                        id_by_ordinal.get((doc, parent_ordinal)) if parent_ordinal is not None else None
-                    ),
-                    "geometry": _encode_geometry(prov.geometry) if prov and prov.geometry else None,
+                    **cp.provenance_columns(prov, parent_chunk_id),
                 }
             )
             if prov and prov.table:
-                cell_rows.extend(self._table_cell_rows(cid, prov.table))
+                cell_rows.extend(cp.table_cell_rows(cid, prov.table))
             if prov and prov.annotations:
-                annotation_rows.extend(self._annotation_rows(cid, prov.annotations))
+                annotation_rows.extend(cp.annotation_rows(cid, prov.annotations))
         if rows:
             await conn.execute(insert(self.chunks), rows)
             if cell_rows:
@@ -768,41 +743,6 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             await self._index_chunk_text(conn, ids, chunks)
         return ids
 
-    @staticmethod
-    def _annotation_rows(chunk_id: str, annotations: list[Annotation]) -> list[dict[str, Any]]:
-        """The ``chunk_annotations`` rows for a chunk's annotations (position-ordered)."""
-        return [
-            {
-                "chunk_id": chunk_id,
-                "ordinal": i,
-                "producer": a.producer,
-                "type": a.type,
-                "value": json.dumps(a.value),
-                "span": _encode_geometry(a.span) if a.span else None,
-                "deterministic": int(a.deterministic),
-            }
-            for i, a in enumerate(annotations)
-        ]
-
-    @staticmethod
-    def _table_cell_rows(chunk_id: str, table: TableModel) -> list[dict[str, Any]]:
-        """The ``table_cells`` rows for a table chunk's cells."""
-        return [
-            {
-                "chunk_id": chunk_id,
-                "cell_id": cell.id,
-                "row": cell.row,
-                "col": cell.col,
-                "row_span": cell.row_span,
-                "col_span": cell.col_span,
-                "is_column_header": int(cell.is_column_header),
-                "is_row_header": int(cell.is_row_header),
-                "text": cell.text,
-                "geometry": _encode_geometry(cell.geometry) if cell.geometry else None,
-            }
-            for cell in table.cells
-        ]
-
     def _row_to_chunk(self, r) -> Chunk:
         # total_chunks is left at its None default: §8 stores ordinal, not the total.
         return Chunk(
@@ -810,94 +750,41 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
             parent_doc_id=r["document_id"],
             content=r["text"],
             chunk_index=r["ordinal"],
-            provenance=self._row_to_provenance(r),
+            provenance=cp.row_to_provenance(r),
             metadata=self._chunk_metadata(r),
         )
 
-    @staticmethod
-    def _row_to_provenance(r) -> ChunkProvenance:
-        """Rebuild the persisted provenance from a chunk row. The ``table`` is attached separately from
-        ``table_cells``; ``source_element_ids`` / ``annotations`` are not persisted under §8."""
-        return ChunkProvenance(
-            header_path=json.loads(r["header_path"]) if r["header_path"] else [],
-            geometry=_decode_geometry(r["geometry"]) if r["geometry"] else [],
-            content_hash=r["content_hash"],
-            level=r["level"] or 0,
-            parent_chunk_id=r["parent_chunk_id"],
-        )
-
-    @staticmethod
-    def _rebuild_table(rows) -> TableModel:
-        """Rebuild a ``Table`` from its ``table_cells`` rows; ``n_rows``/``n_cols`` derive from the
-        cells and the rendered markdown is the chunk's ``text`` (so it stays empty here)."""
-        cells = [
-            TableCell(
-                id=r["cell_id"],
-                row=r["row"],
-                col=r["col"],
-                row_span=r["row_span"],
-                col_span=r["col_span"],
-                is_column_header=bool(r["is_column_header"]),
-                is_row_header=bool(r["is_row_header"]),
-                text=r["text"],
-                geometry=_decode_geometry(r["geometry"]) if r["geometry"] else [],
-            )
-            for r in rows
-        ]
-        n_rows = max((c.row + c.row_span for c in cells), default=0)
-        n_cols = max((c.col + c.col_span for c in cells), default=0)
-        return TableModel(n_rows=n_rows, n_cols=n_cols, cells=cells)
-
     async def _attach_tables(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
         """Rebuild each table chunk's ``provenance.table`` from its ``table_cells`` rows (one query)."""
-        ids = [c.id for c in chunks if c.id]
-        if not ids:
-            return
-        rows = (
-            await conn.execute(
-                select(self.table_cells)
-                .where(self.table_cells.c.chunk_id.in_(ids))
-                .order_by(self.table_cells.c.row, self.table_cells.c.col)
-            )
-        ).mappings().all()
-        cells_by_chunk: dict[str, list[Any]] = {}
-        for r in rows:
-            cells_by_chunk.setdefault(r["chunk_id"], []).append(r)
+        grouped = await self._child_rows_by_chunk(
+            conn, self.table_cells, chunks, self.table_cells.c.row, self.table_cells.c.col
+        )
         for chunk in chunks:
-            cell_rows = cells_by_chunk.get(chunk.id)
-            if cell_rows and chunk.provenance is not None:
-                chunk.provenance.table = self._rebuild_table(cell_rows)
+            if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
+                chunk.provenance.table = cp.rebuild_table(rows)
 
     async def _attach_annotations(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
         """Rebuild each chunk's ``provenance.annotations`` from its ``chunk_annotations`` rows (one query)."""
+        grouped = await self._child_rows_by_chunk(conn, self.chunk_annotations, chunks, self.chunk_annotations.c.ordinal)
+        for chunk in chunks:
+            if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
+                chunk.provenance.annotations = [cp.row_to_annotation(r) for r in rows]
+
+    async def _child_rows_by_chunk(
+        self, conn: AsyncConnection, table: Table, chunks: list[Chunk], *order_by: Any
+    ) -> dict[str, list[Any]]:
+        """Fetch a chunk-child table's rows for ``chunks``, grouped by ``chunk_id`` (ordered by
+        ``order_by``) — the shared fetch behind ``_attach_tables`` / ``_attach_annotations``."""
         ids = [c.id for c in chunks if c.id]
         if not ids:
-            return
+            return {}
         rows = (
-            await conn.execute(
-                select(self.chunk_annotations)
-                .where(self.chunk_annotations.c.chunk_id.in_(ids))
-                .order_by(self.chunk_annotations.c.chunk_id, self.chunk_annotations.c.ordinal)
-            )
+            await conn.execute(select(table).where(table.c.chunk_id.in_(ids)).order_by(*order_by))
         ).mappings().all()
-        by_chunk: dict[str, list[Any]] = {}
+        grouped: dict[str, list[Any]] = {}
         for r in rows:
-            by_chunk.setdefault(r["chunk_id"], []).append(r)
-        for chunk in chunks:
-            ann_rows = by_chunk.get(chunk.id)
-            if ann_rows and chunk.provenance is not None:
-                chunk.provenance.annotations = [self._row_to_annotation(r) for r in ann_rows]
-
-    @staticmethod
-    def _row_to_annotation(r) -> Annotation:
-        """Rebuild an ``Annotation`` from a ``chunk_annotations`` row."""
-        return Annotation(
-            producer=r["producer"],
-            type=r["type"],
-            value=json.loads(r["value"]),
-            span=_decode_geometry(r["span"]) if r["span"] else None,
-            deterministic=bool(r["deterministic"]),
-        )
+            grouped.setdefault(r["chunk_id"], []).append(r)
+        return grouped
 
     @staticmethod
     def _doc_metadata(r) -> dict[str, Any]:
