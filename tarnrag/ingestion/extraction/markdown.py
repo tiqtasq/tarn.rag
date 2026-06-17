@@ -1,9 +1,10 @@
 """Markdown extractor — parse Markdown structure into a ``StructuredDocument``.
 
-A focused first cut: ATX headings, paragraphs, and fenced code blocks, with char-offset geometry into
-the normalized document text and precomputed header paths. Lists and pipe-tables map onto the model
-(``Table``/``TableCell`` etc.) too but are a follow-on; for now non-heading/code lines coalesce into
-paragraphs (graceful, lossless as text).
+ATX headings, paragraphs, fenced code, **list items**, and **pipe tables** (→ ``Table``/``TableCell``,
+so a markdown table populates ``table_cells`` like Docling's). Each block becomes one element with a
+char-offset span into the normalized document text and the header path of its enclosing headings.
+Tables follow the standard convention of a blank line before them; nesting / multi-line list items
+coalesce gracefully.
 """
 
 from __future__ import annotations
@@ -12,16 +13,17 @@ import hashlib
 import re
 from typing import Literal
 
-from tarnrag.contracts import Element, ElementKind, Span, StructuredDocument
+from tarnrag.contracts import StructuredDocument, Table, TableCell
+from tarnrag.ingestion.extraction._blocks import Block, assemble
 from tarnrag.ingestion.extraction.extractor import Extractor, Source
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
+_LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")  # -, *, +, or "1." / "1)" markers
 _FENCE = "```"
-_SEP = "\n\n"  # joins normalized block texts into StructuredDocument.text
 
 
 class MarkdownExtractor(Extractor):
-    """Structure-aware Markdown extraction (headings / paragraphs / code) with offsets + header paths."""
+    """Structure-aware Markdown extraction (headings / paragraphs / code / lists / tables)."""
 
     class Config(Extractor.Config):
         class_name: Literal["markdown"] = "markdown"
@@ -29,7 +31,7 @@ class MarkdownExtractor(Extractor):
     config: MarkdownExtractor.Config
 
     def extract(self, source: Source) -> StructuredDocument:
-        elements, text = self._assemble(self._blocks(self._read_text(source)))
+        elements, text = assemble(self._blocks(self._read_text(source)))
         return StructuredDocument(
             source_id=source.source_id,
             source_kind=source.source_kind or "markdown",
@@ -40,10 +42,11 @@ class MarkdownExtractor(Extractor):
         )
 
     @staticmethod
-    def _blocks(md: str) -> list[tuple[str, str, int | None]]:
-        """Split Markdown into ``(kind, normalized_text, level)`` blocks; ``level`` set for headings."""
+    def _blocks(md: str) -> list[Block]:
+        """Split Markdown into ``(kind, normalized_text, level, table)`` blocks; ``level`` is set for
+        headings and ``table`` for pipe tables."""
         lines = md.splitlines()
-        blocks: list[tuple[str, str, int | None]] = []
+        blocks: list[Block] = []
         i, n = 0, len(lines)
         while i < n:
             line = lines[i]
@@ -54,12 +57,26 @@ class MarkdownExtractor(Extractor):
                     code.append(lines[i])
                     i += 1
                 i += 1  # consume the closing fence (if present)
-                blocks.append(("code", "\n".join(code), None))
+                blocks.append(("code", "\n".join(code), None, None))
                 continue
             heading = _HEADING.match(line)
             if heading:
-                blocks.append(("heading", heading.group(2).strip(), len(heading.group(1))))
+                blocks.append(("heading", heading.group(2).strip(), len(heading.group(1)), None))
                 i += 1
+                continue
+            if "|" in line and i + 1 < n and MarkdownExtractor._is_delimiter(lines[i + 1]):
+                table_lines = [line, lines[i + 1]]
+                i += 2
+                while i < n and "|" in lines[i] and lines[i].strip():
+                    table_lines.append(lines[i])
+                    i += 1
+                table, text = MarkdownExtractor._parse_table(table_lines)
+                blocks.append(("table", text, None, table))
+                continue
+            if _LIST_ITEM.match(line):
+                while i < n and (item := _LIST_ITEM.match(lines[i])):
+                    blocks.append(("list_item", item.group(1).strip(), None, None))
+                    i += 1
                 continue
             if not line.strip():
                 i += 1
@@ -68,48 +85,37 @@ class MarkdownExtractor(Extractor):
             while i < n and lines[i].strip() and not MarkdownExtractor._is_special(lines[i]):
                 para.append(lines[i].strip())
                 i += 1
-            blocks.append(("paragraph", " ".join(para), None))
+            blocks.append(("paragraph", " ".join(para), None, None))
         return blocks
 
     @staticmethod
     def _is_special(line: str) -> bool:
-        return bool(_HEADING.match(line)) or line.strip().startswith(_FENCE)
+        """A line that ends the current paragraph (a heading, fence, or list item starts a new block)."""
+        return bool(_HEADING.match(line)) or line.strip().startswith(_FENCE) or bool(_LIST_ITEM.match(line))
 
     @staticmethod
-    def _assemble(blocks: list[tuple[str, str, int | None]]) -> tuple[list[Element], str]:
-        """Build elements + the normalized text, assigning each element a span into that text and the
-        header path of its enclosing headings (``parent_id`` = the deepest enclosing heading)."""
-        elements: list[Element] = []
-        stack: list[tuple[int, str, str]] = []  # (level, text, element_id) of open headings
-        parts: list[str] = []
-        offset = 0
-        for idx, (kind, text, level) in enumerate(blocks):
-            start = offset
-            end = start + len(text)
-            offset = end + len(_SEP)
-            parts.append(text)
-            eid = f"e{idx}"
-            if kind == "heading" and level is not None:
-                while stack and stack[-1][0] >= level:
-                    stack.pop()
-                elements.append(
-                    Element(
-                        id=eid, kind=ElementKind.HEADING, text=text, level=level,
-                        header_path=[t for _, t, _ in stack],
-                        parent_id=stack[-1][2] if stack else None,
-                        geometry=[Span(start=start, end=end)],
-                    )
-                )
-                stack.append((level, text, eid))
-            else:
-                elements.append(
-                    Element(
-                        id=eid,
-                        kind=ElementKind.CODE if kind == "code" else ElementKind.PARAGRAPH,
-                        text=text,
-                        header_path=[t for _, t, _ in stack],
-                        parent_id=stack[-1][2] if stack else None,
-                        geometry=[Span(start=start, end=end)],
-                    )
-                )
-        return elements, _SEP.join(parts)
+    def _split_row(line: str) -> list[str]:
+        """Split a pipe-table row into trimmed cells, dropping the outer pipes."""
+        s = line.strip()
+        s = s[1:] if s.startswith("|") else s
+        s = s[:-1] if s.endswith("|") else s
+        return [c.strip() for c in s.split("|")]
+
+    @staticmethod
+    def _is_delimiter(line: str) -> bool:
+        """Whether ``line`` is a pipe-table delimiter row (cells of ``-``, optional leading/trailing ``:``)."""
+        cells = MarkdownExtractor._split_row(line)
+        return len(cells) > 0 and all(re.fullmatch(r":?-+:?", c) for c in cells)
+
+    @staticmethod
+    def _parse_table(lines: list[str]) -> tuple[Table, str]:
+        """Parse a pipe table (header, delimiter, data rows) into a ``Table`` + its markdown text."""
+        header = MarkdownExtractor._split_row(lines[0])
+        data = [MarkdownExtractor._split_row(row) for row in lines[2:]]
+        n_cols = len(header)
+        cells = [TableCell(id=f"r0c{c}", row=0, col=c, is_column_header=True, text=t) for c, t in enumerate(header)]
+        for r, row in enumerate(data, start=1):
+            for c in range(n_cols):
+                cells.append(TableCell(id=f"r{r}c{c}", row=r, col=c, text=row[c] if c < len(row) else ""))
+        markdown = "\n".join(lines)
+        return Table(n_rows=len(data) + 1, n_cols=n_cols, cells=cells, markdown=markdown), markdown

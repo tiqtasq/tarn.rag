@@ -51,6 +51,31 @@ def test_markdown_header_path_and_exact_offsets():
         assert doc.text[s.start:s.end] == e.text  # offsets index doc.text exactly
 
 
+def test_markdown_lists():
+    md = "# Gear\n\n- Helmet\n- Gloves\n- Boots\n"
+    doc = _run(MarkdownExtractor, Source(source_id="d1", source_kind="markdown", content=md))
+    items = [e for e in doc.elements if e.kind == ElementKind.LIST_ITEM]
+    assert [e.text for e in items] == ["Helmet", "Gloves", "Boots"]
+    assert all(e.header_path == ["Gear"] for e in items)  # under the heading
+    for e in items:
+        s = e.geometry[0]
+        assert doc.text[s.start:s.end] == e.text  # offset invariant holds for list items
+
+
+def test_markdown_pipe_table():
+    md = "# Specs\n\n| Bolt | Torque |\n| --- | --- |\n| M6 | 6 Nm |\n| M8 | 10 Nm |\n"
+    doc = _run(MarkdownExtractor, Source(source_id="d1", source_kind="markdown", content=md))
+    table_el = next(e for e in doc.elements if e.kind == ElementKind.TABLE)
+    t = table_el.table
+    assert t is not None and (t.n_rows, t.n_cols) == (3, 2)
+    assert table_el.header_path == ["Specs"]
+    cell = t.cell_at(1, 1)  # first data row, torque column
+    assert cell.text == "6 Nm"
+    assert [c.text for c in t.column_headers_for(cell)] == ["Torque"]  # query by column header
+    s = table_el.geometry[0]
+    assert doc.text[s.start:s.end] == table_el.text  # the table block indexes doc.text exactly
+
+
 def test_markdown_reads_from_path(tmp_path):
     p = tmp_path / "note.md"
     p.write_text("# Title\n\nHello.", encoding="utf-8")
@@ -66,3 +91,29 @@ def test_html_strips_markup_to_text():
                                      content="<h1>Hi</h1><p>Body &amp; more.</p>"))
     assert doc.extractor == "html"
     assert "Hi" in doc.text and "Body & more." in doc.text and "<h1>" not in doc.text
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("bs4") is None, reason="beautifulsoup4 (parsers extra) not installed"
+)
+def test_html_headings_lists_and_table():
+    html = (
+        "<body><h1>Specs</h1><p>Torque values.</p>"
+        "<ul><li>Helmet</li><li>Gloves</li></ul>"
+        "<table><tr><th>Bolt</th><th>Torque</th></tr><tr><td>M6</td><td>6 Nm</td></tr></table>"
+        "</body>"
+    )
+    doc = _run(HtmlExtractor, Source(source_id="d1", source_kind="html", content=html))
+    kinds = {(e.kind, e.text) for e in doc.elements}
+    assert (ElementKind.HEADING, "Specs") in kinds
+    assert (ElementKind.LIST_ITEM, "Helmet") in kinds and (ElementKind.LIST_ITEM, "Gloves") in kinds
+    assert next(e for e in doc.elements if e.kind == ElementKind.PARAGRAPH).header_path == ["Specs"]
+    table_el = next(e for e in doc.elements if e.kind == ElementKind.TABLE)
+    t = table_el.table
+    assert (t.n_rows, t.n_cols) == (2, 2)
+    cell = t.cell_at(1, 1)
+    assert cell.text == "6 Nm"
+    assert [c.text for c in t.column_headers_for(cell)] == ["Torque"]  # <th> in row 0 -> column header
+    for e in doc.elements:
+        s = e.geometry[0]
+        assert doc.text[s.start:s.end] == e.text  # offset invariant holds across all element kinds
