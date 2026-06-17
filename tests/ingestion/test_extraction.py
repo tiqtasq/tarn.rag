@@ -51,6 +51,31 @@ def test_markdown_header_path_and_exact_offsets():
         assert doc.text[s.start:s.end] == e.text  # offsets index doc.text exactly
 
 
+def test_markdown_lists():
+    md = "# Gear\n\n- Helmet\n- Gloves\n- Boots\n"
+    doc = _run(MarkdownExtractor, Source(source_id="d1", source_kind="markdown", content=md))
+    items = [e for e in doc.elements if e.kind == ElementKind.LIST_ITEM]
+    assert [e.text for e in items] == ["Helmet", "Gloves", "Boots"]
+    assert all(e.header_path == ["Gear"] for e in items)  # under the heading
+    for e in items:
+        s = e.geometry[0]
+        assert doc.text[s.start:s.end] == e.text  # offset invariant holds for list items
+
+
+def test_markdown_pipe_table():
+    md = "# Specs\n\n| Bolt | Torque |\n| --- | --- |\n| M6 | 6 Nm |\n| M8 | 10 Nm |\n"
+    doc = _run(MarkdownExtractor, Source(source_id="d1", source_kind="markdown", content=md))
+    table_el = next(e for e in doc.elements if e.kind == ElementKind.TABLE)
+    t = table_el.table
+    assert t is not None and (t.n_rows, t.n_cols) == (3, 2)
+    assert table_el.header_path == ["Specs"]
+    cell = t.cell_at(1, 1)  # first data row, torque column
+    assert cell.text == "6 Nm"
+    assert [c.text for c in t.column_headers_for(cell)] == ["Torque"]  # query by column header
+    s = table_el.geometry[0]
+    assert doc.text[s.start:s.end] == table_el.text  # the table block indexes doc.text exactly
+
+
 def test_markdown_reads_from_path(tmp_path):
     p = tmp_path / "note.md"
     p.write_text("# Title\n\nHello.", encoding="utf-8")
