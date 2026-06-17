@@ -91,3 +91,29 @@ def test_html_strips_markup_to_text():
                                      content="<h1>Hi</h1><p>Body &amp; more.</p>"))
     assert doc.extractor == "html"
     assert "Hi" in doc.text and "Body & more." in doc.text and "<h1>" not in doc.text
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("bs4") is None, reason="beautifulsoup4 (parsers extra) not installed"
+)
+def test_html_headings_lists_and_table():
+    html = (
+        "<body><h1>Specs</h1><p>Torque values.</p>"
+        "<ul><li>Helmet</li><li>Gloves</li></ul>"
+        "<table><tr><th>Bolt</th><th>Torque</th></tr><tr><td>M6</td><td>6 Nm</td></tr></table>"
+        "</body>"
+    )
+    doc = _run(HtmlExtractor, Source(source_id="d1", source_kind="html", content=html))
+    kinds = {(e.kind, e.text) for e in doc.elements}
+    assert (ElementKind.HEADING, "Specs") in kinds
+    assert (ElementKind.LIST_ITEM, "Helmet") in kinds and (ElementKind.LIST_ITEM, "Gloves") in kinds
+    assert next(e for e in doc.elements if e.kind == ElementKind.PARAGRAPH).header_path == ["Specs"]
+    table_el = next(e for e in doc.elements if e.kind == ElementKind.TABLE)
+    t = table_el.table
+    assert (t.n_rows, t.n_cols) == (2, 2)
+    cell = t.cell_at(1, 1)
+    assert cell.text == "6 Nm"
+    assert [c.text for c in t.column_headers_for(cell)] == ["Torque"]  # <th> in row 0 -> column header
+    for e in doc.elements:
+        s = e.geometry[0]
+        assert doc.text[s.start:s.end] == e.text  # offset invariant holds across all element kinds

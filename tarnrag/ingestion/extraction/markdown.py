@@ -13,20 +13,13 @@ import hashlib
 import re
 from typing import Literal
 
-from tarnrag.contracts import Element, ElementKind, Span, StructuredDocument, Table, TableCell
+from tarnrag.contracts import StructuredDocument, Table, TableCell
+from tarnrag.ingestion.extraction._blocks import Block, assemble
 from tarnrag.ingestion.extraction.extractor import Extractor, Source
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")  # -, *, +, or "1." / "1)" markers
 _FENCE = "```"
-_SEP = "\n\n"  # joins normalized block texts into StructuredDocument.text
-
-_KIND = {
-    "code": ElementKind.CODE,
-    "list_item": ElementKind.LIST_ITEM,
-    "table": ElementKind.TABLE,
-    "paragraph": ElementKind.PARAGRAPH,
-}
 
 
 class MarkdownExtractor(Extractor):
@@ -38,7 +31,7 @@ class MarkdownExtractor(Extractor):
     config: MarkdownExtractor.Config
 
     def extract(self, source: Source) -> StructuredDocument:
-        elements, text = self._assemble(self._blocks(self._read_text(source)))
+        elements, text = assemble(self._blocks(self._read_text(source)))
         return StructuredDocument(
             source_id=source.source_id,
             source_kind=source.source_kind or "markdown",
@@ -49,11 +42,11 @@ class MarkdownExtractor(Extractor):
         )
 
     @staticmethod
-    def _blocks(md: str) -> list[tuple[str, str, int | None, Table | None]]:
+    def _blocks(md: str) -> list[Block]:
         """Split Markdown into ``(kind, normalized_text, level, table)`` blocks; ``level`` is set for
         headings and ``table`` for pipe tables."""
         lines = md.splitlines()
-        blocks: list[tuple[str, str, int | None, Table | None]] = []
+        blocks: list[Block] = []
         i, n = 0, len(lines)
         while i < n:
             line = lines[i]
@@ -126,41 +119,3 @@ class MarkdownExtractor(Extractor):
                 cells.append(TableCell(id=f"r{r}c{c}", row=r, col=c, text=row[c] if c < len(row) else ""))
         markdown = "\n".join(lines)
         return Table(n_rows=len(data) + 1, n_cols=n_cols, cells=cells, markdown=markdown), markdown
-
-    @staticmethod
-    def _assemble(blocks: list[tuple[str, str, int | None, Table | None]]) -> tuple[list[Element], str]:
-        """Build elements + the normalized text, giving each a span into that text and the header path
-        of its enclosing headings (``parent_id`` = the deepest enclosing heading)."""
-        elements: list[Element] = []
-        stack: list[tuple[int, str, str]] = []  # (level, text, element_id) of open headings
-        parts: list[str] = []
-        offset = 0
-        for idx, (kind, text, level, table) in enumerate(blocks):
-            start = offset
-            end = start + len(text)
-            offset = end + len(_SEP)
-            parts.append(text)
-            eid = f"e{idx}"
-            if kind == "heading" and level is not None:
-                while stack and stack[-1][0] >= level:
-                    stack.pop()
-                elements.append(
-                    Element(
-                        id=eid, kind=ElementKind.HEADING, text=text, level=level,
-                        header_path=[t for _, t, _ in stack],
-                        parent_id=stack[-1][2] if stack else None,
-                        geometry=[Span(start=start, end=end)],
-                    )
-                )
-                stack.append((level, text, eid))
-            else:
-                elements.append(
-                    Element(
-                        id=eid, kind=_KIND[kind], text=text,
-                        header_path=[t for _, t, _ in stack],
-                        parent_id=stack[-1][2] if stack else None,
-                        geometry=[Span(start=start, end=end)],
-                        table=table,
-                    )
-                )
-        return elements, _SEP.join(parts)
