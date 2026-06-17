@@ -79,8 +79,8 @@ class Component(ABC):
         if not self._children_built:
             from tarnrag.core.components import ComponentFactory
 
+            self._children_built = True  # commit before building: a re-entrant call won't rebuild
             self._build_children(factory or ComponentFactory.get())
-            self._children_built = True
 
     def to_json(self) -> dict[str, Any]:
         """Serialize back to the dict shape that ``ComponentFactory.create`` consumes."""
