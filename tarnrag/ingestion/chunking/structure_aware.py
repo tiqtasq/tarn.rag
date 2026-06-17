@@ -1,16 +1,24 @@
 """Structure-aware chunker — split on the document's structure, build the auto-merging tree.
 
-Walks the ``StructuredDocument`` elements in reading order and groups them into **sections** by header
-path (a heading + the body elements beneath it). Within a section: a **table is its own atomic leaf**
-(never split, never merged), and consecutive text/code elements **pack into leaf chunks** under a
-``max_chars`` budget without crossing the section boundary. When a section yields more than one leaf it
-also emits a **section parent** (``level`` 1) over them — the auto-merging tree: retrieve a leaf, merge
-up to its parent for context. Each chunk carries the section ``header_path``, the source element ids,
-the aggregated geometry (page boxes included), and — for a table chunk — the ``Table`` itself.
+Walks the ``StructuredDocument`` elements into a **section tree** by heading depth (h1 ⊃ h2 ⊃ h3 …),
+then emits chunks bottom-up:
+
+- **leaves** (``level`` 0) — a section's own body packed under ``max_chars``; a **table is its own
+  atomic leaf** (never split, never merged), carrying its ``Table``;
+- **section parents** (``level`` > 0) — a chunk over a whole section, emitted only where a section
+  groups **≥ 2 children** (its leaves + its subsections). ``level`` = height above the leaves, so
+  nested subsections produce ``level`` 2, 3, … — the multi-level auto-merging tree.
+
+Degenerate single-child chains collapse (a heading that wraps exactly one child adds no grouping, so no
+parent is emitted — the child carries the deeper ``header_path``). The document root is **not** wrapped
+in a parent: top-level sections are a forest, so there is never a single whole-document chunk. Each
+chunk carries its section ``header_path``, source element ids, and aggregated geometry (page boxes
+included).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import Field
@@ -21,8 +29,26 @@ from tarnrag.ingestion.chunking.chunker import Chunker
 _JOIN = "\n\n"  # joins packed element texts within a chunk
 
 
+@dataclass
+class _Section:
+    """A node of the heading tree: a heading (None for the document root), its direct body elements
+    (before any deeper heading), and its subsections."""
+
+    heading: Element | None
+    body: list[Element] = field(default_factory=list)
+    children: list[_Section] = field(default_factory=list)
+
+
+@dataclass
+class _Node:
+    """A node of the *chunk* tree: an emitted chunk and the child chunks that point at it as parent."""
+
+    chunk: Chunker.TempChunk
+    children: list[_Node] = field(default_factory=list)
+
+
 class StructureAwareChunker(Chunker):
-    """Split on document structure (sections / tables), emitting a leaf + section-parent tree."""
+    """Split on document structure (sections / tables) into a multi-level leaf + section-parent tree."""
 
     class Config(Chunker.Config):
         class_name: Literal["structure_aware"] = "structure_aware"
@@ -31,9 +57,13 @@ class StructureAwareChunker(Chunker):
     config: StructureAwareChunker.Config
 
     def chunk(self, document: StructuredDocument) -> list[Chunker.TempChunk]:
+        root = self._build_tree(document.elements)
+        # The root's own body (preamble) becomes top-level leaves; each top section becomes a tree.
+        forest = [_Node(leaf) for leaf in self._leaves(root.body, [])]
+        forest += [node for sub in root.children if (node := self._emit_section(sub)) is not None]
         chunks: list[Chunker.TempChunk] = []
-        for members in self._sections(document.elements):
-            self._emit_section(members, chunks)
+        for node in forest:  # pre-order: a parent is emitted before its children (parent_index points back)
+            self._flatten(node, chunks, None)
         if not chunks and document.text.strip():  # no usable structure → one leaf over the whole text
             chunks.append(
                 Chunker.TempChunk(
@@ -48,44 +78,44 @@ class StructureAwareChunker(Chunker):
         return chunks
 
     @staticmethod
-    def _sections(elements: list[Element]) -> list[list[Element]]:
-        """Group elements into sections: a heading starts a new one, and its body elements (whose
-        ``header_path`` equals the heading's full path) fall in with it until the next heading."""
-        sections: list[list[Element]] = []
-        current: list[Element] = []
-        current_key: tuple[str, ...] | None = None
+    def _build_tree(elements: list[Element]) -> _Section:
+        """Parse the flat element list into a heading tree (a stack keyed by heading ``level``). A
+        non-heading element attaches to the deepest open heading (its enclosing section)."""
+        root = _Section(heading=None)
+        stack: list[tuple[int, _Section]] = [(0, root)]  # (heading level, section); root at level 0
         for el in elements:
-            key = tuple(el.header_path + [el.text]) if el.kind == ElementKind.HEADING else tuple(el.header_path)
-            if el.kind == ElementKind.HEADING or (current and key != current_key):
-                if current:
-                    sections.append(current)
-                current, current_key = [el], key
+            if el.kind == ElementKind.HEADING:
+                level = el.level if el.level is not None else 1
+                while len(stack) > 1 and stack[-1][0] >= level:  # close siblings / deeper sections
+                    stack.pop()
+                section = _Section(heading=el)
+                stack[-1][1].children.append(section)
+                stack.append((level, section))
             else:
-                if not current:
-                    current_key = key
-                current.append(el)
-        if current:
-            sections.append(current)
-        return sections
+                stack[-1][1].body.append(el)
+        return root
 
-    def _emit_section(self, members: list[Element], chunks: list[Chunker.TempChunk]) -> None:
-        """Emit a section's chunks: its packed leaves, plus a section parent over them when >1 leaf."""
-        heading = members[0] if members[0].kind == ElementKind.HEADING else None
-        section_path = (heading.header_path + [heading.text]) if heading else members[0].header_path
-        body = [m for m in members if m.kind != ElementKind.HEADING]
-        leaves = self._leaves(body, section_path)
-        if not leaves:  # heading-only section — captured in its descendants' header_path
-            return
-        if len(leaves) == 1:  # nothing to merge up to — keep it flat
-            chunks.append(leaves[0])
-            return
-        parent_index = len(chunks)
-        heading_text = [heading.text] if heading else []
-        parent_text = _JOIN.join(heading_text + [leaf.text for leaf in leaves])
-        chunks.append(self._parent(parent_text, members, section_path))
-        for leaf in leaves:
-            leaf.parent_index = parent_index
-            chunks.append(leaf)
+    def _emit_section(self, section: _Section) -> _Node | None:
+        """Build the chunk subtree for one section: its body leaves + its subsections' nodes. Emit a
+        parent only when there are ≥2 children; collapse a single child (no grouping value); a
+        childless (heading-only) section emits nothing — it survives in its descendants' header_path."""
+        heading = section.heading
+        section_path = (heading.header_path + [heading.text]) if heading else []
+        children = [_Node(leaf) for leaf in self._leaves(section.body, section_path)]
+        children += [node for sub in section.children if (node := self._emit_section(sub)) is not None]
+        if not children:
+            return None
+        if len(children) == 1:
+            return children[0]  # collapse: this heading groups one child — pass it up unwrapped
+        return _Node(self._parent(heading, section_path, [c.chunk for c in children]), children)
+
+    def _flatten(self, node: _Node, chunks: list[Chunker.TempChunk], parent_index: int | None) -> None:
+        """Append the subtree in pre-order, stamping each chunk's ``parent_index`` (its parent's slot)."""
+        node.chunk.parent_index = parent_index
+        my_index = len(chunks)
+        chunks.append(node.chunk)
+        for child in node.children:
+            self._flatten(child, chunks, my_index)
 
     def _leaves(self, body: list[Element], section_path: list[str]) -> list[Chunker.TempChunk]:
         """Pack a section's body into leaves: tables stay atomic; text/code packs under ``max_chars``."""
@@ -167,16 +197,24 @@ class StructureAwareChunker(Chunker):
             for i in range(0, len(text), size)
         ]
 
-    def _parent(self, text: str, members: list[Element], header_path: list[str]) -> Chunker.TempChunk:
-        """The section parent (``level`` 1) over a whole section — the auto-merge target for its leaves."""
+    def _parent(
+        self, heading: Element | None, header_path: list[str], children: list[Chunker.TempChunk]
+    ) -> Chunker.TempChunk:
+        """A section parent over its ``children`` — text + provenance aggregated across them (and the
+        heading), ``level`` one above the deepest child: the auto-merge target for the whole section."""
+        head_ids = [heading.id] if heading else []
+        head_geometry = list(heading.geometry) if heading else []
+        head_annotations = list(heading.annotations) if heading else []
+        texts = ([heading.text] if heading else []) + [c.text for c in children]
+        text = _JOIN.join(t for t in texts if t)
         return Chunker.TempChunk(
             text=text,
             provenance=ChunkProvenance(
-                source_element_ids=[m.id for m in members],
-                geometry=self._union_geometry(members),
+                source_element_ids=head_ids + [eid for c in children for eid in c.provenance.source_element_ids],
+                geometry=head_geometry + [s for c in children for s in c.provenance.geometry],
                 header_path=header_path,
                 content_hash=self._hash(text),
-                level=1,
-                annotations=self._annotations(members),
+                level=1 + max(c.provenance.level for c in children),
+                annotations=head_annotations + [a for c in children for a in c.provenance.annotations],
             ),
         )

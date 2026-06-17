@@ -108,6 +108,32 @@ def test_oversize_element_is_character_split():
     assert all(c.provenance.source_element_ids == ["p"] for c in chunks)  # all map back to the one element
 
 
+def test_nested_subsections_build_a_multi_level_tree():
+    # Manual (h1) ⊃ Safety (h2: an intro + the PPE subsection) ⊃ PPE (h3: two leaves).
+    els = [
+        _el("manual", ElementKind.HEADING, "Manual", level=1),
+        _el("safety", ElementKind.HEADING, "Safety", header_path=["Manual"], level=2),
+        _el("intro", ElementKind.PARAGRAPH, "Be careful.", header_path=["Manual", "Safety"]),
+        _el("ppe", ElementKind.HEADING, "PPE", header_path=["Manual", "Safety"], level=3),
+        _el("p1", ElementKind.PARAGRAPH, "Wear gloves.", header_path=["Manual", "Safety", "PPE"]),
+        _el("p2", ElementKind.PARAGRAPH, "Use goggles.", header_path=["Manual", "Safety", "PPE"]),
+    ]
+    chunks = StructureAwareChunker(StructureAwareChunker.Config(max_chars=20)).chunk(_doc(els))
+
+    assert {c.provenance.level for c in chunks} == {0, 1, 2}  # leaf -> PPE parent (1) -> Safety parent (2)
+
+    safety = next(c for c in chunks if c.provenance.level == 2)
+    assert safety.provenance.header_path == ["Manual", "Safety"] and safety.parent_index is None  # tree top
+    ppe = next(c for c in chunks if c.provenance.level == 1)
+    assert ppe.provenance.header_path == ["Manual", "Safety", "PPE"]
+    assert chunks[ppe.parent_index] is safety  # the PPE subsection merges up into Safety
+
+    leaf = next(c for c in chunks if c.provenance.source_element_ids == ["p1"])
+    assert chunks[leaf.parent_index] is ppe  # a leaf merges up into PPE, then Safety
+
+    assert all(c.provenance.header_path != ["Manual"] for c in chunks)  # the single-child h1 collapsed away
+
+
 # --- recursive fallback ------------------------------------------------------- #
 
 def test_recursive_chunker_threads_provenance():
