@@ -8,7 +8,8 @@ from tarnrag.contracts import (
 )
 from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval import (
-    AutoMerger, Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline,
+    AutoMerger, CrossEncoderReranker, Query, RetrievalContext, RetrievalEngine, RetrievalError,
+    RetrievalPipeline,
 )
 from tarnrag.retrieval.types import Purpose
 
@@ -30,6 +31,19 @@ class _FakeEmbedder:
 
     def embed_meta(self):
         return {"embedding_dim": "3", "embedding_config_fingerprint": FINGERPRINT}
+
+
+class _FakeCrossEncoder:
+    """Scores passages by a text→score lookup (query ignored); higher = more relevant."""
+
+    def __init__(self, by_text):
+        self._by_text = by_text
+
+    def score(self, query, passages):
+        return [self._by_text[p] for p in passages]
+
+    def model_identity(self):
+        return "fake-ce"
 
 
 async def _index(repo):
@@ -238,3 +252,47 @@ async def test_auto_merger_keeps_leaves_when_parent_unavailable():
         [_leaf("l1", -1.0), _leaf("l2", -2.0)], RetrievalContext(store=_FakeStore(), embedder=None)
     )
     assert [r.chunk_id for r in out] == ["l1", "l2"]
+
+
+def _result(cid, score, **scores):
+    return RetrievalResult(
+        chunk_id=cid, text=cid, score=score, component_scores={"dense": score, **scores},
+        document_id="s1", source_kind="document", standard_id=None, locator=None,
+        license_class="public_domain",
+    )
+
+
+async def test_cross_encoder_reranker_rescores_and_reorders():
+    """Unit: the cross-encoder score becomes the new score (re-ordering); first-pass scores are kept."""
+    ce = _FakeCrossEncoder({"a": 0.2, "b": 0.95})
+    ctx = RetrievalContext(store=None, embedder=None, cross_encoder=ce)
+    out = await CrossEncoderReranker(CrossEncoderReranker.Config()).rerank(
+        Query(text="q"), [_result("a", -1.0), _result("b", -2.0)], ctx
+    )
+    assert [r.chunk_id for r in out] == ["b", "a"]  # reordered by cross-encoder score, not dense rank
+    assert out[0].score == 0.95
+    assert out[0].component_scores == {"dense": -2.0, "cross_encoder": 0.95}  # original kept + rerank added
+
+
+async def test_cross_encoder_reranker_requires_model_in_context():
+    with pytest.raises(RetrievalError, match="no cross-encoder"):
+        await CrossEncoderReranker(CrossEncoderReranker.Config()).rerank(
+            Query(text="q"), [_result("a", -1.0)], RetrievalContext(store=None, embedder=None)
+        )
+
+
+async def test_pipeline_reranks_with_cross_encoder(repo):
+    cids = await _index(repo)  # cids[0] = "storage tank inspection", cids[1] = "quokka marsupial"
+    pipe = RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense"}], fuser={"class_name": "identity"},
+            reranker={"class_name": "cross_encoder"},
+        )
+    )
+    ce = _FakeCrossEncoder({"storage tank inspection": 0.1, "quokka marsupial": 0.9})
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 0.0, 0.0)), cross_encoder=ce)
+    results = await pipe.search(Query(text="q", top_k=2), ctx)
+    # Dense ranks the tank chunk first; the cross-encoder prefers the quokka chunk -> the order flips.
+    assert [r.chunk_id for r in results] == [cids[1], cids[0]]
+    assert results[0].score == 0.9
+    assert set(results[0].component_scores) == {"dense", "cross_encoder"}  # first-pass score kept

@@ -14,6 +14,7 @@ from typing import Any
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings, get_settings
+from tarnrag.core.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.embedder import Embedder
 from tarnrag.core.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
@@ -39,6 +40,11 @@ class RetrievalEngine(Engine):
         self.settings = settings
         spec = settings.components.get(RETRIEVAL_PIPELINE) if settings is not None else None
         self._pipeline = ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, RetrievalPipeline)
+        # The cross-encoder is built (cheaply — the model loads lazily) only when settings are present;
+        # it's unused unless the pipeline has a reranker. A direct ``open()`` without settings has none.
+        self._cross_encoder: CrossEncoder | None = (
+            OnnxCrossEncoder.create(settings.rerank) if settings is not None else None
+        )
 
     @classmethod
     async def open(
@@ -71,8 +77,10 @@ class RetrievalEngine(Engine):
         return await cls.open(repository, embedder, settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:
-        """Run the configured retrieval pipeline (retrieve → fuse → top_k → hydrate → assemble)."""
-        return await self._pipeline.search(query, RetrievalContext(self.repository, self.embedder))
+        """Run the configured retrieval pipeline (retrieve → fuse → hydrate → filter → merge → rerank →
+        top_k → assemble)."""
+        ctx = RetrievalContext(self.repository, self.embedder, self._cross_encoder)
+        return await self._pipeline.search(query, ctx)
 
     async def search_text(
         self, text: str, *, top_k: int = 8, dense_k: int = 50

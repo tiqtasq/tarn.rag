@@ -2,12 +2,12 @@
 
 A *sibling* of the ingestion ``Pipeline`` (both are config-driven container ``Component``s; not a
 subclass — retrieval's flow is heterogeneous: parallel retrievers + fan-in + fixed steps). It builds the
-configured retrievers + fuser (+ optional merger) as children and owns the flow:
+configured retrievers + fuser (+ optional merger / reranker) as children and owns the flow:
 
-    retrieve (parallel, over-fetch) → fuse → hydrate → filter → auto-merge → top_k → assemble.
+    retrieve (parallel, over-fetch) → fuse → hydrate → filter → auto-merge → rerank → top_k → assemble.
 
-(Reranking lands in a later slice.) The ``RetrievalEngine`` is a thin facade over it: it does the
-compatibility check + store/embedder construction, then delegates.
+The ``RetrievalEngine`` is a thin facade over it: it does the compatibility check + store/embedder/
+cross-encoder construction, then delegates.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from tarnrag.contracts import ChunkRecord, RetrievalResult
 from tarnrag.core.components import Component, ComponentFactory
 from tarnrag.retrieval.fuser import Fuser
 from tarnrag.retrieval.merger import Merger
+from tarnrag.retrieval.reranker import Reranker
 from tarnrag.retrieval.retriever import RetrievalContext, Retriever
 from tarnrag.retrieval.types import ALL, Purpose, Query
 
@@ -33,6 +34,7 @@ class RetrievalPipeline(Component):
         retrievers: list[dict[str, Any]] = Field(default_factory=lambda: [{"class_name": "dense"}])
         fuser: dict[str, Any] = Field(default_factory=lambda: {"class_name": "identity"})
         merger: dict[str, Any] | None = None  # optional auto-merging step (none ⇒ skipped)
+        reranker: dict[str, Any] | None = None  # optional second-pass rerank (none ⇒ skipped)
 
     config: RetrievalPipeline.Config
 
@@ -41,18 +43,22 @@ class RetrievalPipeline(Component):
         self._retrievers: list[Retriever] = []
         self._fuser: Fuser | None = None
         self._merger: Merger | None = None
+        self._reranker: Reranker | None = None
 
     def _build_children(self, factory: ComponentFactory) -> None:
-        """Build the retriever + fuser (+ optional merger) children through the framework factory."""
+        """Build the retriever + fuser (+ optional merger / reranker) children through the factory."""
         self._retrievers = [factory.create_as(spec, Retriever) for spec in self.config.retrievers]
         self._fuser = factory.create_as(self.config.fuser, Fuser)
         self._merger = factory.create_as(self.config.merger, Merger) if self.config.merger else None
+        self._reranker = (
+            factory.create_as(self.config.reranker, Reranker) if self.config.reranker else None
+        )
 
     async def search(self, query: Query, ctx: RetrievalContext) -> list[RetrievalResult]:
         self._ensure_children()
         lists = await asyncio.gather(*(r.retrieve(query, ctx) for r in self._retrievers))
         per_retriever = {r.config.class_name: candidates for r, candidates in zip(self._retrievers, lists)}
-        fused = self._fuser.fuse(per_retriever)  # ranked, over-fetched; filter / merge, then take top_k
+        fused = self._fuser.fuse(per_retriever)  # ranked, over-fetched; filter / merge / rerank, then top_k
         records = {rec.chunk_id: rec for rec in await ctx.store.hydrate([h.chunk_id for h in fused])}
         results = [
             RetrievalResult.from_record(rec, score=h.score, component_scores=h.component_scores)
@@ -61,6 +67,8 @@ class RetrievalPipeline(Component):
         ]
         if self._merger is not None:
             results = await self._merger.merge(results, ctx)
+        if self._reranker is not None:
+            results = await self._reranker.rerank(query, results, ctx)
         return results[: query.top_k]
 
     @staticmethod

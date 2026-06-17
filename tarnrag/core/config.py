@@ -58,6 +58,19 @@ class EmbeddingSettings(BaseModel):
     batch_size: int = 32  # embed-stage batching
 
 
+class RerankSettings(BaseModel):
+    """
+    The optional cross-encoder reranker (query × passage relevance). Retrieval-only and only loaded
+    when a ``cross_encoder`` reranker is in the ``RETRIEVAL_PIPELINE``; the model loads lazily on first
+    use (like the embedder), so a Settings without the model dir present on disk is still valid.
+    """
+
+    model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"  # model id (for eval / result transparency)
+    revision: str = ""
+    model_dir: str = "./models/ms-marco-MiniLM-L-6-v2"  # local model.onnx + tokenizer.json (offline)
+    max_seq_length: int = 512
+
+
 class DatabaseSettings(BaseModel):
     """
     The two stores — never conflate them. ``document_url`` is the repository (documents, chunks,
@@ -113,6 +126,7 @@ class Settings(BaseSettings):
 
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
+    rerank: RerankSettings = RerankSettings()
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
