@@ -15,16 +15,19 @@ from typing import Literal
 
 from tarnrag.contracts import Candidate, RetrievalStore
 from tarnrag.core.components import Component
+from tarnrag.core.cross_encoder import CrossEncoder
 from tarnrag.core.embedder import Embedder
 from tarnrag.retrieval.types import Query
 
 
 @dataclass
 class RetrievalContext:
-    """What a retriever needs at query time: the read store + the query embedder."""
+    """The runtime resources retrieval components need at query time: the read store, the query
+    embedder, and (only when a reranker is configured) the cross-encoder model."""
 
     store: RetrievalStore
     embedder: Embedder
+    cross_encoder: CrossEncoder | None = None
 
 
 class Retriever(Component):
