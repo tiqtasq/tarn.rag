@@ -9,7 +9,6 @@ from tarnrag.core.components import Component
 from tarnrag.core.components.registry import UnknownTagError
 from tarnrag.core.config import (
     INGESTION_PIPELINE,
-    ChunkingSettings,
     EmbeddingSettings,
     Settings,
 )
@@ -40,11 +39,10 @@ def test_default_pipeline_is_the_built_in_five_stages():
     ]
 
 
-def test_default_pipeline_reads_chunking_from_settings():
-    chunking = ChunkingSettings(chunker={"class_name": "recursive", "chunk_size": 128, "overlap": 8})
-    pipe = IngestionEngine.build_pipeline(_settings(chunking=chunking))
+def test_default_pipeline_uses_the_structure_aware_chunker():
+    pipe = IngestionEngine.build_pipeline(_settings())
     chunk = next(s for s in pipe.stages if s.tag == "Chunk")
-    assert (chunk._chunker.config.chunk_size, chunk._chunker.config.overlap) == (128, 8)  # flows to the child
+    assert type(chunk._chunker).__name__ == "StructureAwareChunker"  # the default chunker, built from the spec
 
 
 def test_components_spec_overrides_the_default_composition():

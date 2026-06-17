@@ -57,16 +57,6 @@ class EmbeddingSettings(BaseModel):
     batch_size: int = 32  # embed-stage batching
 
 
-class ChunkingSettings(BaseModel):
-    """
-    Chunking for the ingestion pipeline: the ``Chunker`` component spec (``class_name`` + options).
-    Defaults to the structure-aware chunker; set e.g. ``{"class_name": "recursive", "chunk_size": 256}``
-    to switch strategy.
-    """
-
-    chunker: dict[str, Any] = {"class_name": "structure_aware"}
-
-
 class DatabaseSettings(BaseModel):
     """
     The two stores — never conflate them. ``document_url`` is the repository (documents, chunks,
@@ -122,7 +112,6 @@ class Settings(BaseSettings):
 
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
-    chunking: ChunkingSettings = ChunkingSettings()
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
@@ -137,7 +126,8 @@ class Settings(BaseSettings):
     def _fill_default_components(self) -> Settings:
         """Make a Settings self-complete: ensure the ingestion pipeline spec is present (a
         user-supplied one wins), so consumers read ``components[INGESTION_PIPELINE]`` directly
-        instead of recomputing a default elsewhere. Chunk params come from ``self.chunking``."""
+        instead of recomputing a default elsewhere. Component config (chunker, extractor routes, …)
+        lives on the stage specs here — override the pipeline spec to customise it."""
         self.components.setdefault(
             INGESTION_PIPELINE,
             {
@@ -145,7 +135,7 @@ class Settings(BaseSettings):
                 "stages": [
                     {"class_name": "LoadAndParse"},
                     {"class_name": "CleanAndNormalize"},
-                    {"class_name": "Chunk", "chunker": self.chunking.chunker},
+                    {"class_name": "Chunk"},  # chunker defaults to structure_aware on ChunkStage.Config
                     {"class_name": "EnrichMetadata"},
                     {"class_name": "Embed"},
                 ],

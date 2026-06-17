@@ -55,7 +55,7 @@ def base_settings(db_path: Path, **overrides: object) -> Settings:
     """Default embedded/SQLite settings shared by every example.
 
     Pass ``db_path`` (usually ``example_db(__file__)``) and override only the knob an example is
-    demonstrating, e.g. ``base_settings(db, chunking=ChunkingSettings(size=128))``. The default
+    demonstrating, e.g. ``base_settings(db, components={INGESTION_PIPELINE: {...}})``. The default
     ``ID_POLICY='caller'`` lets examples use readable, stable document ids. An ingestion and a
     retrieval built from the same ``db_path`` + ``embedding`` stay compatible (retrieval validates
     an embedding *fingerprint*), so reuse this for both sides of an example.
