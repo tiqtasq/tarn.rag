@@ -4,7 +4,6 @@ custom enricher registers and runs by config, annotating at document- and elemen
 from typing import Literal
 
 from tarnrag.contracts import (
-    Annotation,
     Element,
     ElementKind,
     PipelineItem,
@@ -68,13 +67,9 @@ class _TopicEnricher(Enricher):
         class_name: Literal["_test_topic"] = "_test_topic"
 
     def enrich(self, document: StructuredDocument) -> None:
-        document.annotations.append(
-            Annotation(producer="_test_topic", type="topic", value={"label": "safety"}, deterministic=False)
-        )
+        self.annotate(document, "topic", {"label": "safety"}, deterministic=False)  # document-level
         for element in document.elements:
-            element.annotations.append(
-                Annotation(producer="_test_topic", type="classification", value={"length": len(element.text)})
-            )
+            self.annotate(element, "classification", {"length": len(element.text)})  # element-level
 
 
 def test_custom_enricher_runs_by_config_at_doc_and_element_level():

@@ -140,6 +140,12 @@ class Element(BaseModel):
     annotations: list[Annotation] = Field(default_factory=list)
     table: Table | None = None  # set iff kind == TABLE
 
+    def subspan(self, start: int, end: int) -> Span:
+        """The absolute document span of this element's local range ``text[start:end]`` — the element's
+        char offset plus the range — so a sub-region indexes ``StructuredDocument.text`` like any Span."""
+        base = self.geometry[0].start if self.geometry else 0
+        return Span(start=base + start, end=base + end)
+
 
 class StructuredDocument(BaseModel):
     """The document-phase, in-flight representation: ordered ``elements`` over a normalized ``text``

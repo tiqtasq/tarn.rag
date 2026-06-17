@@ -11,14 +11,16 @@ the same framework — no base-class edits (AC-2).
 from __future__ import annotations
 
 from abc import abstractmethod
+from typing import Any
 
-from tarnrag.contracts import Element, Span, StructuredDocument
+from tarnrag.contracts import Annotation, Element, Geometry, StructuredDocument
 from tarnrag.core.components import Component
 
 
 class Enricher(Component):
-    """Port: annotate a ``StructuredDocument`` in place (append to ``element.annotations`` and/or
-    ``document.annotations``). Runs after extraction, before chunking."""
+    """Port: annotate a ``StructuredDocument`` in place. Subclasses call ``annotate`` / ``annotate_span``
+    rather than touching ``.annotations`` directly — so the ``producer`` is recorded automatically and
+    the element's internals stay hidden. Runs after extraction, before chunking."""
 
     class Config(Component.Config):
         """Base enricher config; concrete enrichers pin ``class_name`` and add their own options."""
@@ -27,9 +29,37 @@ class Enricher(Component):
     def enrich(self, document: StructuredDocument) -> None:
         """Append annotations to the document and/or its elements (mutates in place)."""
 
-    @staticmethod
-    def _subspan(element: Element, start: int, end: int) -> Span:
-        """The absolute document span of ``element.text[start:end]`` — the element's char offset plus
-        the sub-range — so a span-level annotation indexes ``StructuredDocument.text`` like any Span."""
-        base = element.geometry[0].start if element.geometry else 0
-        return Span(start=base + start, end=base + end)
+    def annotate(
+        self,
+        target: Element | StructuredDocument,
+        type: str,
+        value: dict[str, Any],
+        *,
+        span: Geometry | None = None,
+        deterministic: bool = True,
+    ) -> None:
+        """Record an annotation by this enricher on an element OR the document (both expose
+        ``annotations``); ``producer`` is filled from this enricher, ``span`` is an optional sub-region."""
+        target.annotations.append(
+            Annotation(
+                producer=self.config.class_name,
+                type=type,
+                value=value,
+                span=span,
+                deterministic=deterministic,
+            )
+        )
+
+    def annotate_span(
+        self,
+        element: Element,
+        type: str,
+        value: dict[str, Any],
+        start: int,
+        end: int,
+        *,
+        deterministic: bool = True,
+    ) -> None:
+        """Annotate an element over its local range ``[start, end)`` — maps to a document span via
+        ``Element.subspan``."""
+        self.annotate(element, type, value, span=[element.subspan(start, end)], deterministic=deterministic)

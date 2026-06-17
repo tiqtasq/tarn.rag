@@ -111,6 +111,14 @@ def test_annotations_attach_with_provenance_and_determinism_flag():
     assert el.annotations[0].deterministic is True
 
 
+def test_element_subspan_maps_local_offsets_into_the_document():
+    el = Element(id="e1", kind=ElementKind.PARAGRAPH, text="Wear PPE.", geometry=[Span(start=40, end=49)])
+    s = el.subspan(5, 8)  # "PPE" within the element, offset by the element's document position
+    assert (s.start, s.end) == (45, 48)
+    el0 = Element(id="e0", kind=ElementKind.PARAGRAPH, text="x")  # no geometry -> base 0
+    assert (el0.subspan(0, 1).start, el0.subspan(0, 1).end) == (0, 1)
+
+
 # ---- PipelineItem extension (FR-6.1) ----
 
 def test_pipelineitem_is_backward_compatible():

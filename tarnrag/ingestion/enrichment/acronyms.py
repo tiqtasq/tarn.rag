@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from tarnrag.contracts import Annotation, StructuredDocument
+from tarnrag.contracts import StructuredDocument
 from tarnrag.ingestion.enrichment.enricher import Enricher
 
 _ACRONYM = re.compile(r"\b[A-Z]{2,}\b")  # 2+ consecutive capitals — an acronym/initialism token
@@ -26,12 +26,6 @@ class AcronymEnricher(Enricher):
     def enrich(self, document: StructuredDocument) -> None:
         for element in document.elements:
             for match in _ACRONYM.finditer(element.text):
-                element.annotations.append(
-                    Annotation(
-                        producer=self.config.class_name,
-                        type="entity",
-                        value={"text": match.group(), "kind": "acronym"},
-                        span=[self._subspan(element, match.start(), match.end())],
-                        deterministic=True,
-                    )
+                self.annotate_span(
+                    element, "entity", {"text": match.group(), "kind": "acronym"}, match.start(), match.end()
                 )
