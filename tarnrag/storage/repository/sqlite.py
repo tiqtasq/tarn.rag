@@ -20,6 +20,7 @@ lookups) are kept raw too, deliberately, so the whole sqlite-vec/FTS layer reads
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import sqlite_vec
@@ -158,6 +159,28 @@ class SqliteRepository(DocumentRepository):
             for i, (cid, dist) in enumerate(rows)
         ]
 
+    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+        """§8 sparse retrieval over FTS5 ``fts_chunks`` (BM25, best first). Raw SQL: ``MATCH`` + the
+        ``bm25()`` rank are FTS5's query API. ``raw_score`` is the FTS5 BM25 value (lower = better)."""
+        match = self._fts_query(query_text)
+        if not match:
+            return []
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.exec_driver_sql(
+                    "SELECT chunk_id, bm25(fts_chunks) AS score FROM fts_chunks "
+                    "WHERE fts_chunks MATCH ? ORDER BY score LIMIT ?",
+                    (match, k),
+                )
+            ).fetchall()
+        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=score) for i, (cid, score) in enumerate(rows)]
+
+    @staticmethod
+    def _fts_query(text: str) -> str:
+        """A safe FTS5 ``MATCH`` expression from arbitrary text: alphanumeric tokens OR-ed and quoted,
+        so query punctuation can't trip the FTS5 parser. Empty ⇒ no match (caller returns nothing)."""
+        return " OR ".join(f'"{t}"' for t in re.findall(r"\w+", text.lower()))
+
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
         """
         Canonical text + provenance for the given chunk ids, preserving input order.
@@ -176,6 +199,7 @@ class SqliteRepository(DocumentRepository):
                 )
             ).fetchall()
             by_id = {r[0]: r for r in rows}
+            prov = await self._chunk_provenance(conn, chunk_ids)
             records: list[ChunkRecord] = []
             for cid in chunk_ids:
                 r = by_id.get(cid)
@@ -192,6 +216,7 @@ class SqliteRepository(DocumentRepository):
                         chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
                         standard_id=r[4], locator=r[5], license_class=r[6],
                         methods=[(m, v) for m, v in methods],
+                        provenance=prov.get(cid),
                     )
                 )
         return records

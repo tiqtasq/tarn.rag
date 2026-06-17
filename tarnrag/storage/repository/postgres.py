@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncConnection
 from pgvector.sqlalchemy import Vector
 
@@ -36,10 +36,14 @@ class PostgresRepository(DocumentRepository):
         await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
     async def _after_create_schema(self, conn: AsyncConnection) -> None:
-        # document_id is the documents PK (already unique); only the pgvector ANN index remains.
+        # document_id is the documents PK (already unique). The pgvector ANN index + the sparse FTS
+        # GIN index (matching sparse_search's to_tsvector expression so the planner uses it).
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS idx_embeddings_vector "
             "ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100)"
+        )
+        await conn.exec_driver_sql(
+            "CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin (to_tsvector('english', text))"
         )
 
     async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
@@ -52,6 +56,17 @@ class PostgresRepository(DocumentRepository):
         async with self.engine.connect() as conn:
             rows = (await conn.execute(stmt)).all()
         return [Candidate(chunk_id=cid, rank=i + 1, raw_score=d) for i, (cid, d) in enumerate(rows)]
+
+    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+        """§8 sparse retrieval over a ``to_tsvector('english', text)`` GIN index (``ts_rank_cd``, best
+        first). ``plainto_tsquery`` parses the raw text safely; ``raw_score`` is ts_rank (higher better)."""
+        tsv = func.to_tsvector("english", self.chunks.c.text)
+        tsq = func.plainto_tsquery("english", query_text)
+        score = func.ts_rank_cd(tsv, tsq).label("score")
+        stmt = select(self.chunks.c.chunk_id, score).where(tsv.op("@@")(tsq)).order_by(score.desc()).limit(k)
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(stmt)).all()
+        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=s) for i, (cid, s) in enumerate(rows)]
 
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
         """
@@ -72,6 +87,7 @@ class PostgresRepository(DocumentRepository):
         )
         async with self.engine.connect() as conn:
             by_id = {r[0]: r for r in (await conn.execute(stmt)).all()}
+            prov = await self._chunk_provenance(conn, chunk_ids)
             records: list[ChunkRecord] = []
             for cid in chunk_ids:
                 r = by_id.get(cid)
@@ -87,6 +103,7 @@ class PostgresRepository(DocumentRepository):
                         chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
                         standard_id=r[4], locator=r[5], license_class=r[6],
                         methods=[(mid, ver) for mid, ver in methods],
+                        provenance=prov.get(cid),
                     )
                 )
         return records

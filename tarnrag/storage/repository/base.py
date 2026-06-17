@@ -33,15 +33,15 @@ from tarnrag.core.config import DatabaseSettings
 from tarnrag.core.hashing import content_hash
 from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
-    Candidate,
     Chunk,
-    ChunkRecord,
+    ChunkProvenance,
     ChunkStore,
     Document,
     DocumentFacts,
     DocumentFactsSource,
     Embedding,
     JobStatusSource,
+    RetrievalStore,
 )
 from tarnrag.storage.status import DocumentStatusReader
 
@@ -78,7 +78,7 @@ _CHUNK_PROVENANCE = {
 }
 
 
-class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
+class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFactsSource):
     """
     SQLAlchemy Core repository shared by ingestion and retrieval.
 
@@ -140,22 +140,8 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     def _decode_vector(self, stored) -> list[float]:
         """Inverse of _encode_vector when reading rows back."""
 
-    @abstractmethod
-    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
-        """
-        §8 dense retrieval: the nearest ``k`` chunks to ``query_vec`` as ranked ``Candidate``s
-        (sqlite-vec on SQLite, pgvector on Postgres).
-        """
-
-    @abstractmethod
-    async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
-        """
-        §8 hydration: canonical text + provenance + license for the given chunk ids, preserving
-        input order. Touches only the normal tables, so each dialect renders it natively (raw SQL
-        on SQLite, SQLAlchemy on Postgres).
-        """
-
-    # Schema hooks: default no-ops. The pgvector extension must exist *before* the
+    # dense_knn / sparse_search / hydrate are the RetrievalStore port (contracts.ports); each dialect
+    # implements them. Schema hooks: default no-ops. The pgvector extension must exist *before* the
     # tables (the embeddings vector column needs it); expression/vector indexes must
     # be created *after* the tables exist — hence two hooks rather than one.
     async def _before_create_schema(self, conn: AsyncConnection) -> None:
@@ -757,7 +743,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
     async def _attach_tables(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
         """Rebuild each table chunk's ``provenance.table`` from its ``table_cells`` rows (one query)."""
         grouped = await self._child_rows_by_chunk(
-            conn, self.table_cells, chunks, self.table_cells.c.row, self.table_cells.c.col
+            conn, self.table_cells, [c.id for c in chunks if c.id], self.table_cells.c.row, self.table_cells.c.col
         )
         for chunk in chunks:
             if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
@@ -765,21 +751,50 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
 
     async def _attach_annotations(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
         """Rebuild each chunk's ``provenance.annotations`` from its ``chunk_annotations`` rows (one query)."""
-        grouped = await self._child_rows_by_chunk(conn, self.chunk_annotations, chunks, self.chunk_annotations.c.ordinal)
+        grouped = await self._child_rows_by_chunk(
+            conn, self.chunk_annotations, [c.id for c in chunks if c.id], self.chunk_annotations.c.ordinal
+        )
         for chunk in chunks:
             if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
                 chunk.provenance.annotations = [cp.row_to_annotation(r) for r in rows]
 
+    async def _chunk_provenance(
+        self, conn: AsyncConnection, chunk_ids: list[str]
+    ) -> dict[str, ChunkProvenance]:
+        """``ChunkProvenance`` per chunk id — provenance columns + ``table_cells`` + ``chunk_annotations``.
+        The shared, dialect-agnostic provenance fetch behind both dialects' ``hydrate``."""
+        if not chunk_ids:
+            return {}
+        c = self.chunks.c
+        rows = (
+            await conn.execute(
+                select(c.chunk_id, c.header_path, c.level, c.parent_chunk_id, c.geometry, c.content_hash)
+                .where(c.chunk_id.in_(chunk_ids))
+            )
+        ).mappings().all()
+        cells = await self._child_rows_by_chunk(
+            conn, self.table_cells, chunk_ids, self.table_cells.c.row, self.table_cells.c.col
+        )
+        anns = await self._child_rows_by_chunk(conn, self.chunk_annotations, chunk_ids, self.chunk_annotations.c.ordinal)
+        provenance: dict[str, ChunkProvenance] = {}
+        for r in rows:
+            prov = cp.row_to_provenance(r)
+            if cell_rows := cells.get(r["chunk_id"]):
+                prov.table = cp.rebuild_table(cell_rows)
+            if ann_rows := anns.get(r["chunk_id"]):
+                prov.annotations = [cp.row_to_annotation(a) for a in ann_rows]
+            provenance[r["chunk_id"]] = prov
+        return provenance
+
     async def _child_rows_by_chunk(
-        self, conn: AsyncConnection, table: Table, chunks: list[Chunk], *order_by: Any
+        self, conn: AsyncConnection, table: Table, chunk_ids: list[str], *order_by: Any
     ) -> dict[str, list[Any]]:
-        """Fetch a chunk-child table's rows for ``chunks``, grouped by ``chunk_id`` (ordered by
-        ``order_by``) — the shared fetch behind ``_attach_tables`` / ``_attach_annotations``."""
-        ids = [c.id for c in chunks if c.id]
-        if not ids:
+        """Fetch a chunk-child table's rows for ``chunk_ids``, grouped by ``chunk_id`` (ordered by
+        ``order_by``) — the shared fetch behind the ``_attach_*`` / provenance reads."""
+        if not chunk_ids:
             return {}
         rows = (
-            await conn.execute(select(table).where(table.c.chunk_id.in_(ids)).order_by(*order_by))
+            await conn.execute(select(table).where(table.c.chunk_id.in_(chunk_ids)).order_by(*order_by))
         ).mappings().all()
         grouped: dict[str, list[Any]] = {}
         for r in rows:

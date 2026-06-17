@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from tarnrag.contracts.dtos import MethodRef
+from tarnrag.contracts.structure import ChunkProvenance
 
 
 @dataclass(frozen=True)
@@ -39,6 +40,7 @@ class ChunkRecord:
     locator: str | None
     license_class: str
     methods: list[tuple[str, str]] = field(default_factory=list)  # (method_id, method_version)
+    provenance: ChunkProvenance | None = None  # layout-aware: geometry / header_path / tree / annotations / table
 
 
 @dataclass(frozen=True)
@@ -57,3 +59,4 @@ class RetrievalResult:
     locator: str | None
     license_class: str
     methods: list[MethodRef] = field(default_factory=list)
+    provenance: ChunkProvenance | None = None  # layout-aware provenance (citation / highlight / merge / entity)

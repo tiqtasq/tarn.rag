@@ -13,6 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from tarnrag.contracts.dtos import Chunk, Document, DocumentFacts, Embedding
+from tarnrag.contracts.results import Candidate, ChunkRecord
 
 
 class ChunkStore(ABC):
@@ -79,3 +80,27 @@ class JobStatusSource(ABC):
     async def delete_document_jobs(self, document_id: str) -> bool:
         """Remove a document's job_status rows (when deleting a document). Returns True if any
         rows were removed."""
+
+
+class RetrievalStore(ABC):
+    """
+    The narrow READ port retrieval depends on (ISP) — dense KNN, sparse (BM25) search, and hydration.
+    Implemented by ``DocumentRepository`` (sqlite-vec / FTS5 on SQLite, pgvector / tsvector on Postgres);
+    the write counterpart is ``ChunkStore``. Retrievers receive it via the ``RetrievalContext``.
+    """
+
+    @abstractmethod
+    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+        """§8 dense retrieval: the nearest ``k`` chunks to ``query_vec`` as ranked ``Candidate``s
+        (sqlite-vec on SQLite, pgvector on Postgres)."""
+
+    @abstractmethod
+    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+        """§8 sparse retrieval: the top ``k`` chunks for ``query_text`` by lexical relevance, ranked
+        best-first (FTS5 BM25 on SQLite, tsvector / ts_rank on Postgres). ``raw_score`` is the
+        dialect-native relevance."""
+
+    @abstractmethod
+    async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
+        """§8 hydration: canonical text + provenance + license for the given chunk ids, preserving
+        input order."""

@@ -4,7 +4,8 @@ import pytest
 
 from tarnrag.contracts import build_index_meta
 from tarnrag.contracts import Chunk, Document, Embedding
-from tarnrag.retrieval import Query, RetrievalEngine, RetrievalError
+from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
+from tarnrag.retrieval import Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline
 
 FINGERPRINT = "fp-123"
 
@@ -94,3 +95,35 @@ async def test_open_refuses_unbuilt_index(repo):
     # No write_index_meta -> the index has not been built yet.
     with pytest.raises(RetrievalError, match="not been built"):
         await RetrievalEngine.open(repo, _FakeEmbedder())
+
+
+async def test_pipeline_hybrid_fuses_dense_and_sparse(repo):
+    cids = await _index(repo)  # cids[0] = "storage tank inspection", cids[1] = "quokka marsupial"
+    pipe = RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense"}, {"class_name": "sparse"}], fuser={"class_name": "rrf"}
+        )
+    )
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
+    results = await pipe.search(Query(text="tank inspection", top_k=2), ctx)
+    assert results[0].chunk_id == cids[0]  # the tank chunk: top dense AND top sparse
+    assert set(results[0].component_scores) == {"dense", "sparse"}  # both retrievers contributed
+    assert results[0].provenance is not None  # provenance threaded through the read path
+
+
+async def test_engine_uses_configured_pipeline_spec(repo):
+    cids = await _index(repo)
+    settings = Settings(
+        _env_file=None,
+        components={
+            RETRIEVAL_PIPELINE: {
+                "class_name": "retrieval_pipeline",
+                "retrievers": [{"class_name": "sparse"}],
+                "fuser": {"class_name": "identity"},
+            }
+        },
+    )
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(), settings=settings)
+    results = await engine.search(Query(text="tank inspection", top_k=5))
+    assert [r.chunk_id for r in results] == [cids[0]]  # sparse-only -> just the lexical match
+    assert set(results[0].component_scores) == {"sparse"}

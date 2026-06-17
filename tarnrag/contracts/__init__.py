@@ -19,7 +19,7 @@ from tarnrag.contracts.index_meta import (
     SCHEMA_VERSION,
     build_index_meta,
 )
-from tarnrag.contracts.ports import ChunkStore, DocumentFactsSource, JobStatusSource
+from tarnrag.contracts.ports import ChunkStore, DocumentFactsSource, JobStatusSource, RetrievalStore
 from tarnrag.contracts.results import Candidate, ChunkRecord, RetrievalResult
 from tarnrag.contracts.structure import (
     Annotation,
@@ -55,6 +55,7 @@ __all__ = [
     "ChunkProvenance",
     # ports
     "ChunkStore",
+    "RetrievalStore",
     "DocumentFactsSource",
     "JobStatusSource",
     # results
