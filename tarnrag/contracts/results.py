@@ -62,3 +62,23 @@ class RetrievalResult:
     license_class: str
     methods: list[MethodRef] = field(default_factory=list)
     provenance: ChunkProvenance | None = None  # layout-aware provenance (citation / highlight / merge / entity)
+
+    @classmethod
+    def from_record(
+        cls, record: ChunkRecord, *, score: float, component_scores: dict[str, float]
+    ) -> RetrievalResult:
+        """Assemble a result from a hydrated chunk + its score — the shared chunk→result mapping used
+        by the pipeline's assembly and the auto-merger's section-parent construction."""
+        return cls(
+            chunk_id=record.chunk_id,
+            text=record.text,
+            score=score,
+            component_scores=component_scores,
+            document_id=record.document_id,
+            source_kind=record.source_kind,
+            standard_id=record.standard_id,
+            locator=record.locator,
+            license_class=record.license_class,
+            methods=[MethodRef(m, v) for m, v in record.methods],
+            provenance=record.provenance,
+        )

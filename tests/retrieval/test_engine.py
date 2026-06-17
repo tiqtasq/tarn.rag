@@ -3,9 +3,13 @@
 import pytest
 
 from tarnrag.contracts import build_index_meta
-from tarnrag.contracts import Chunk, ChunkRecord, Document, Embedding, MethodRef
+from tarnrag.contracts import (
+    Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
+)
 from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
-from tarnrag.retrieval import Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline
+from tarnrag.retrieval import (
+    AutoMerger, Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline,
+)
 from tarnrag.retrieval.types import Purpose
 
 FINGERPRINT = "fp-123"
@@ -161,3 +165,76 @@ def test_scope_filter_matches_methods():
     assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1")]))  # version-agnostic
     assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1", "v2")]))  # exact version
     assert not RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M9")]))  # no match -> out
+
+
+async def _index_tree(repo):
+    """Index a 1-level auto-merging tree: a section parent (ordinal 0, NOT embedded) + two leaf children
+    (ordinals 1/2, ``parent_ordinal=0``, embedded). Returns ``(parent_id, leaf1_id, leaf2_id)``."""
+    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))
+    _, (parent, leaf1, leaf2) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(parent_doc_id="s1", content="Safety: wear PPE and inspect the tank.", chunk_index=0,
+                  provenance=ChunkProvenance(content_hash="p", header_path=["Safety"], level=1)),
+            Chunk(parent_doc_id="s1", content="wear PPE", chunk_index=1, metadata={"parent_ordinal": 0}),
+            Chunk(parent_doc_id="s1", content="inspect the tank", chunk_index=2,
+                  metadata={"parent_ordinal": 0}),
+        ],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=leaf1, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=leaf2, vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+    ])
+    return parent, leaf1, leaf2
+
+
+def _merge_pipeline(**merger):
+    return RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense"}], fuser={"class_name": "identity"},
+            merger={"class_name": "auto_merge", **merger},
+        )
+    )
+
+
+async def test_auto_merge_collapses_siblings_into_parent(repo):
+    parent, _leaf1, _leaf2 = await _index_tree(repo)
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 1.0, 0.0)))
+    results = await _merge_pipeline().search(Query(text="ppe tank", top_k=5), ctx)
+    # Both leaves retrieved and share a parent -> collapsed into the one hydrated section parent.
+    assert [r.chunk_id for r in results] == [parent]
+    assert results[0].text == "Safety: wear PPE and inspect the tank."
+    assert results[0].provenance.header_path == ["Safety"]  # the parent's provenance, not a leaf's
+    assert "dense" in results[0].component_scores  # merged from the children
+
+
+async def test_auto_merge_threshold_not_met_keeps_leaves(repo):
+    parent, leaf1, leaf2 = await _index_tree(repo)
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 1.0, 0.0)))
+    # min_siblings=3 but only two leaves are retrieved -> no merge.
+    results = await _merge_pipeline(min_siblings=3).search(Query(text="ppe tank", top_k=5), ctx)
+    assert {r.chunk_id for r in results} == {leaf1, leaf2}
+    assert parent not in {r.chunk_id for r in results}
+
+
+async def test_auto_merger_keeps_leaves_when_parent_unavailable():
+    """Unit: a parent that is itself unavailable is skipped — its leaves stay (filter already ran)."""
+    def _leaf(cid, score):
+        return RetrievalResult(
+            chunk_id=cid, text=cid, score=score, component_scores={"dense": score},
+            document_id="s1", source_kind="document", standard_id=None, locator=None,
+            license_class="public_domain",
+            provenance=ChunkProvenance(content_hash=cid, parent_chunk_id="p"),
+        )
+
+    class _FakeStore:
+        async def hydrate(self, ids):
+            return [ChunkRecord(
+                chunk_id="p", text="parent", document_id="s1", source_kind="document",
+                standard_id=None, locator=None, license_class="public_domain", available=False,
+            )]
+
+    out = await AutoMerger(AutoMerger.Config()).merge(
+        [_leaf("l1", -1.0), _leaf("l2", -2.0)], RetrievalContext(store=_FakeStore(), embedder=None)
+    )
+    assert [r.chunk_id for r in out] == ["l1", "l2"]
