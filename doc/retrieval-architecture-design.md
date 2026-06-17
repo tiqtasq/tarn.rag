@@ -68,26 +68,38 @@ class Merger(Component):                          # optional — auto-merging
 `FusedHit` is a small carrier: `(chunk_id, score: float, component_scores: dict[str, float])` — it maps
 straight onto `RetrievalResult.score` + `.component_scores` at assembly.
 
-## 3. Engine composition (config-driven)
+## 3. Composition: a `RetrievalPipeline` container Component
 
-A `RETRIEVAL_PIPELINE` spec lives in `Settings.components` (the analog of `INGESTION_PIPELINE`):
+The composition is its own **container Component** — `RetrievalPipeline` — a *sibling* of the ingestion
+`Pipeline` (both are config-driven containers; **not** a subclass, because retrieval's flow is
+heterogeneous — parallel retrievers + fan-in + fixed steps — not `Pipeline`'s linear item-threading). Its
+spec lives in `Settings.components` under `RETRIEVAL_PIPELINE` (the analog of `INGESTION_PIPELINE`):
 
 ```json
 {
+  "class_name": "retrieval_pipeline",
   "retrievers": [{"class_name": "dense", "dense_k": 50}, {"class_name": "sparse", "sparse_k": 50}],
-  "fuser":      {"class_name": "rrf", "k": 60},
+  "fuser":      {"class_name": "rrf", "k": 60},   // explicit "identity" fuser when there's one retriever
   "reranker":   null,
   "merger":     null
 }
 ```
 
-`RetrievalEngine.create` builds these via `ComponentFactory` (reusing `create_as`) and `search`
-orchestrates the flow (§1), passing the `RetrievalContext`. **Comparing methods = varying this spec** —
-which is exactly what the eval harness will sweep. (A thin `RetrievalPipeline` container Component is an
-option, but the engine already owns the async orchestration, so it composes the children directly.)
+`RetrievalPipeline` builds its children in `_build_children` (factory `create_as`, like every container)
+and **owns the flow**: `async search(query, ctx: RetrievalContext) -> list[RetrievalResult]` runs §1. The
+`RetrievalEngine` stays a thin facade — `open()` / `create()` do the compat check + store/embedder
+construction (the `Engine` base), then build the `RetrievalPipeline` from the spec and delegate:
+`search(query)` → `pipeline.search(query, RetrievalContext(repository, embedder))`.
 
-The query-time knobs that aren't config (per-request) stay on `Query`: `top_k`, `dense_k`, `sparse_k`,
-`purpose`, `scope`. The config picks *which* methods; the `Query` tunes *this* request.
+**Why a container Component, not engine-direct (revised from the first draft):** it separates the flow
+from the engine's lifecycle (engine = facade, pipeline = algorithm — and the pipeline is unit-testable
+against a fake store, no real engine/repo), and makes the composition a first-class spec/object the eval
+harness builds many of and runs. **Comparing methods = different `RetrievalPipeline`s.** The honest
+caveat: it's a *sibling* of `Pipeline`, not a subclass — retrieval's heterogeneous flow doesn't reuse
+`Pipeline.run`'s linear item-threading; it's a "pipeline" in the composition-of-Components sense.
+
+The query-time knobs stay on `Query` (`top_k`, `dense_k`, `sparse_k`, `purpose`, `scope`): the spec picks
+*which* methods; the `Query` tunes *this* request.
 
 ## 4. License / scope filter
 
@@ -130,9 +142,10 @@ plain query embedder — the compatibility check protects against mismatched com
 
 ## 8. Build slices
 
-1. **Read-path provenance + the `RetrievalStore` port + Retriever/Fuser seams + sparse + RRF hybrid.**
-   The keystone: `ChunkRecord`/`RetrievalResult` += `provenance`; `hydrate` fills it; `sparse_search`;
-   `Retriever`(dense/sparse) + `Fuser`(rrf); engine composes from `RETRIEVAL_PIPELINE`. Delivers the
+1. **Read-path provenance + `RetrievalStore` port + `RetrievalPipeline` + Retriever/Fuser + sparse + RRF.**
+   The keystone: `ChunkRecord`/`RetrievalResult` += `provenance`; `hydrate` fills it; `sparse_search`
+   (SQLite FTS5 **and** Postgres tsvector/GIN); `Retriever`(dense/sparse) + `Fuser`(identity/rrf);
+   `RetrievalPipeline` composed from `RETRIEVAL_PIPELINE`; the engine delegates to it. Delivers the
    **dense / sparse / hybrid** trio — the first real comparison.
 2. **License/scope filter** wired onto the flow (§4).
 3. **Auto-merging** `Merger` (§2) — depends on slice 1's `parent_chunk_id` in the read path.
@@ -141,14 +154,14 @@ plain query embedder — the compatibility check protects against mismatched com
 6. **Evaluation harness** — runs the engine across `RETRIEVAL_PIPELINE` specs over a query set with
    metrics (recall@k / MRR / nDCG); this is where the *comparison* becomes quantitative.
 
-## 9. Open decisions (to confirm before/while building slice 1)
+## 9. Decisions (resolved)
 
-- **Single-retriever path:** identity `Fuser`, or let the engine skip fusion when one retriever? (Lean:
-  an explicit identity fuser, so the flow is uniform.)
-- **`RetrievalPipeline` container** vs the engine holding the children directly. (Lean: engine-direct;
-  it already orchestrates.)
-- **Where `component_scores` come from for a reranked result** — keep the pre-rerank fused components
-  and add a `rerank` score, or replace? (Lean: keep both — `component_scores` stays transparent.)
-- **Postgres sparse** (tsvector) parity — design it in slice 1 or stub until a Postgres target exists?
-  (Lean: define the abstract method; implement SQLite now, Postgres when needed — same pattern as the
-  rest of the dual-dialect store.)
+- **Single-retriever path:** explicit **identity `Fuser`** — the flow stays uniform (always retrieve →
+  fuse → …). ✓
+- **Composition:** a **`RetrievalPipeline` container Component** (sibling of `Pipeline`); the engine is a
+  thin facade over it — revised from the first draft's engine-direct lean (see §3 for the why). ✓
+- **`component_scores` on a reranked hit:** **keep both** — the fused per-retriever scores AND a
+  `rerank` score, so the breakdown stays transparent. ✓
+- **Postgres sparse:** implement **both dialects in slice 1** (SQLite FTS5 + Postgres tsvector/GIN) — full
+  parity from the start. *Test note:* the suite runs SQLite, so the Postgres path is written + reviewed
+  but needs a live Postgres to exercise. ✓
