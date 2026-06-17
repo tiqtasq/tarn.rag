@@ -39,6 +39,8 @@ class ChunkRecord:
     standard_id: str | None
     locator: str | None
     license_class: str
+    ai_grounding_allowed: bool = True  # may this chunk ground generated output? (purpose-driven filter)
+    available: bool = True  # is this chunk currently retrievable?
     methods: list[tuple[str, str]] = field(default_factory=list)  # (method_id, method_version)
     provenance: ChunkProvenance | None = None  # layout-aware: geometry / header_path / tree / annotations / table
 

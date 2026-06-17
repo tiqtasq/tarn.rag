@@ -81,6 +81,7 @@ class PostgresRepository(DocumentRepository):
             select(
                 c.c.chunk_id, c.c.text, c.c.document_id, d.c.source_kind,
                 d.c.standard_id, c.c.locator, c.c.license_class,
+                c.c.ai_grounding_allowed, c.c.available,
             )
             .select_from(c.join(d, c.c.document_id == d.c.document_id))
             .where(c.c.chunk_id.in_(chunk_ids))
@@ -102,6 +103,7 @@ class PostgresRepository(DocumentRepository):
                     ChunkRecord(
                         chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
                         standard_id=r[4], locator=r[5], license_class=r[6],
+                        ai_grounding_allowed=bool(r[7]), available=bool(r[8]),
                         methods=[(mid, ver) for mid, ver in methods],
                         provenance=prov.get(cid),
                     )

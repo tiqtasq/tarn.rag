@@ -3,9 +3,10 @@
 import pytest
 
 from tarnrag.contracts import build_index_meta
-from tarnrag.contracts import Chunk, Document, Embedding
+from tarnrag.contracts import Chunk, ChunkRecord, Document, Embedding, MethodRef
 from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval import Query, RetrievalContext, RetrievalEngine, RetrievalError, RetrievalPipeline
+from tarnrag.retrieval.types import Purpose
 
 FINGERPRINT = "fp-123"
 
@@ -127,3 +128,36 @@ async def test_engine_uses_configured_pipeline_spec(repo):
     results = await engine.search(Query(text="tank inspection", top_k=5))
     assert [r.chunk_id for r in results] == [cids[0]]  # sparse-only -> just the lexical match
     assert set(results[0].component_scores) == {"sparse"}
+
+
+async def test_filter_drops_unavailable_and_respects_grounding(repo):
+    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(parent_doc_id="s1", content="tank one", chunk_index=0, total_chunks=2,
+                  metadata={"available": 0}),  # unavailable
+            Chunk(parent_doc_id="s1", content="tank two", chunk_index=1, total_chunks=2,
+                  metadata={"ai_grounding_allowed": 0}),  # not grounding-allowed
+        ],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+    ])
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
+    # EXECUTION: the unavailable chunk is dropped; the grounding-disallowed one is kept.
+    assert [r.chunk_id for r in await engine.search(Query(text="tank", top_k=5))] == [b]
+    # GENERATION_GROUNDING: a is unavailable AND b isn't grounding-allowed -> nothing survives.
+    assert await engine.search(Query(text="tank", top_k=5, purpose=Purpose.GENERATION_GROUNDING)) == []
+
+
+def test_scope_filter_matches_methods():
+    rec = ChunkRecord(
+        chunk_id="c", text="t", document_id="d", source_kind="document",
+        standard_id=None, locator=None, license_class="public_domain", methods=[("M1", "v2")],
+    )
+    assert RetrievalPipeline._passes(rec, Query(text="x"))  # default scope ALL -> in scope
+    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1")]))  # version-agnostic
+    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1", "v2")]))  # exact version
+    assert not RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M9")]))  # no match -> out
