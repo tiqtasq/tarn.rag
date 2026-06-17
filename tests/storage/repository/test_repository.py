@@ -1,8 +1,24 @@
+import hashlib
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from tarnrag.contracts import Chunk, Document, Embedding
+from tarnrag.contracts import (
+    Annotation,
+    Chunk,
+    ChunkProvenance,
+    Document,
+    Embedding,
+    PageBox,
+    Span,
+    Table,
+    TableCell,
+)
 from tarnrag.storage.repository.sqlite import SqliteRepository
+
+
+def _h(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _chunk(content, index, total, source_id="s1", **meta):
@@ -50,6 +66,110 @@ async def test_document_with_chunks_and_idempotency(repo):
     remaining = await repo.get_chunks_by_document(doc_id)
     assert [c.content for c in remaining] == ["only"]
     assert (await repo.get_document(doc_id)).content == "updated"
+
+
+async def test_chunk_provenance_round_trips(repo):
+    chunk = Chunk(
+        parent_doc_id="",
+        content="Wear PPE.",
+        chunk_index=0,
+        provenance=ChunkProvenance(
+            header_path=["Manual", "Safety"],
+            geometry=[Span(start=39, end=48, boxes=[PageBox(page=1, bbox=(10, 20, 200, 35))])],
+            content_hash=_h("Wear PPE."),
+            level=0,
+        ),
+        metadata={"source_id": "s1"},
+    )
+    doc_id, _ = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [got] = await repo.get_chunks_by_document(doc_id)
+    assert got.provenance is not None
+    assert got.provenance.header_path == ["Manual", "Safety"]
+    assert got.provenance.content_hash == _h("Wear PPE.")
+    span = got.provenance.geometry[0]
+    assert (span.start, span.end) == (39, 48)
+    assert span.boxes[0].page == 1 and span.boxes[0].bbox == (10.0, 20.0, 200.0, 35.0)  # PDF highlight geometry
+
+
+async def test_parent_chunk_id_resolves_from_parent_ordinal(repo):
+    def c(content, idx, level, parent_ordinal):
+        return Chunk(
+            parent_doc_id="",
+            content=content,
+            chunk_index=idx,
+            provenance=ChunkProvenance(content_hash=_h(content), level=level, header_path=["S"]),
+            metadata={"source_id": "s1", "parent_ordinal": parent_ordinal},
+        )
+
+    doc_id, _ = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}),
+        [c("Safety section", 0, 1, None), c("Wear PPE.", 1, 0, 0), c("Lock out.", 2, 0, 0)],
+    )
+    parent, leaf1, leaf2 = await repo.get_chunks_by_document(doc_id)  # ordered by ordinal
+    assert parent.provenance.level == 1 and parent.provenance.parent_chunk_id is None
+    assert leaf1.provenance.parent_chunk_id == parent.id  # the positional ordinal -> the parent's chunk_id
+    assert leaf2.provenance.parent_chunk_id == parent.id
+
+
+async def test_table_chunk_persists_cells_and_round_trips(repo):
+    table = Table(
+        n_rows=2,
+        n_cols=2,
+        markdown="| Bolt | Torque |",
+        cells=[
+            TableCell(id="c0", row=0, col=0, is_column_header=True, text="Bolt", geometry=[Span(start=0, end=4)]),
+            TableCell(id="c1", row=0, col=1, is_column_header=True, text="Torque"),
+            TableCell(id="c2", row=1, col=0, is_row_header=True, text="M6"),
+            TableCell(id="c3", row=1, col=1, text="6 Nm"),
+        ],
+    )
+    chunk = Chunk(
+        parent_doc_id="",
+        content="| Bolt | Torque |\n| M6 | 6 Nm |",
+        chunk_index=0,
+        provenance=ChunkProvenance(content_hash=_h("table"), header_path=["Specs"], table=table),
+        metadata={"source_id": "s1"},
+    )
+    doc_id, _ = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [got] = await repo.get_chunks_by_document(doc_id)
+    t = got.provenance.table
+    assert t is not None and (t.n_rows, t.n_cols) == (2, 2)  # derived from the persisted cells
+    data = t.cell_at(1, 1)
+    assert data.text == "6 Nm"
+    assert [c.text for c in t.column_headers_for(data)] == ["Torque"]  # query by column header
+    assert [c.text for c in t.row_headers_for(data)] == ["M6"]  # query by row header
+    assert t.cell_at(0, 0).geometry[0].start == 0  # cell geometry round-trips
+
+
+async def test_chunk_annotations_round_trip(repo):
+    chunk = Chunk(
+        parent_doc_id="",
+        content="Wear PPE.",
+        chunk_index=0,
+        provenance=ChunkProvenance(
+            content_hash=_h("Wear PPE."),
+            annotations=[
+                Annotation(
+                    producer="acronyms", type="entity", value={"text": "PPE"},
+                    span=[Span(start=5, end=8)], deterministic=True,
+                ),
+                Annotation(producer="topics", type="topic", value={"label": "safety"}, deterministic=False),
+            ],
+        ),
+        metadata={"source_id": "s1"},
+    )
+    doc_id, _ = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [got] = await repo.get_chunks_by_document(doc_id)
+    entity, topic = got.provenance.annotations  # position-ordered
+    assert (entity.producer, entity.type, entity.value) == ("acronyms", "entity", {"text": "PPE"})
+    assert (entity.span[0].start, entity.span[0].end) == (5, 8) and entity.deterministic is True
+    assert topic.type == "topic" and topic.span is None and topic.deterministic is False  # doc-level, generative
 
 
 async def test_update_chunk_metadata_is_noop(repo):

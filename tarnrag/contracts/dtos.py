@@ -99,6 +99,9 @@ class Chunk(BaseModel):
     # In-flight bookkeeping (set by ChunkStage). §8 stores only the per-chunk ``ordinal``, not
     # the total, so this is None when a Chunk is reconstructed from a stored row.
     total_chunks: int | None = None
+    # The layout-aware provenance (geometry / header_path / level / parent / table) the chunker
+    # produced; persisted to the chunks columns + table_cells, and reconstructed on read.
+    provenance: ChunkProvenance | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)

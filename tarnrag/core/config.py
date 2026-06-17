@@ -134,9 +134,9 @@ class Settings(BaseSettings):
                 "class_name": "pipeline",
                 "stages": [
                     {"class_name": "LoadAndParse"},
+                    {"class_name": "Enrich"},  # doc-phase enrichers (default: none) annotate the document
                     {"class_name": "CleanAndNormalize"},
                     {"class_name": "Chunk"},  # chunker defaults to structure_aware on ChunkStage.Config
-                    {"class_name": "EnrichMetadata"},
                     {"class_name": "Embed"},
                 ],
             },

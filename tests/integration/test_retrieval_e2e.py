@@ -14,7 +14,6 @@ from tarnrag.ingestion.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
 from tarnrag.core.config import EmbeddingSettings
 from tarnrag.ingestion.embed import EmbedStage
-from tarnrag.ingestion.enrichment.enrich import EnrichMetadataStage
 from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 from tarnrag.ingestion.worker import IngestionWorker
 
@@ -47,7 +46,6 @@ def _stages():
         LoadAndParseStage(LoadAndParseStage.Config()),
         CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
         ChunkStage(ChunkStage.Config(chunker={"class_name": "recursive", "chunk_size": 30, "overlap": 5})),
-        EnrichMetadataStage(EnrichMetadataStage.Config()),
         _embed_stage(),
     ]
 

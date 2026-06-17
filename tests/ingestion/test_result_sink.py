@@ -1,6 +1,7 @@
-from tarnrag.contracts import Chunk, Document, Embedding, PipelineItem
+import hashlib
+
+from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, PipelineItem
 from tarnrag.ingestion.result_sink import (
-    ChunkMetadataResultSink,
     ChunkResultSink,
     DocumentResultSink,
     EmbeddingResultSink,
@@ -13,6 +14,10 @@ async def _finalize(sink, results):
     sink.submit(results)
     sink.close()
     return await sink.finalize()
+
+
+def _h(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 async def test_document_sink_persists_and_threads_doc_id(repo):
@@ -40,15 +45,22 @@ async def test_chunk_sink_persists_and_threads_chunk_id(repo):
     assert [c.id for c in chunks] == [it.metadata["chunk_id"] for it in items]
 
 
-async def test_enrich_sink_is_noop(repo):
-    # §8 has no chunk metadata column — the enrich sink finalizes successfully but stores nothing.
-    _, (cid,) = await repo.store_document_with_chunks(
-        Document(content="d", metadata={"source_id": "s1"}),
-        [Chunk(parent_doc_id="", content="c", chunk_index=0, total_chunks=1, metadata={})],
+async def test_chunk_sink_threads_provenance_and_resolves_the_tree(repo):
+    doc_id = await repo.store_document(Document(content="d", metadata={"source_id": "s1"}))
+    parent = PipelineItem(
+        content="Safety",
+        metadata={"source_id": "s1", "doc_id": doc_id, "chunk_index": 0, "parent_ordinal": None},
+        provenance=ChunkProvenance(content_hash=_h("Safety"), header_path=["Safety"], level=1),
     )
-    item = PipelineItem(content="c", metadata={"chunk_id": cid, "char_count": 1, "word_count": 1})
-    assert (await _finalize(ChunkMetadataResultSink(repo), [item])).persisted
-    assert "char_count" not in (await repo.get_chunk(cid)).metadata
+    leaf = PipelineItem(
+        content="Wear PPE.",
+        metadata={"source_id": "s1", "doc_id": doc_id, "chunk_index": 1, "parent_ordinal": 0},
+        provenance=ChunkProvenance(content_hash=_h("Wear PPE."), header_path=["Safety"], level=0),
+    )
+    assert (await _finalize(ChunkResultSink(repo), [parent, leaf])).persisted
+    stored_parent, stored_leaf = await repo.get_chunks_by_document(doc_id)
+    assert stored_parent.provenance.level == 1 and stored_parent.provenance.header_path == ["Safety"]
+    assert stored_leaf.provenance.parent_chunk_id == stored_parent.id  # sink + repo resolved the tree
 
 
 async def test_embedding_sink_persists(repo):
@@ -81,8 +93,8 @@ def test_registry_covers_all_stages():
     registry = create_sink_registry()
     assert set(registry) == {
         "LoadAndParse",
+        "Enrich",
         "CleanAndNormalize",
         "Chunk",
-        "EnrichMetadata",
         "Embed",
     }

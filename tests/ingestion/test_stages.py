@@ -8,7 +8,7 @@ from tarnrag.ingestion.pipeline import Pipeline
 from tarnrag.ingestion.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
 from tarnrag.ingestion.embed import EmbedStage
-from tarnrag.ingestion.enrichment.enrich import EnrichMetadataStage
+from tarnrag.ingestion.enrichment.enrich import EnrichStage
 from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 
 
@@ -63,12 +63,6 @@ def test_chunk_validation():
         RecursiveCharacterChunker.Config(chunk_size=10, overlap=10)
 
 
-def test_enrich_counts():
-    out = list(EnrichMetadataStage(EnrichMetadataStage.Config()).process(_item("one two three")))
-    assert out[0].metadata["word_count"] == 3
-    assert out[0].metadata["char_count"] == len("one two three")
-
-
 class _FakeEmbedder:
     """Deterministic 3-d embedder that records its batch calls."""
 
@@ -109,14 +103,16 @@ def test_pipeline_composition_doc_to_chunks():
     pipe = Pipeline.from_stages(
         [
             LoadAndParseStage(LoadAndParseStage.Config()),
+            EnrichStage(EnrichStage.Config(enrichers=[{"class_name": "acronyms"}])),  # doc-phase
             CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
             _recursive(20, 4),
-            EnrichMetadataStage(EnrichMetadataStage.Config()),
         ]
     )
-    item = _item("  Hello   world.  " * 6, source_id="s1")
+    item = _item("Always wear PPE. " * 6, source_id="s1")
     out = list(pipe.run([item]))
     assert len(out) >= 1
     total = out[0].metadata["total_chunks"]
     assert [o.metadata["chunk_index"] for o in out] == list(range(total))
-    assert all("char_count" in o.metadata and "doc_id" in o.metadata for o in out)
+    assert all("doc_id" in o.metadata for o in out)
+    # the enricher's annotation rode through to the chunks' provenance (extract -> enrich -> chunk)
+    assert any(a.value.get("text") == "PPE" for o in out for a in o.provenance.annotations)

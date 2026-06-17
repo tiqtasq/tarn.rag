@@ -111,6 +111,7 @@ class ChunkResultSink(_BufferingSink):
                 parent_doc_id=item.metadata["doc_id"],
                 content=item.content,
                 chunk_index=item.metadata["chunk_index"],
+                provenance=item.provenance,  # geometry / header_path / tree / table → persisted columns
                 metadata=item.metadata,
             )
             for item in results
@@ -118,22 +119,6 @@ class ChunkResultSink(_BufferingSink):
         chunk_ids = await self.repo.store_chunks(chunks)
         for item, chunk_id in zip(results, chunk_ids):
             item.metadata["chunk_id"] = chunk_id
-
-
-class ChunkMetadataResultSink(_BufferingSink):
-    """
-    After EnrichMetadata: merges enrichment into the chunk via ``update_chunk_metadata``.
-
-    Intentionally inert today — §8 chunks have no metadata column, so the repository's
-    ``update_chunk_metadata`` is a no-op by design (not unfinished). The stage → sink → port
-    wiring is kept intact so re-enabling chunk metadata is a one-method change, not a rebuild.
-    """
-
-    async def _persist(self, results: list[Any]) -> None:
-        for item in results:
-            await self.repo.update_chunk_metadata(
-                item.metadata["chunk_id"], item.metadata
-            )
 
 
 class EmbeddingResultSink(_BufferingSink):
@@ -156,8 +141,8 @@ def create_sink_registry() -> dict[str, type[ResultSink]]:
     stage ``.name`` values; ``PipelineOrchestrator.make_sink`` looks them up."""
     return {
         "LoadAndParse": DocumentResultSink,
+        "Enrich": PassthroughSink,  # doc-phase enrichment annotates item.document; nothing to persist here
         "CleanAndNormalize": PassthroughSink,
         "Chunk": ChunkResultSink,
-        "EnrichMetadata": ChunkMetadataResultSink,
         "Embed": EmbeddingResultSink,
     }

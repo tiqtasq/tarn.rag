@@ -35,7 +35,7 @@ def test_default_pipeline_is_the_built_in_five_stages():
     pipe = IngestionEngine.build_pipeline(_settings())
     assert isinstance(pipe, Pipeline)
     assert [s.tag for s in pipe.stages] == [
-        "LoadAndParse", "CleanAndNormalize", "Chunk", "EnrichMetadata", "Embed",
+        "LoadAndParse", "Enrich", "CleanAndNormalize", "Chunk", "Embed",
     ]
 
 
