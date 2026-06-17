@@ -17,8 +17,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from tarnrag.contracts import StructuredDocument
+from tarnrag.contracts import Element, StructuredDocument
 from tarnrag.core.components import Component
+from tarnrag.core.hashing import content_hash
 
 
 class Source(BaseModel):
@@ -40,6 +41,21 @@ class Extractor(Component):
     @abstractmethod
     def extract(self, source: Source) -> StructuredDocument:
         """Parse the source into a structured document."""
+
+    @staticmethod
+    def _create_document(
+        source: Source, text: str, elements: list[Element], *, extractor: str, default_kind: str
+    ) -> StructuredDocument:
+        """Assemble the ``StructuredDocument`` (the shared tail of every ``extract``): identity from the
+        source, ``source_kind`` falling back to ``default_kind``, and the computed content hash."""
+        return StructuredDocument(
+            source_id=source.source_id,
+            source_kind=source.source_kind or default_kind,
+            extractor=extractor,
+            text=text,
+            elements=elements,
+            content_hash=content_hash(text),
+        )
 
     @staticmethod
     def _read_text(source: Source) -> str:

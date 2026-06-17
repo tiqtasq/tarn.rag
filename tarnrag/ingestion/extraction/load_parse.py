@@ -68,8 +68,7 @@ class LoadAndParseStage(PipelineStage):
         self._default = self._extractor(self.config.default_extractor, factory)
 
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
-        if self._default is None:  # built once when constructed directly (not through the factory)
-            self._build_children(ComponentFactory.get())
+        self._ensure_children()
         md = item.metadata
         path = md.get("source_path")
         source_kind = self._infer_kind(path) or md.get("source_type") or ""
@@ -101,12 +100,7 @@ class LoadAndParseStage(PipelineStage):
         several routes share one instance."""
         key = json.dumps(spec, sort_keys=True)
         if key not in self._built:
-            built = factory.create(dict(spec))
-            if not isinstance(built, Extractor):
-                raise TypeError(
-                    f"{spec.get('class_name')!r} is a {type(built).__name__}, not an Extractor"
-                )
-            self._built[key] = built
+            self._built[key] = factory.create_as(dict(spec), Extractor)
         return self._built[key]
 
     @staticmethod

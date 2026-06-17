@@ -9,7 +9,6 @@ coalesce gracefully.
 
 from __future__ import annotations
 
-import hashlib
 import re
 from typing import Literal
 
@@ -32,14 +31,7 @@ class MarkdownExtractor(Extractor):
 
     def extract(self, source: Source) -> StructuredDocument:
         elements, text = assemble(self._blocks(self._read_text(source)))
-        return StructuredDocument(
-            source_id=source.source_id,
-            source_kind=source.source_kind or "markdown",
-            extractor=self.config.class_name,
-            text=text,
-            elements=elements,
-            content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        )
+        return self._create_document(source, text, elements, extractor=self.config.class_name, default_kind="markdown")
 
     @staticmethod
     def _blocks(md: str) -> list[Block]:

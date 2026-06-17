@@ -6,7 +6,6 @@ subclasses supply only the Postgres/SQLite specifics via a small set of hooks.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import uuid
 from abc import abstractmethod
@@ -34,6 +33,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tarnrag.core.config import DatabaseSettings
+from tarnrag.core.hashing import content_hash
 from tarnrag.contracts import (
     Annotation,
     Candidate,
@@ -746,7 +746,7 @@ class DocumentRepository(ChunkStore, JobStatusSource, DocumentFactsSource):
                     "ordinal": ch.chunk_index,
                     "text": ch.content,
                     **{col: derive(md) for col, derive in _CHUNK_PROVENANCE.items()},
-                    "content_hash": hashlib.sha256(ch.content.encode("utf-8")).hexdigest(),
+                    "content_hash": content_hash(ch.content),
                     "header_path": json.dumps(prov.header_path) if prov else None,
                     "level": prov.level if prov else 0,
                     "parent_chunk_id": (

@@ -57,6 +57,7 @@ class Component(ABC):
 
     def __init__(self, config: Component.Config) -> None:
         self.config = config
+        self._children_built = False  # set by ComponentFactory.create after _build_children runs
 
     def _build_children(self, factory: ComponentFactory) -> None:
         """
@@ -68,6 +69,16 @@ class Component(ABC):
             def _build_children(self, factory):
                 self.children = [factory.create(spec) for spec in self.config.children]
         """
+
+    def _ensure_children(self) -> None:
+        """Build children if they weren't already. ``_build_children`` fires automatically when a
+        component is built through ``ComponentFactory.create``; this covers DIRECT construction (tests,
+        ``Pipeline.from_stages``), where that call never happened. Containers call it before first use."""
+        if not self._children_built:
+            from tarnrag.core.components import ComponentFactory
+
+            self._build_children(ComponentFactory.get())
+            self._children_built = True
 
     def to_json(self) -> dict[str, Any]:
         """Serialize back to the dict shape that ``ComponentFactory.create`` consumes."""
