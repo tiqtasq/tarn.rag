@@ -46,7 +46,7 @@ def _stages():
     return [
         LoadAndParseStage(LoadAndParseStage.Config()),
         CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
-        ChunkStage(ChunkStage.Config(chunk_size=30, overlap=5)),
+        ChunkStage(ChunkStage.Config(chunker={"class_name": "recursive", "chunk_size": 30, "overlap": 5})),
         EnrichMetadataStage(EnrichMetadataStage.Config()),
         _embed_stage(),
     ]

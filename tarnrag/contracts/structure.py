@@ -159,11 +159,15 @@ class StructuredDocument(BaseModel):
 
 
 class ChunkProvenance(BaseModel):
-    """The chunk-phase payload: a chunk's link back to the source elements it covers, with the
-    aggregated geometry/header-path needed to cite and highlight it. Filled by the Chunk stage."""
+    """The chunk-phase payload: a chunk's link back to the source elements it covers, the aggregated
+    geometry/header-path needed to cite and highlight it, and its place in the auto-merging tree.
+    Filled by the Chunk stage."""
 
     source_element_ids: list[str] = Field(default_factory=list)  # the (contiguous) source elements
     geometry: Geometry = Field(default_factory=list)  # aggregated across the merged elements
     header_path: list[str] = Field(default_factory=list)
     content_hash: str
+    level: int = 0  # auto-merging tree: 0 = leaf chunk, 1 = section parent
+    parent_chunk_id: str | None = None  # the section-parent's chunk id; resolved when chunks are persisted
     annotations: list[Annotation] = Field(default_factory=list)  # annotations overlapping the chunk
+    table: Table | None = None  # set iff this chunk IS a table — carries cells/geometry for table_cells

@@ -57,15 +57,6 @@ class EmbeddingSettings(BaseModel):
     batch_size: int = 32  # embed-stage batching
 
 
-class ChunkingSettings(BaseModel):
-    """
-    Text chunking for the ingestion pipeline.
-    """
-
-    size: int = 512
-    overlap: int = 50
-
-
 class DatabaseSettings(BaseModel):
     """
     The two stores — never conflate them. ``document_url`` is the repository (documents, chunks,
@@ -121,7 +112,6 @@ class Settings(BaseSettings):
 
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
-    chunking: ChunkingSettings = ChunkingSettings()
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
@@ -136,7 +126,8 @@ class Settings(BaseSettings):
     def _fill_default_components(self) -> Settings:
         """Make a Settings self-complete: ensure the ingestion pipeline spec is present (a
         user-supplied one wins), so consumers read ``components[INGESTION_PIPELINE]`` directly
-        instead of recomputing a default elsewhere. Chunk params come from ``self.chunking``."""
+        instead of recomputing a default elsewhere. Component config (chunker, extractor routes, …)
+        lives on the stage specs here — override the pipeline spec to customise it."""
         self.components.setdefault(
             INGESTION_PIPELINE,
             {
@@ -144,11 +135,7 @@ class Settings(BaseSettings):
                 "stages": [
                     {"class_name": "LoadAndParse"},
                     {"class_name": "CleanAndNormalize"},
-                    {
-                        "class_name": "Chunk",
-                        "chunk_size": self.chunking.size,
-                        "overlap": self.chunking.overlap,
-                    },
+                    {"class_name": "Chunk"},  # chunker defaults to structure_aware on ChunkStage.Config
                     {"class_name": "EnrichMetadata"},
                     {"class_name": "Embed"},
                 ],

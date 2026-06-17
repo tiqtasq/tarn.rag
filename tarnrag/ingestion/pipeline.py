@@ -19,9 +19,10 @@ from tarnrag.core.components import Component, ComponentFactory
 class PipelineStage(Component):
     """
     Base class for a pure transformation stage — a ``Component`` built from a typed ``Config``.
-    Subclass a typed helper below (MapperStage / ChunkerStage / FilterStage) unless a stage needs
-    full control. Construct from a config, e.g. ``ChunkStage(ChunkStage.Config(chunk_size=256))``;
-    field validation lives on the ``Config`` (pydantic), not in a separate ``validate()``.
+    Subclass a typed helper below (MapperStage / FilterStage) unless a stage needs full control
+    (e.g. ``ChunkStage`` drives a ``Chunker`` child directly). Construct from a config, e.g.
+    ``CleanAndNormalizeStage(CleanAndNormalizeStage.Config())``; field validation lives on the
+    ``Config`` (pydantic), not in a separate ``validate()``.
     """
 
     class Config(Component.Config):
@@ -80,37 +81,6 @@ class MapperStage(PipelineStage):
         new_text, updates = self.map(item.content, item.metadata)
         yield PipelineItem(content=new_text, metadata={**item.metadata, **updates},
                            document=item.document, provenance=item.provenance)
-
-
-class ChunkerStage(PipelineStage):
-    """
-    1 -> N transform. Override ``chunk``; ``chunk_index``/``total_chunks`` are set
-    automatically on each produced item.
-    """
-
-    @abstractmethod
-    def chunk(
-        self, text: str, metadata: dict[str, Any]
-    ) -> list[tuple[str, dict[str, Any]]]:
-        """Return ``[(chunk_text, metadata_updates), ...]`` — at least one chunk."""
-
-    def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
-        chunks = self.chunk(item.content, item.metadata)
-        if not chunks:
-            raise ValueError(
-                f"{self.name} produced no chunks for {item.metadata.get('doc_id')}"
-            )
-        total = len(chunks)
-        for idx, (text, updates) in enumerate(chunks):
-            yield PipelineItem(
-                content=text,
-                metadata={
-                    **item.metadata,
-                    "chunk_index": idx,
-                    "total_chunks": total,
-                    **updates,
-                },
-            )
 
 
 class FilterStage(PipelineStage):

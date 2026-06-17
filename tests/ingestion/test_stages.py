@@ -37,23 +37,30 @@ def test_clean_normalizes_whitespace_and_controls():
     assert out[0].metadata["cleaned"] is True
 
 
+def _recursive(size, overlap):
+    """A Chunk stage driving the recursive chunker (the structure-agnostic, size-based strategy)."""
+    return ChunkStage(ChunkStage.Config(chunker={"class_name": "recursive", "chunk_size": size, "overlap": overlap}))
+
+
 def test_chunk_splits_and_indexes():
-    stage = ChunkStage(ChunkStage.Config(chunk_size=20, overlap=4))
+    stage = _recursive(20, 4)
     text = "abcdefghij " * 8  # ~88 chars -> several chunks
     out = list(stage.process(_item(text, doc_id="d1")))
     assert len(out) > 1
     total = out[0].metadata["total_chunks"]
     assert total == len(out)
     assert [o.metadata["chunk_index"] for o in out] == list(range(total))
-    assert all(o.metadata["chunk_size"] == len(o.content) for o in out)
+    assert all(o.provenance is not None and o.provenance.content_hash for o in out)  # each chunk carries provenance
 
 
 def test_chunk_validation():
-    # Validation now lives on the Config (pydantic), raised at config construction.
+    # The size/overlap validation lives on the recursive chunker's Config (pydantic).
+    from tarnrag.ingestion.chunking.recursive import RecursiveCharacterChunker
+
     with pytest.raises(ValidationError):
-        ChunkStage.Config(chunk_size=0)
+        RecursiveCharacterChunker.Config(chunk_size=0)
     with pytest.raises(ValidationError):
-        ChunkStage.Config(chunk_size=10, overlap=10)
+        RecursiveCharacterChunker.Config(chunk_size=10, overlap=10)
 
 
 def test_enrich_counts():
@@ -87,10 +94,12 @@ def test_embed_produces_embeddings_with_model_batching():
 
 
 def test_stage_built_from_dict_spec_via_component_factory():
-    """The migration's goal: a stage instantiated from a plain dict spec by its class_name tag."""
-    chunk = ComponentFactory.get().create({"class_name": "Chunk", "chunk_size": 16, "overlap": 4})
+    """The migration's goal: a stage (and its chunker child) instantiated from a plain dict spec."""
+    chunk = ComponentFactory.get().create(
+        {"class_name": "Chunk", "chunker": {"class_name": "recursive", "chunk_size": 16, "overlap": 4}}
+    )
     assert isinstance(chunk, ChunkStage)
-    assert (chunk.config.chunk_size, chunk.config.overlap) == (16, 4)
+    assert (chunk._chunker.config.chunk_size, chunk._chunker.config.overlap) == (16, 4)  # child built by the factory
     assert chunk.tag == "Chunk"  # the type tag (the sink/metrics key)
     assert chunk.name.startswith("Chunk-")  # unnamed instance -> counter-suffixed unique id
     assert chunk.to_json()["class_name"] == "Chunk"  # round-trips back to a spec
@@ -101,7 +110,7 @@ def test_pipeline_composition_doc_to_chunks():
         [
             LoadAndParseStage(LoadAndParseStage.Config()),
             CleanAndNormalizeStage(CleanAndNormalizeStage.Config()),
-            ChunkStage(ChunkStage.Config(chunk_size=20, overlap=4)),
+            _recursive(20, 4),
             EnrichMetadataStage(EnrichMetadataStage.Config()),
         ]
     )
