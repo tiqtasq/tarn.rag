@@ -16,13 +16,13 @@ from typing import Literal
 from pydantic import Field
 
 from tarnrag.contracts import ChunkProvenance, Element, ElementKind, Span, StructuredDocument
-from tarnrag.ingestion.chunking.chunker import Chunk, Chunker
+from tarnrag.ingestion.chunking.chunker import Chunker
 
 _JOIN = "\n\n"  # joins packed element texts within a chunk
 
 
 class StructureAwareChunker(Chunker):
-    """Chunk on document structure (sections / tables), emitting a leaf + section-parent tree."""
+    """Split on document structure (sections / tables), emitting a leaf + section-parent tree."""
 
     class Config(Chunker.Config):
         class_name: Literal["structure_aware"] = "structure_aware"
@@ -30,13 +30,13 @@ class StructureAwareChunker(Chunker):
 
     config: StructureAwareChunker.Config
 
-    def chunk(self, document: StructuredDocument) -> list[Chunk]:
-        chunks: list[Chunk] = []
+    def chunk(self, document: StructuredDocument) -> list[Chunker.TempChunk]:
+        chunks: list[Chunker.TempChunk] = []
         for members in self._sections(document.elements):
             self._emit_section(members, chunks)
         if not chunks and document.text.strip():  # no usable structure → one leaf over the whole text
             chunks.append(
-                Chunk(
+                Chunker.TempChunk(
                     text=document.text,
                     provenance=ChunkProvenance(
                         source_element_ids=[e.id for e in document.elements],
@@ -68,7 +68,7 @@ class StructureAwareChunker(Chunker):
             sections.append(current)
         return sections
 
-    def _emit_section(self, members: list[Element], chunks: list[Chunk]) -> None:
+    def _emit_section(self, members: list[Element], chunks: list[Chunker.TempChunk]) -> None:
         """Emit a section's chunks: its packed leaves, plus a section parent over them when >1 leaf."""
         heading = members[0] if members[0].kind == ElementKind.HEADING else None
         section_path = (heading.header_path + [heading.text]) if heading else members[0].header_path
@@ -87,9 +87,9 @@ class StructureAwareChunker(Chunker):
             leaf.parent_index = parent_index
             chunks.append(leaf)
 
-    def _leaves(self, body: list[Element], section_path: list[str]) -> list[Chunk]:
+    def _leaves(self, body: list[Element], section_path: list[str]) -> list[Chunker.TempChunk]:
         """Pack a section's body into leaves: tables stay atomic; text/code packs under ``max_chars``."""
-        leaves: list[Chunk] = []
+        leaves: list[Chunker.TempChunk] = []
         buf_text: list[str] = []
         buf_els: list[Element] = []
         size = 0
@@ -119,9 +119,9 @@ class StructureAwareChunker(Chunker):
         flush()
         return leaves
 
-    def _leaf(self, text: str, elements: list[Element], header_path: list[str]) -> Chunk:
+    def _leaf(self, text: str, elements: list[Element], header_path: list[str]) -> Chunker.TempChunk:
         """A level-0 leaf over ``elements``, packed into ``text``."""
-        return Chunk(
+        return Chunker.TempChunk(
             text=text,
             provenance=ChunkProvenance(
                 source_element_ids=[e.id for e in elements],
@@ -132,11 +132,11 @@ class StructureAwareChunker(Chunker):
             ),
         )
 
-    def _table_leaf(self, element: Element, header_path: list[str]) -> Chunk:
+    def _table_leaf(self, element: Element, header_path: list[str]) -> Chunker.TempChunk:
         """A table's atomic leaf — its markdown is the searchable text; the ``Table`` rides on the
         provenance so cell geometry + header addressing can be persisted (the table_cells slice)."""
         text = element.text or (element.table.markdown if element.table else "")
-        return Chunk(
+        return Chunker.TempChunk(
             text=text,
             provenance=ChunkProvenance(
                 source_element_ids=[element.id],
@@ -148,13 +148,13 @@ class StructureAwareChunker(Chunker):
             ),
         )
 
-    def _oversize(self, element: Element, header_path: list[str]) -> list[Chunk]:
+    def _oversize(self, element: Element, header_path: list[str]) -> list[Chunker.TempChunk]:
         """Character-split a single element that alone exceeds ``max_chars`` (e.g. a huge paragraph).
         The pieces share the element's geometry — box-precise sub-spans are a later refinement."""
         size = self.config.max_chars
         text = element.text
         return [
-            Chunk(
+            Chunker.TempChunk(
                 text=text[i : i + size],
                 provenance=ChunkProvenance(
                     source_element_ids=[element.id],
@@ -167,9 +167,9 @@ class StructureAwareChunker(Chunker):
             for i in range(0, len(text), size)
         ]
 
-    def _parent(self, text: str, members: list[Element], header_path: list[str]) -> Chunk:
+    def _parent(self, text: str, members: list[Element], header_path: list[str]) -> Chunker.TempChunk:
         """The section parent (``level`` 1) over a whole section — the auto-merge target for its leaves."""
-        return Chunk(
+        return Chunker.TempChunk(
             text=text,
             provenance=ChunkProvenance(
                 source_element_ids=[m.id for m in members],

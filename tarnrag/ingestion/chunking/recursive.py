@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from tarnrag.contracts import ChunkProvenance, Element, Span, StructuredDocument
-from tarnrag.ingestion.chunking.chunker import Chunk, Chunker
+from tarnrag.ingestion.chunking.chunker import Chunker
 
 _SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
@@ -36,9 +36,9 @@ class RecursiveCharacterChunker(Chunker):
 
     config: RecursiveCharacterChunker.Config
 
-    def chunk(self, document: StructuredDocument) -> list[Chunk]:
+    def chunk(self, document: StructuredDocument) -> list[Chunker.TempChunk]:
         text = document.text
-        chunks: list[Chunk] = []
+        chunks: list[Chunker.TempChunk] = []
         cursor = 0
         for piece in self._split_recursive(text):
             if not piece.strip():
@@ -53,10 +53,10 @@ class RecursiveCharacterChunker(Chunker):
             chunks.append(self._make_chunk(text, document, 0, len(text)))
         return chunks
 
-    def _make_chunk(self, text: str, document: StructuredDocument, start: int, end: int) -> Chunk:
+    def _make_chunk(self, text: str, document: StructuredDocument, start: int, end: int) -> Chunker.TempChunk:
         """A leaf chunk over ``text``, with provenance mapped from the elements its span overlaps."""
         covered = self._elements_overlapping(document, start, end)
-        return Chunk(
+        return Chunker.TempChunk(
             text=text,
             provenance=ChunkProvenance(
                 source_element_ids=[e.id for e in covered],
