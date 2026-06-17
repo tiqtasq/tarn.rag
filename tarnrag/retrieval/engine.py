@@ -16,15 +16,10 @@ from typing import Any
 from tarnrag.core.config import Settings, get_settings
 from tarnrag.core.engine import Engine
 from tarnrag.core.embedder import Embedder
+from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import SCHEMA_VERSION, MethodRef, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.types import Query
-
-
-class RetrievalError(Exception):
-    """
-    The engine cannot serve queries against this index (incompatibility at ``open()``).
-    """
 
 
 class RetrievalEngine(Engine):
