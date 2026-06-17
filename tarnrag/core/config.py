@@ -59,11 +59,12 @@ class EmbeddingSettings(BaseModel):
 
 class ChunkingSettings(BaseModel):
     """
-    Text chunking for the ingestion pipeline.
+    Chunking for the ingestion pipeline: the ``Chunker`` component spec (``class_name`` + options).
+    Defaults to the structure-aware chunker; set e.g. ``{"class_name": "recursive", "chunk_size": 256}``
+    to switch strategy.
     """
 
-    size: int = 512
-    overlap: int = 50
+    chunker: dict[str, Any] = {"class_name": "structure_aware"}
 
 
 class DatabaseSettings(BaseModel):
@@ -144,11 +145,7 @@ class Settings(BaseSettings):
                 "stages": [
                     {"class_name": "LoadAndParse"},
                     {"class_name": "CleanAndNormalize"},
-                    {
-                        "class_name": "Chunk",
-                        "chunk_size": self.chunking.size,
-                        "overlap": self.chunking.overlap,
-                    },
+                    {"class_name": "Chunk", "chunker": self.chunking.chunker},
                     {"class_name": "EnrichMetadata"},
                     {"class_name": "Embed"},
                 ],

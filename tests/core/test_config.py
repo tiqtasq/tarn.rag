@@ -11,7 +11,7 @@ def test_defaults_and_groups():
     assert s.MODE == "embedded"
     assert s.EMBEDDING_DIMENSION == 384
     assert s.embedding.model.startswith("sentence-transformers")
-    assert s.chunking.size == 512
+    assert s.chunking.chunker == {"class_name": "structure_aware"}  # default chunker is structure-aware
     assert s.database.document_url.startswith("sqlite")  # zero-config embedded default
 
 

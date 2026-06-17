@@ -1,10 +1,19 @@
-"""Chunking: split a loaded document into retrievable chunks.
+"""Chunking: split a loaded document into retrieval chunks + the auto-merging tree.
 
-Importing this package registers the built-in chunk stage with the global ``ComponentFactory`` (it
-self-registers under its ``class_name``), so ``Pipeline.from_spec`` / ``ComponentFactory`` can build it.
-The structure-aware chunkers (a ``Chunker`` component family) will land alongside ``chunk.py`` here.
+Importing this package registers the ``Chunk`` stage and the built-in chunkers (``structure_aware``,
+``recursive``) with the global ``ComponentFactory``, so ``Pipeline.from_spec`` / ``ComponentFactory``
+can build them. The chunkers are imported before ``ChunkStage`` (the driver builds a chunker child).
 """
 
+from tarnrag.ingestion.chunking.chunker import Chunk, Chunker
+from tarnrag.ingestion.chunking.recursive import RecursiveCharacterChunker
+from tarnrag.ingestion.chunking.structure_aware import StructureAwareChunker
 from tarnrag.ingestion.chunking.chunk import ChunkStage
 
-__all__ = ["ChunkStage"]
+__all__ = [
+    "Chunk",
+    "Chunker",
+    "RecursiveCharacterChunker",
+    "StructureAwareChunker",
+    "ChunkStage",
+]

@@ -96,7 +96,7 @@ class Chunk(BaseModel):
     parent_doc_id: str
     content: str
     chunk_index: int
-    # In-flight bookkeeping (set by ChunkerStage). §8 stores only the per-chunk ``ordinal``, not
+    # In-flight bookkeeping (set by ChunkStage). §8 stores only the per-chunk ``ordinal``, not
     # the total, so this is None when a Chunk is reconstructed from a stored row.
     total_chunks: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

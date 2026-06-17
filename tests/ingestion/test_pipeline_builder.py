@@ -41,9 +41,10 @@ def test_default_pipeline_is_the_built_in_five_stages():
 
 
 def test_default_pipeline_reads_chunking_from_settings():
-    pipe = IngestionEngine.build_pipeline(_settings(chunking=ChunkingSettings(size=128, overlap=8)))
+    chunking = ChunkingSettings(chunker={"class_name": "recursive", "chunk_size": 128, "overlap": 8})
+    pipe = IngestionEngine.build_pipeline(_settings(chunking=chunking))
     chunk = next(s for s in pipe.stages if s.tag == "Chunk")
-    assert (chunk.config.chunk_size, chunk.config.overlap) == (128, 8)
+    assert (chunk._chunker.config.chunk_size, chunk._chunker.config.overlap) == (128, 8)  # flows to the child
 
 
 def test_components_spec_overrides_the_default_composition():
@@ -51,12 +52,12 @@ def test_components_spec_overrides_the_default_composition():
         "class_name": "pipeline",
         "stages": [
             {"class_name": "CleanAndNormalize"},
-            {"class_name": "Chunk", "chunk_size": 64, "overlap": 8},
+            {"class_name": "Chunk", "chunker": {"class_name": "recursive", "chunk_size": 64, "overlap": 8}},
         ],
     }
     pipe = IngestionEngine.build_pipeline(_with_pipeline(spec))
     assert [s.tag for s in pipe.stages] == ["CleanAndNormalize", "Chunk"]
-    assert pipe.stages[1].config.chunk_size == 64
+    assert pipe.stages[1]._chunker.config.chunk_size == 64
 
 
 def test_embedding_identity_comes_from_settings_not_the_spec():
