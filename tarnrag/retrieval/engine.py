@@ -1,9 +1,9 @@
 """RetrievalEngine — turns a query into ranked, provenance-bearing results (ModusQ §5).
 
 A thin async facade over the §8 repository: it does the compatibility check + store/embedder
-construction (the ``Engine`` base), builds the ``RetrievalPipeline`` from ``Settings`` (the
-``RETRIEVAL_PIPELINE`` spec — dense by default; configure ``retrievers`` + a ``fuser`` for hybrid), and
-delegates ``search`` to it. ``open()`` is the one place compatibility is checked — it refuses an index
+construction (the ``Engine`` base), builds the ``Searcher`` from ``Settings`` (the ``RETRIEVAL_PIPELINE``
+spec — a ``RetrievalPipeline`` (dense by default; configure ``retrievers`` + a ``fuser`` for hybrid) or a
+``RoutingRetrievalPipeline``), and delegates ``search`` to it. ``open()`` is the one place compatibility is checked — it refuses an index
 built with a different embedding pipeline (fingerprint) or schema. **Comparing retrieval methods = varying
 the ``RETRIEVAL_PIPELINE`` spec.**
 """
@@ -20,8 +20,8 @@ from tarnrag.core.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
-from tarnrag.retrieval.pipeline import RetrievalPipeline
 from tarnrag.retrieval.retriever import RetrievalContext
+from tarnrag.retrieval.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 _DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser
@@ -39,7 +39,7 @@ class RetrievalEngine(Engine):
         self.embedder = embedder
         self.settings = settings
         spec = settings.components.get(RETRIEVAL_PIPELINE) if settings is not None else None
-        self._pipeline = ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, RetrievalPipeline)
+        self._pipeline: Searcher = ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, Searcher)
         # The cross-encoder is built (cheaply — the model loads lazily) only when settings are present;
         # it's unused unless the pipeline has a reranker. A direct ``open()`` without settings has none.
         self._cross_encoder: CrossEncoder | None = (

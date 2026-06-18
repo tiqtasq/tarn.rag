@@ -15,8 +15,8 @@ from typing import Any
 from tarnrag.core.components import ComponentFactory
 from tarnrag.eval.dataset import EvalSet
 from tarnrag.eval.metrics import hit_at_k, ndcg_at_k, reciprocal_rank
-from tarnrag.retrieval.pipeline import RetrievalPipeline
 from tarnrag.retrieval.retriever import RetrievalContext
+from tarnrag.retrieval.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 
@@ -68,12 +68,15 @@ def _aggregate(per_query: list[QueryReport], k: int) -> EvalReport:
 
 
 async def evaluate_pipeline(
-    pipeline: RetrievalPipeline, ctx: RetrievalContext, evalset: EvalSet, *, k: int = 8
+    pipeline: Searcher, ctx: RetrievalContext, evalset: EvalSet, *, k: int = 8
 ) -> EvalReport:
-    """Run every query through ``pipeline`` (``top_k=k``) and score content-based relevance @k."""
+    """Run every query through ``pipeline`` (``top_k=k``) and score content-based relevance @k. The
+    query's ``query_type`` label is carried onto the live ``Query``, so a routing pipeline dispatches on
+    it (routing on the labeled types) while the metrics are still segmented by that same label."""
     per_query: list[QueryReport] = []
     for q in evalset.queries:
-        results = await pipeline.search(Query(text=q.text, purpose=q.purpose, top_k=k), ctx)
+        query = Query(text=q.text, purpose=q.purpose, top_k=k, query_type=q.query_type)
+        results = await pipeline.search(query, ctx)
         rels = [_is_relevant(r.text, q.relevant) for r in results]
         per_query.append(
             QueryReport(
@@ -101,11 +104,12 @@ def by_query_type(report: EvalReport) -> dict[str, EvalReport]:
 async def sweep(
     specs: dict[str, dict[str, Any]], ctx: RetrievalContext, evalset: EvalSet, *, k: int = 8
 ) -> dict[str, EvalReport]:
-    """Evaluate many named pipeline specs against the same context — the method comparison. Each spec
-    is built into a ``RetrievalPipeline`` via the factory and scored over the query set."""
+    """Evaluate many named specs against the same context — the method comparison. Each spec is built
+    into a ``Searcher`` (a ``RetrievalPipeline`` or a ``RoutingRetrievalPipeline``) and scored over the
+    query set, so a router can be swept alongside the single pipelines it routes between."""
     factory = ComponentFactory.get()
     return {
-        name: await evaluate_pipeline(factory.create_as(spec, RetrievalPipeline), ctx, evalset, k=k)
+        name: await evaluate_pipeline(factory.create_as(spec, Searcher), ctx, evalset, k=k)
         for name, spec in specs.items()
     }
 

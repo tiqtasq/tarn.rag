@@ -103,6 +103,34 @@ async def test_segments_metrics_by_query_type(repo):
     assert report.hit_at_k == 0.5  # the overall report is the mean over both types
 
 
+_ROUTED = {
+    "class_name": "routing_retrieval_pipeline",
+    "classifier": {"class_name": "noop"},  # route on the supplied (labeled) query_type
+    "routes": {"lexical": _SPARSE, "semantic": _DENSE},
+    "default": _DENSE,
+}
+
+
+async def test_router_dispatches_per_type_and_beats_either_single_pipeline(repo):
+    await _index(repo)
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
+    evalset = EvalSet([
+        # sparse finds the quokka chunk; dense's top-1 is the (fixed-vector) tank chunk -> dense misses.
+        EvalQuery(text="quokka", relevant=["quokka"], query_type="lexical"),
+        # dense's top-1 tank chunk contains "inspection"; sparse has no lexical overlap -> sparse misses.
+        EvalQuery(text="checking equipment condition", relevant=["inspection"], query_type="semantic"),
+    ])
+    reports = await sweep({"dense": _DENSE, "sparse": _SPARSE, "routed": _ROUTED}, ctx, evalset, k=1)
+    routed, dense, sparse = (by_query_type(reports[n]) for n in ("routed", "dense", "sparse"))
+
+    # Each labeled type is dispatched to its configured method, so per type the router == that method.
+    assert routed["lexical"].hit_at_k == sparse["lexical"].hit_at_k == 1.0
+    assert routed["semantic"].hit_at_k == dense["semantic"].hit_at_k == 1.0
+    # Picking the right method per type beats either single pipeline overall (each wins only one type).
+    assert reports["routed"].hit_at_k == 1.0
+    assert reports["dense"].hit_at_k == 0.5 and reports["sparse"].hit_at_k == 0.5
+
+
 async def test_format_segmented_table(repo):
     await _index(repo)
     ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder())

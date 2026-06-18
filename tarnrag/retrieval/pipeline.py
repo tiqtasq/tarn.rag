@@ -18,18 +18,19 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import ChunkRecord, RetrievalResult
-from tarnrag.core.components import Component, ComponentFactory
+from tarnrag.core.components import ComponentFactory
 from tarnrag.retrieval.fuser import Fuser
 from tarnrag.retrieval.merger import Merger
 from tarnrag.retrieval.reranker import Reranker
 from tarnrag.retrieval.retriever import RetrievalContext, Retriever
+from tarnrag.retrieval.searcher import Searcher
 from tarnrag.retrieval.types import ALL, Purpose, Query
 
 
-class RetrievalPipeline(Component):
+class RetrievalPipeline(Searcher):
     """Compose the configured retrievers + fuser and run the retrieval flow over a ``RetrievalContext``."""
 
-    class Config(Component.Config):
+    class Config(Searcher.Config):
         class_name: Literal["retrieval_pipeline"] = "retrieval_pipeline"
         retrievers: list[dict[str, Any]] = Field(default_factory=lambda: [{"class_name": "dense"}])
         fuser: dict[str, Any] = Field(default_factory=lambda: {"class_name": "identity"})

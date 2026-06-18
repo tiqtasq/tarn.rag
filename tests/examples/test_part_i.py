@@ -59,15 +59,22 @@ async def test_example_03_compares_retrieval_methods():
     assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
     assert sum(s.chunk_count for s in statuses) > 3
 
-    # The sweep scores every configured pipeline spec over the labeled (semantic vs lexical) set.
+    # The sweep scores every configured pipeline spec — the three methods + the router — over the
+    # labeled (semantic vs lexical) set.
     reports = await evaluation_03.main()
-    assert set(reports) == {"dense", "sparse (bm25)", "hybrid (rrf)"}
+    assert set(reports) == {"dense", "sparse (bm25)", "hybrid (rrf)", "routed (by type)"}
     assert all(r.n == 6 for r in reports.values())
 
     # The segmentation surfaces what the aggregate hides: sparse BM25 collapses on the semantic
     # (paraphrase) queries — no shared terms — while it ties on the lexical ones; dense is robust on both.
     sparse = by_query_type(reports["sparse (bm25)"])
     dense = by_query_type(reports["dense"])
+    routed = by_query_type(reports["routed (by type)"])
     assert set(sparse) == {"lexical", "semantic"}
     assert sparse["semantic"].hit_at_k < sparse["lexical"].hit_at_k       # the collapse
     assert dense["semantic"].hit_at_k >= sparse["semantic"].hit_at_k      # dense more robust on semantic
+
+    # The router sends each type to its configured method, so per type it matches that method — taking
+    # sparse's lexical strength and dense's semantic robustness instead of either single method's weak side.
+    assert routed["lexical"].hit_at_k == sparse["lexical"].hit_at_k
+    assert routed["semantic"].hit_at_k == dense["semantic"].hit_at_k
