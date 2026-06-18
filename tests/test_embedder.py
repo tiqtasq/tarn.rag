@@ -52,3 +52,18 @@ def test_fingerprint_stable_and_meta_complete():
         assert k in meta
     assert meta["embedding_config_fingerprint"] == e.config_fingerprint()
     assert meta["embedding_dim"] == "384"
+
+
+def test_inject_header_path_changes_fingerprint():
+    from tarnrag.core.embedder import OnnxEmbedder
+
+    base = _embedder()  # inject_header_path defaults False
+    injected = OnnxEmbedder(
+        str(MODEL_DIR), model_id="sentence-transformers/all-MiniLM-L6-v2",
+        embedding_dim=384, inject_header_path=True,
+    )
+    # The injection flag is part of the embedding identity -> a distinct index fingerprint, so an
+    # injected index won't open() with a non-injecting embedder (the two are compared as separate indexes).
+    assert base.config_fingerprint() != injected.config_fingerprint()
+    assert base.embed_meta()["inject_header_path"] == "False"
+    assert injected.embed_meta()["inject_header_path"] == "True"

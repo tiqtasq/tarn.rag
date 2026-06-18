@@ -56,6 +56,11 @@ class EmbeddingSettings(BaseModel):
     query_prefix: str = ""  # non-empty for asymmetric models (BGE/E5)
     passage_prefix: str = ""
     batch_size: int = 32  # embed-stage batching
+    # Header-path injection: prepend each chunk's section header path to its text before embedding
+    # (the embed stage applies it; queries are never injected). Part of the embedding identity, so an
+    # injected index has a distinct fingerprint and won't ``open()`` with a non-injecting embedder —
+    # the two are compared by building separate indexes.
+    inject_header_path: bool = False
 
 
 class RerankSettings(BaseModel):
