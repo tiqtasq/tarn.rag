@@ -1,0 +1,97 @@
+"""PostgreSQL dialect (pgvector + tsvector) integration round-trip — gated on a real Postgres.
+
+The whole Postgres path — ``dense_knn`` (pgvector cosine), ``sparse_search`` (tsvector ``ts_rank_cd``),
+the Core ``hydrate`` + provenance, the ivfflat / GIN indexes, and FK-cascade delete — is otherwise
+unexercised (the default suite is SQLite-only). Set ``TARNRAG_TEST_POSTGRES_URL`` to a pgvector Postgres
+to run it, e.g.::
+
+    docker run -d --name pgtest -e POSTGRES_PASSWORD=test -p 5433:5432 pgvector/pgvector:pg16
+    TARNRAG_TEST_POSTGRES_URL=postgresql://postgres:test@localhost:5433/postgres \
+        pytest tests/storage/repository/test_postgres.py
+"""
+
+from __future__ import annotations
+
+import os
+
+import pytest
+
+from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, Span
+
+PG_URL = os.environ.get("TARNRAG_TEST_POSTGRES_URL", "")
+pytestmark = [
+    pytest.mark.requires_postgres,
+    pytest.mark.skipif(
+        not PG_URL,
+        reason="set TARNRAG_TEST_POSTGRES_URL to a pgvector Postgres (e.g. docker pgvector/pgvector)",
+    ),
+]
+
+
+@pytest.fixture
+async def pg_repo():
+    pytest.importorskip("asyncpg")
+    pytest.importorskip("pgvector")
+    from tarnrag.storage.repository.postgres import PostgresRepository
+
+    repo = PostgresRepository(PG_URL, embedding_dimension=3)
+    async with repo.engine.begin() as conn:  # clean slate (drops only what already exists)
+        await conn.run_sync(repo.metadata.drop_all)
+    await repo.connect()  # CREATE EXTENSION vector + tables + ivfflat/GIN indexes
+    yield repo
+    async with repo.engine.begin() as conn:
+        await conn.run_sync(repo.metadata.drop_all)
+    await repo.disconnect()
+
+
+async def _index(repo):
+    """Ingest two chunks (+ embeddings): the tank chunk (a) and the quokka chunk (b)."""
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(
+                parent_doc_id="s1", content="storage tank corrosion inspection", chunk_index=0,
+                total_chunks=2, metadata={"locator": "§6.4"},
+                provenance=ChunkProvenance(
+                    content_hash="h0", header_path=["Safety"], level=1, geometry=[Span(start=5, end=8)]
+                ),
+            ),
+            Chunk(parent_doc_id="s1", content="quokka marsupial", chunk_index=1, total_chunks=2, metadata={}),
+        ],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=b, vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+    ])
+    return a, b
+
+
+async def test_dense_sparse_hydrate_roundtrip(pg_repo):
+    a, b = await _index(pg_repo)
+    # pgvector cosine KNN: the [1,0,0] query is nearest the tank chunk.
+    assert [c.chunk_id for c in await pg_repo.dense_knn([1.0, 0.0, 0.0], 2)][0] == a
+    # tsvector ts_rank_cd: "tank inspection" surfaces the tank chunk.
+    assert [c.chunk_id for c in await pg_repo.sparse_search("tank inspection", 5)][0] == a
+    # hydrate carries licensing + layout-aware provenance (the shared Core _chunk_provenance path).
+    recs = {r.chunk_id: r for r in await pg_repo.hydrate([a, b])}
+    assert recs[a].locator == "§6.4" and recs[a].ai_grounding_allowed is True
+    assert recs[a].provenance.header_path == ["Safety"] and recs[a].provenance.level == 1
+    assert recs[a].provenance.geometry[0].start == 5
+
+
+async def test_delete_cascades(pg_repo):
+    a, _ = await _index(pg_repo)
+    assert (await pg_repo.document_facts("s1")).present
+    assert await pg_repo.delete_document_and_jobs("s1") is True
+    assert await pg_repo.hydrate([a]) == []  # chunks + embeddings cascaded off the FKs
+    assert not (await pg_repo.document_facts("s1")).present
+
+
+async def test_reingest_replaces_chunks(pg_repo):
+    await _index(pg_repo)  # two chunks
+    # Re-store the same source_id with one chunk -> idempotent replace (not a duplicate).
+    await pg_repo.store_document_with_chunks(
+        Document(content="d2", metadata={"source_id": "s1"}),
+        [Chunk(parent_doc_id="s1", content="only one now", chunk_index=0, total_chunks=1, metadata={})],
+    )
+    assert (await pg_repo.document_facts("s1")).chunk_count == 1
