@@ -1,9 +1,14 @@
-"""Pluggable embedder backends: ONNX pooling, the provider selector, and the API request/parse logic.
+"""Pluggable embedder backends: ONNX pooling, the provider selector, and the API request/response path.
 
 No network and no ONNX model needed — the pooling is tested on the numpy helper directly, and each API
-backend is exercised by stubbing its single ``_post`` seam (the real API paths are gated, like the model).
+backend is driven through a real ``httpx`` client backed by ``httpx.MockTransport`` (so the full
+``_http()`` / ``_post()`` path and the API key reaching the request headers are exercised, with a mock
+handler standing in for the network).
 """
 
+import json
+
+import httpx
 import numpy as np
 import pytest
 
@@ -63,50 +68,80 @@ def test_provider_is_part_of_the_fingerprint():
     assert a.embed_meta()["embedding_config_fingerprint"] == a.config_fingerprint()
 
 
-# ---------------- API request shaping + response parse (stub the _post seam) ----------------
+# ---------------- API request/response path (real httpx client over a mock transport) ----------------
 
-def test_openai_request_and_parse(monkeypatch):
-    e = OpenAIEmbedder(model="text-embedding-3-small", embedding_dim=2, api_key="k")
-    seen = {}
+def _mock_client(handler):
+    """A real httpx client whose transport runs ``handler(request) -> httpx.Response`` — no network, but
+    the embedder's ``_http()`` / ``_post()`` (and the request it builds) run for real."""
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
-    def fake_post(url, body, headers):
-        seen.update(url=url, body=body, headers=headers)
-        return {"data": [{"index": 1, "embedding": [0.0, 2.0]}, {"index": 0, "embedding": [3.0, 0.0]}]}
 
-    monkeypatch.setattr(e, "_post", fake_post)
+def test_openai_full_http_path():
+    cap = {}
+
+    def handler(request):
+        cap.update(url=str(request.url), method=request.method, headers=request.headers,
+                   body=json.loads(request.content))
+        # out-of-order indices (exercise the sort) + known vectors (check parsing/normalization)
+        return httpx.Response(200, json={"data": [
+            {"index": 1, "embedding": [0.0, 2.0]}, {"index": 0, "embedding": [3.0, 0.0]},
+        ]})
+
+    e = OpenAIEmbedder(model="text-embedding-3-small", embedding_dim=2, api_key="sk-test")
+    e._client = _mock_client(handler)
     vecs = e.embed_passages(["a", "b"])
-    assert seen["url"].endswith("/embeddings")
-    assert seen["body"] == {"model": "text-embedding-3-small", "input": ["a", "b"], "dimensions": 2}
-    assert seen["headers"]["Authorization"] == "Bearer k"
-    assert vecs == [[1.0, 0.0], [0.0, 1.0]]  # re-ordered by index, then L2-normalized
+    assert cap["method"] == "POST" and cap["url"].endswith("/embeddings")
+    assert cap["headers"]["authorization"] == "Bearer sk-test"  # the key reached the real request
+    assert cap["body"] == {"model": "text-embedding-3-small", "input": ["a", "b"], "dimensions": 2}
+    assert vecs == [[1.0, 0.0], [0.0, 1.0]]  # index-sorted, then L2-normalized
 
 
-def test_voyage_uses_input_type_and_output_dimension(monkeypatch):
-    e = VoyageEmbedder(model="voyage-3.5", embedding_dim=2, api_key="k")
+def test_voyage_full_http_path():
     bodies = []
-    monkeypatch.setattr(e, "_post", lambda url, body, headers: bodies.append(body) or {"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
-    e.embed_query("q")
+
+    def handler(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [3.0, 4.0]}]})
+
+    e = VoyageEmbedder(model="voyage-3.5", embedding_dim=2, api_key="vk")
+    e._client = _mock_client(handler)
+    qv = e.embed_query("q")
     e.embed_passages(["p"])
     assert bodies[0]["input_type"] == "query" and bodies[1]["input_type"] == "document"
     assert bodies[0]["output_dimension"] == 2
+    assert qv == pytest.approx([0.6, 0.8])  # [3,4] L2-normalized
 
 
-def test_gemini_request_and_parse(monkeypatch):
-    e = GeminiEmbedder(model="gemini-embedding-001", embedding_dim=2, api_key="k")
-    seen = {}
+def test_gemini_full_http_path():
+    cap = {}
 
-    def fake_post(url, body, headers):
-        seen.update(url=url, body=body, headers=headers)
-        return {"embeddings": [{"values": [0.0, 5.0]}]}
+    def handler(request):
+        cap.update(url=str(request.url), headers=request.headers, body=json.loads(request.content))
+        return httpx.Response(200, json={"embeddings": [{"values": [0.0, 5.0]}]})
 
-    monkeypatch.setattr(e, "_post", fake_post)
+    e = GeminiEmbedder(model="gemini-embedding-001", embedding_dim=2, api_key="gk")
+    e._client = _mock_client(handler)
     vec = e.embed_query("q")
-    assert seen["url"].endswith("models/gemini-embedding-001:batchEmbedContents")
-    req = seen["body"]["requests"][0]
+    assert cap["url"].endswith("models/gemini-embedding-001:batchEmbedContents")
+    req = cap["body"]["requests"][0]
     assert req["model"] == "models/gemini-embedding-001"
     assert req["taskType"] == "RETRIEVAL_QUERY" and req["outputDimensionality"] == 2
-    assert seen["headers"]["x-goog-api-key"] == "k"
+    assert cap["headers"]["x-goog-api-key"] == "gk"
     assert vec == [0.0, 1.0]  # L2-normalized
+
+
+def test_api_key_falls_back_to_env_var(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
+    cap = {}
+
+    def handler(request):
+        cap["headers"] = request.headers
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0, 0.0]}]})
+
+    e = OpenAIEmbedder(model="m", embedding_dim=2)  # no explicit key -> env-var fallback
+    e._client = _mock_client(handler)
+    e.embed_query("q")
+    assert cap["headers"]["authorization"] == "Bearer sk-from-env"
 
 
 def test_api_key_is_required(monkeypatch):
