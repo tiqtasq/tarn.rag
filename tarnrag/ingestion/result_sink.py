@@ -16,8 +16,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
-from tarnrag.contracts import ChunkStore
-from tarnrag.contracts import Chunk, Document
+from tarnrag.contracts import Chunk, ChunkStore, Document
 
 
 @dataclass
@@ -137,8 +136,8 @@ class EmbeddingResultSink(_BufferingSink):
 
 
 def create_sink_registry() -> dict[str, type[ResultSink]]:
-    """Map each stage name to the ResultSink that persists its output. Keys MUST match
-    stage ``.name`` values; ``PipelineOrchestrator.make_sink`` looks them up."""
+    """Map each stage type tag to the ResultSink that persists its output. Keys MUST match
+    stage ``.tag`` values; ``PipelineOrchestrator.begin_batch`` looks them up."""
     return {
         "LoadAndParse": DocumentResultSink,
         "Enrich": PassthroughSink,  # doc-phase enrichment annotates item.document; nothing to persist here

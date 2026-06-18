@@ -99,13 +99,5 @@ class PostgresRepository(DocumentRepository):
                         select(m.c.method_id, m.c.method_version).where(m.c.chunk_id == cid)
                     )
                 ).all()
-                records.append(
-                    ChunkRecord(
-                        chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
-                        standard_id=r[4], locator=r[5], license_class=r[6],
-                        ai_grounding_allowed=bool(r[7]), available=bool(r[8]),
-                        methods=[(mid, ver) for mid, ver in methods],
-                        provenance=prov.get(cid),
-                    )
-                )
+                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
         return records

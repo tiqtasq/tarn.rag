@@ -18,7 +18,6 @@ tests and advanced wiring), mirroring ``RetrievalEngine.open``.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import shutil
 import uuid
@@ -27,6 +26,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 from tarnrag.core.config import INGESTION_PIPELINE, IdPolicy, Settings, get_settings
+from tarnrag.core.hashing import sha256_file, sha256_hex
 from tarnrag.core.observability import NoOpObservability
 from tarnrag.core.engine import Engine
 from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
@@ -47,20 +47,6 @@ from tarnrag.ingestion.result_sink import create_sink_registry
 logger = logging.getLogger(__name__)
 
 _SOURCE_TYPES = {"pdf": "pdf", "txt": "text", "text": "text", "html": "html", "htm": "html"}
-
-_HASH_BLOCK = 1 << 16  # 64 KiB — stream files through the hasher (no full-memory load)
-
-
-def _sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-def _sha256_file(path: str) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for block in iter(lambda: f.read(_HASH_BLOCK), b""):
-            h.update(block)
-    return h.hexdigest()
 
 
 class IngestionEngine(Engine):
@@ -131,8 +117,7 @@ class IngestionEngine(Engine):
             id_policy=settings.ID_POLICY,
         )
         if auto_drain:  # register the in-process worker that ingest() will drive
-            worker = IngestionWorker(orchestrator, observability=obs)
-            queue.set_handler(worker.handle_batch)
+            _attach_worker(queue, orchestrator, obs)
         return engine
 
     @staticmethod
@@ -181,7 +166,7 @@ class IngestionEngine(Engine):
                 extra={
                     "source_path": path,
                     "source_type": self._infer_source_type(path),
-                    "content_hash": _sha256_file(path),  # dedup key (sha256 of the file bytes)
+                    "content_hash": sha256_file(path),  # dedup key (sha256 of the file bytes)
                     **({"extractor": extractor} if extractor else {}),
                 },
             )
@@ -202,7 +187,7 @@ class IngestionEngine(Engine):
         for i, doc in enumerate(docs):
             if extractor:
                 doc.setdefault("extractor", extractor)
-            doc["content_hash"] = _sha256_bytes(contents[i].encode("utf-8"))
+            doc["content_hash"] = sha256_hex(contents[i])
             items.append(self._item(ids[i], content=contents[i], extra=doc))
         return await self._submit(items)
 
@@ -254,12 +239,12 @@ class IngestionEngine(Engine):
     def content_hash(data: bytes) -> str:
         """The sha256 hex the engine stores for submitted content — use it to build a dedup key
         (e.g. ``await engine.find_by_content_hash(engine.content_hash(data))``)."""
-        return _sha256_bytes(data)
+        return sha256_hex(data)
 
     @staticmethod
     def content_hash_of_file(path: str) -> str:
         """:meth:`content_hash` for a file, read in chunks (constant memory)."""
-        return _sha256_file(path)
+        return sha256_file(path)
 
     async def list_documents(self) -> list[DocumentSummary]:
         """Inventory of every ingested document — id, ``content_hash``, and chunk/embedding
@@ -371,6 +356,14 @@ class IngestionEngine(Engine):
         return str(dest)
 
 
+def _attach_worker(queue: JobConsumer, orchestrator: PipelineOrchestrator, obs: Any) -> IngestionWorker:
+    """Build the in-process worker and register it as the queue's handler; return it. Shared by the
+    embedded ``create`` (auto-drain) and the distributed ``run_worker`` entry point."""
+    worker = IngestionWorker(orchestrator, observability=obs)
+    queue.set_handler(worker.handle_batch)
+    return worker
+
+
 async def run_worker(settings: Settings | None = None) -> None:
     """Consumer entry point for ``MODE='distributed'`` — build the wiring via
     :meth:`IngestionEngine.create` and run the consume loop until the queue stops, then release
@@ -379,8 +372,7 @@ async def run_worker(settings: Settings | None = None) -> None:
     engine = await IngestionEngine.create(settings)
     if not isinstance(engine._queue, JobConsumer):
         raise RuntimeError("this engine has no consumable queue to run a worker on")
-    worker = IngestionWorker(engine.orchestrator, observability=engine.obs)
-    engine._queue.set_handler(worker.handle_batch)
+    worker = _attach_worker(engine._queue, engine.orchestrator, engine.obs)
     logger.info("Ingestion worker %s started", worker.worker_id)
     try:
         await engine._queue.run()

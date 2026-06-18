@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from tarnrag.contracts import Element, StructuredDocument
 from tarnrag.core.components import Component
-from tarnrag.core.hashing import content_hash
+from tarnrag.core.hashing import compute_content_hash
 
 
 class Source(BaseModel):
@@ -54,7 +54,7 @@ class Extractor(Component):
             extractor=extractor,
             text=text,
             elements=elements,
-            content_hash=content_hash(text),
+            content_hash=compute_content_hash(text),
         )
 
     @staticmethod

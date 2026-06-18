@@ -43,9 +43,4 @@ class EnrichStage(PipelineStage):
         if item.document is not None:
             for enricher in self._enrichers:
                 enricher.enrich(item.document)  # mutates the document in place
-        yield PipelineItem(
-            content=item.content,
-            metadata=item.metadata,
-            document=item.document,
-            provenance=item.provenance,
-        )
+        yield item.derive()  # content/metadata unchanged; carries the (now-enriched) document forward

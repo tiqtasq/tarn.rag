@@ -72,6 +72,18 @@ class PipelineItem(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    def derive(self, *, content: str | None = None, metadata: dict[str, Any] | None = None) -> PipelineItem:
+        """A fresh item carrying forward ``document`` + ``provenance``; only ``content`` / ``metadata``
+        change (both default to this item's). ``id`` is reset (the worker re-ids the output), so a 1→1
+        stage emits a new item without re-listing the flow-through fields — the one place they're
+        threaded, so adding a flow-through field updates this method, not every stage."""
+        return PipelineItem(
+            content=self.content if content is None else content,
+            metadata=self.metadata if metadata is None else metadata,
+            document=self.document,
+            provenance=self.provenance,
+        )
+
 
 class Document(BaseModel):
     """

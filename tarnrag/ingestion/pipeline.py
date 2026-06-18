@@ -79,8 +79,7 @@ class MapperStage(PipelineStage):
 
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
         new_text, updates = self.map(item.content, item.metadata)
-        yield PipelineItem(content=new_text, metadata={**item.metadata, **updates},
-                           document=item.document, provenance=item.provenance)
+        yield item.derive(content=new_text, metadata={**item.metadata, **updates})
 
 
 class FilterStage(PipelineStage):
@@ -101,8 +100,7 @@ class FilterStage(PipelineStage):
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
         if self.should_keep(item.content, item.metadata):
             new_text, updates = self.maybe_transform(item.content, item.metadata)
-            yield PipelineItem(content=new_text, metadata={**item.metadata, **updates},
-                               document=item.document, provenance=item.provenance)
+            yield item.derive(content=new_text, metadata={**item.metadata, **updates})
 
 
 class Pipeline(Component):
@@ -127,16 +125,9 @@ class Pipeline(Component):
         self.stages: list[PipelineStage] = []
 
     def _build_children(self, factory: ComponentFactory) -> None:
-        """Instantiate the stage specs via the SAME factory, asserting each is a PipelineStage."""
-        stages: list[PipelineStage] = []
-        for stage_spec in self.config.stages:
-            stage = factory.create(stage_spec)
-            if not isinstance(stage, PipelineStage):
-                raise TypeError(
-                    f"{stage_spec.get('class_name')!r} is a {type(stage).__name__}, "
-                    "not a PipelineStage"
-                )
-            stages.append(stage)
+        """Instantiate the stage specs via the SAME factory, asserting each is a PipelineStage
+        (``create_as`` does the build + type check)."""
+        stages = [factory.create_as(spec, PipelineStage) for spec in self.config.stages]
         if not stages:
             raise ValueError("Pipeline must have at least one stage")
         self.stages = stages
@@ -147,12 +138,7 @@ class Pipeline(Component):
         ``{"class_name": "pipeline", "stages": [<stage spec>, ...]}`` — via ``ComponentFactory``.
         The factory-driven companion to ``from_stages``; the referenced stage classes must be
         imported (registered) first (importing ``tarnrag.ingestion`` registers the built-ins)."""
-        pipeline = ComponentFactory.get().create(dict(spec))
-        if not isinstance(pipeline, cls):
-            raise TypeError(
-                f"{spec.get('class_name')!r} built a {type(pipeline).__name__}, not a {cls.__name__}"
-            )
-        return pipeline
+        return ComponentFactory.get().create_as(dict(spec), cls)
 
     @classmethod
     def from_stages(cls, stages: list[PipelineStage]) -> Pipeline:

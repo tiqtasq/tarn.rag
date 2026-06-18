@@ -30,11 +30,12 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tarnrag.core.config import DatabaseSettings
-from tarnrag.core.hashing import content_hash
+from tarnrag.core.hashing import compute_content_hash
 from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
     Chunk,
     ChunkProvenance,
+    ChunkRecord,
     ChunkStore,
     Document,
     DocumentFacts,
@@ -327,15 +328,9 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         """
         async with self.engine.begin() as conn:
             for key, value in meta.items():
-                res = await conn.execute(
-                    update(self.index_meta_table)
-                    .where(self.index_meta_table.c.key == key)
-                    .values(value=value)
+                await self._upsert(
+                    conn, self.index_meta_table, self.index_meta_table.c.key, key, {"value": value}
                 )
-                if res.rowcount == 0:
-                    await conn.execute(
-                        insert(self.index_meta_table).values(key=key, value=value)
-                    )
 
     async def index_meta(self) -> dict[str, str]:
         """
@@ -518,21 +513,11 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
     ) -> None:
         """Upsert a job's status row (portable: update, else insert)."""
         async with self.engine.begin() as conn:
-            res = await conn.execute(
-                update(self.job_status)
-                .where(self.job_status.c.job_id == job_id)
-                .values(status=status, error=error, updated_at=func.now())
+            await self._upsert(
+                conn, self.job_status, self.job_status.c.job_id, job_id,
+                {"status": status, "error": error, "updated_at": func.now()},
+                insert_extra={"document_id": document_id, "stage_name": stage_name},
             )
-            if res.rowcount == 0:
-                await conn.execute(
-                    insert(self.job_status).values(
-                        job_id=job_id,
-                        document_id=document_id,
-                        stage_name=stage_name,
-                        status=status,
-                        error=error,
-                    )
-                )
 
     async def document_jobs(self, document_id: str) -> list[dict[str, Any]]:
         """Debug-only per-job breakdown for one document."""
@@ -664,17 +649,33 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
 
     # ---------------- shared helpers ----------------
 
-    async def _upsert_document(self, conn: AsyncConnection, values: dict) -> str:
-        """Upsert on the ``document_id`` primary key (portable: update, else insert). Returns
-        the document_id so chunks resolve their FK."""
-        document_id = values["document_id"]
-        res = await conn.execute(
-            update(self.documents)
-            .where(self.documents.c.document_id == document_id)
-            .values({k: v for k, v in values.items() if k != "document_id"})
-        )
+    async def _upsert(
+        self,
+        conn: AsyncConnection,
+        table: Table,
+        key_column: Any,
+        key_value: Any,
+        values: dict[str, Any],
+        insert_extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Portable upsert (no dialect ``ON CONFLICT``): UPDATE the row keyed by
+        ``key_column == key_value`` with ``values``; if none matched, INSERT it (the key + ``values``
+        + any insert-only ``insert_extra``). The single home for the update-else-insert dance shared
+        by ``write_index_meta`` / ``record_job`` / ``_upsert_document``."""
+        res = await conn.execute(update(table).where(key_column == key_value).values(**values))
         if res.rowcount == 0:
-            await conn.execute(insert(self.documents).values(**values))
+            await conn.execute(
+                insert(table).values(**{key_column.name: key_value, **values, **(insert_extra or {})})
+            )
+
+    async def _upsert_document(self, conn: AsyncConnection, values: dict) -> str:
+        """Upsert on the ``document_id`` primary key. Returns the document_id so chunks resolve
+        their FK."""
+        document_id = values["document_id"]
+        await self._upsert(
+            conn, self.documents, self.documents.c.document_id, document_id,
+            {k: v for k, v in values.items() if k != "document_id"},
+        )
         return document_id
 
     def _doc_values(self, doc: Document) -> dict:
@@ -712,7 +713,7 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                     "ordinal": ch.chunk_index,
                     "text": ch.content,
                     **{col: derive(md) for col, derive in _CHUNK_PROVENANCE.items()},
-                    "content_hash": content_hash(ch.content),
+                    "content_hash": compute_content_hash(ch.content),
                     **cp.provenance_columns(prov, parent_chunk_id),
                 }
             )
@@ -738,6 +739,19 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             chunk_index=r["ordinal"],
             provenance=cp.row_to_provenance(r),
             metadata=self._chunk_metadata(r),
+        )
+
+    @staticmethod
+    def _create_chunk_record(row, methods, provenance: ChunkProvenance | None) -> ChunkRecord:
+        """Assemble a ``ChunkRecord`` from a hydrate row + its method refs + provenance — the one place
+        the field list lives. Both dialects' ``hydrate`` queries select the same column order:
+        (chunk_id, text, document_id, source_kind, standard_id, locator, license_class,
+        ai_grounding_allowed, available), so the positional row is shared."""
+        return ChunkRecord(
+            chunk_id=row[0], text=row[1], document_id=row[2], source_kind=row[3],
+            standard_id=row[4], locator=row[5], license_class=row[6],
+            ai_grounding_allowed=bool(row[7]), available=bool(row[8]),
+            methods=[(mid, ver) for mid, ver in methods], provenance=provenance,
         )
 
     async def _attach_tables(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
