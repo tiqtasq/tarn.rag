@@ -120,19 +120,59 @@ class GenerationPipeline(Component):
     # route → reason (retrieve↔read loop, budgeted) → ground-check → assemble proof tree
 ```
 
-**Where the `Router` lives — a deliberate call.** The `Router` is a **retrieval-layer seam** (a routing
-`RetrievalPipeline` variant): query features → which retrieval strategy. Putting it there means
-**retrieval-only** users get routing too, and it's driven by the segmentation evidence we built. It admits
-two kinds of implementation:
+**Where the `Router` lives — a deliberate call.** Routing is a **retrieval-layer** concern (it benefits
+retrieval-only users and the C++ port, and it's driven by the segmentation evidence we built), so slice 1
+lives entirely in `tarnrag/retrieval/` — the `generation/` package isn't created until slice 2. Its
+shape (all on the existing Component framework):
 
-- a **heuristic** router (rules/features over the query) — LLM-free, deterministic, trivially portable;
-  **slice 1 ships this**, so the retrieval core stays LLM-free *by default*;
-- an **LLM-based** router (classify the query with the `core` `LanguageModel`) — an *optional* component
-  on the same seam. It depends on `core` (not `generation`), so the one-way rule holds; and the **C++
-  port can implement it too** — an LLM call is just HTTP, not a portability barrier. The reason to default
-  to the heuristic one is self-containedness / determinism / cost, **not** that LLM routing is unportable.
+**The `Searcher` seam.** Extract the one method `RetrievalPipeline` exposes —
+`async search(query, ctx) -> list[RetrievalResult]` — as a tiny abstract base `Searcher(Component)`.
+`RetrievalPipeline` becomes a `Searcher`; so does the router. The engine builds
+`create_as(RETRIEVAL_PIPELINE, Searcher)`, so that one spec can name **either** a plain pipeline **or** a
+router — no new `Settings` key.
 
-(An LLM-based router is also reusable by the generation layer; the seam is shared.)
+**The `Query` contract carries the classification.** Classification is *integrated into the contract*, the
+same way enrichment output lands on a chunk (`Annotation`), not buried inside the router:
+
+```python
+@dataclass
+class Query:
+    text: str
+    ...
+    query_type: str = ""                 # cheap route key — the headline label the router dispatches on
+    annotations: list[Annotation] = []   # the rich, extensible channel (reuses the enrichment Annotation)
+```
+
+The denormalized `query_type` (route key) + the rich `annotations` (full detail) mirror the chunk's
+`license_class` column alongside its `annotations`: cheap to route on, with the complete extraction
+carried along for downstream consumers (the eval harness, logging, later the `Reasoner`). Reusing
+`Annotation` is free leverage: the `deterministic` flag means an LLM classifier's findings are flagged
+(never silently trusted), and `span` can mark which substring of the query is an identifier.
+
+**The `QueryClassifier` seam — optional & configurable, no hard-wired taxonomy.** A `Component` whose job
+is to populate `query.query_type` (+ `annotations`), with an `annotate` helper mirroring
+`Enricher.annotate` (producer auto-filled):
+
+- **`NoOpQueryClassifier`** — the **default**; classifies nothing, so an unconfigured router falls through
+  to its `default` route (≡ a single pipeline). Routing is opt-in.
+- **`StructuralQueryClassifier`** — the first *real*, **domain-independent** classifier: a heuristic over
+  the query's *form*, not its subject matter (interrogative form, function-word ratio, exact-match cues
+  like quotes/identifiers/acronyms, length) → `query_type ∈ {lexical, semantic}` + a rich annotation of
+  what it found. Deterministic, LLM-free, C++-portable. Labels/thresholds/word-lists are config (the
+  form-independent cues — identifiers/quotes/length — carry weight regardless of language). Domain-
+  *specific* taxonomies are deferred — added later as more classifier components on this seam.
+- (later) an **LLM-based** classifier on the same seam, using the `core` `LanguageModel` — depends on
+  `core` not `generation`, so the one-way rule holds, and the C++ port can implement it too (an LLM call
+  is just HTTP, not a portability barrier). The default is heuristic for self-containedness / determinism
+  / cost, **not** because LLM routing is unportable.
+
+**The router** — `RoutingRetrievalPipeline(Searcher)` — holds a `classifier` + a `routes: {query_type →
+Searcher spec}` map + a `default` Searcher. `search` runs the classifier (populating `query_type`), then
+dispatches to `routes.get(query_type, default)`. Routes are themselves `Searcher`s (built recursively, so
+a route is just another pipeline spec — sparse for `lexical`, dense for `semantic`, …), and the route map
+is the deployment's config, tuned from the segmented eval. The **eval harness is the judge**: it already
+segments by `query_type`, so a router spec is swept alongside the single pipelines and must match-or-beat
+the best per type. (The same seam is reusable by the generation layer.)
 
 ## 4. Evidence: proof trees on *our* provenance (the differentiator)
 
@@ -197,9 +237,12 @@ ingestion. The invariant is "lean + self-contained *by default*," not "no extern
 
 ## 7. Build slices
 
-1. **Query-type routing (retrieval layer, no LLM).** A routing `RetrievalPipeline` that classifies a query
-   (heuristic, segmentation-informed) and dispatches to the per-type-best sub-pipeline. Portable;
-   benefits retrieval-only. *(Foundation; the only slice touching retrieval.)*
+1. **Query-type routing (retrieval layer, no LLM).** `Query` gains `query_type` + `annotations`; a
+   `Searcher` seam (engine builds a plain pipeline *or* a router from `RETRIEVAL_PIPELINE`); a
+   `QueryClassifier` seam (`NoOpQueryClassifier` default + a domain-independent `StructuralQueryClassifier`);
+   and a `RoutingRetrievalPipeline` that classifies → dispatches to the per-type-best sub-pipeline.
+   Portable; benefits retrieval-only; validated by the segmented eval harness. *(The only slice touching
+   retrieval — nothing lands in `generation/` yet.)*
 2. **Generation MVP.** The LLM `Resource` seam + `GenerationPipeline` + a single-hop `Reasoner` + the
    `EvidenceAssembler` (proof tree from provenance) + the `GenerationEngine` facade + the
    `RetrievalEngineProtocol` port. End-to-end: question → answer + evidence. No multi-hop yet.
@@ -219,3 +262,6 @@ ingestion. The invariant is "lean + self-contained *by default*," not "no extern
   — *deliberately deferred*; §5/§2.1 keep it open.
 - **Reasoner prompting/decomposition strategy** for slices 2/4 (single read vs decomposition-first).
 - **Abstention policy** (when to refuse vs return best-grounded).
+- **Domain-specific query taxonomy** — *deliberately deferred*. Slice 1 ships a domain-independent
+  classifier (query *form*); a domain taxonomy (e.g. exact-clause-lookup vs conceptual for ModusQ) is a
+  later classifier component on the same seam, route map tuned from the segmented eval.
