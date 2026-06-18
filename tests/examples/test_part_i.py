@@ -15,6 +15,7 @@ import pytest
 
 from examples.part_i.example_01 import ingestion, retrieval
 from examples.part_i.example_02 import ingestion as ingestion_02, retrieval as retrieval_02
+from examples.part_i.example_03 import evaluation as evaluation_03, ingestion as ingestion_03
 
 pytestmark = pytest.mark.requires_model
 
@@ -49,3 +50,19 @@ async def test_example_02_json_pipeline_makes_more_chunks():
     # Retrieval over the small-chunk store still ranks the corrosion query onto the tank doc.
     answers = await retrieval_02.main()
     assert answers[retrieval_02.QUERIES[0]][0].document_id == "tank-inspection"
+
+
+async def test_example_03_compares_retrieval_methods():
+    # Ingestion: the small-chunk pipeline gives several chunks per doc for the methods to differ over.
+    statuses = await ingestion_03.main()
+    assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
+    assert sum(s.chunk_count for s in statuses) > 3
+
+    # The sweep scores every configured pipeline spec over the labeled set against the same index.
+    reports = await evaluation_03.main()
+    assert set(reports) == {"dense", "sparse (bm25)", "hybrid (rrf)"}
+    for report in reports.values():
+        assert report.n == 3
+        assert report.hit_at_k == 1.0  # every labeled query is answerable from this (easy) corpus
+    # The harness discriminates between methods: dense ranks the gold chunk at least as high as sparse.
+    assert reports["dense"].mrr >= reports["sparse (bm25)"].mrr
