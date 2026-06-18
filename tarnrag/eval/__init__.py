@@ -10,8 +10,10 @@ from tarnrag.eval.dataset import EvalQuery, EvalSet
 from tarnrag.eval.harness import (
     EvalReport,
     QueryReport,
+    by_query_type,
     evaluate_pipeline,
     format_reports,
+    format_segmented,
     sweep,
 )
 
@@ -23,5 +25,7 @@ __all__ = [
     "QueryReport",
     "evaluate_pipeline",
     "sweep",
+    "by_query_type",
     "format_reports",
+    "format_segmented",
 ]

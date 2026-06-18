@@ -22,13 +22,14 @@ from tarnrag.retrieval.types import Query
 
 @dataclass
 class QueryReport:
-    """Per-query outcome: the ranked relevance flags + this query's metric values."""
+    """Per-query outcome: the ranked relevance flags + this query's metric values + its type label."""
 
     text: str
     relevances: list[bool]
     hit_at_k: float
     reciprocal_rank: float
     ndcg_at_k: float
+    query_type: str = ""
 
 
 @dataclass
@@ -53,6 +54,19 @@ def _mean(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+def _aggregate(per_query: list[QueryReport], k: int) -> EvalReport:
+    """Mean the per-query metrics into an ``EvalReport`` — the one aggregation, used by both
+    ``evaluate_pipeline`` (over the whole set) and ``by_query_type`` (over a type's slice)."""
+    return EvalReport(
+        k=k,
+        n=len(per_query),
+        hit_at_k=_mean([r.hit_at_k for r in per_query]),
+        mrr=_mean([r.reciprocal_rank for r in per_query]),
+        ndcg_at_k=_mean([r.ndcg_at_k for r in per_query]),
+        per_query=per_query,
+    )
+
+
 async def evaluate_pipeline(
     pipeline: RetrievalPipeline, ctx: RetrievalContext, evalset: EvalSet, *, k: int = 8
 ) -> EvalReport:
@@ -68,16 +82,20 @@ async def evaluate_pipeline(
                 hit_at_k=hit_at_k(rels, k),
                 reciprocal_rank=reciprocal_rank(rels),
                 ndcg_at_k=ndcg_at_k(rels, k),
+                query_type=q.query_type,
             )
         )
-    return EvalReport(
-        k=k,
-        n=len(per_query),
-        hit_at_k=_mean([r.hit_at_k for r in per_query]),
-        mrr=_mean([r.reciprocal_rank for r in per_query]),
-        ndcg_at_k=_mean([r.ndcg_at_k for r in per_query]),
-        per_query=per_query,
-    )
+    return _aggregate(per_query, k)
+
+
+def by_query_type(report: EvalReport) -> dict[str, EvalReport]:
+    """Re-aggregate a report's per-query results by ``query_type`` — the segmentation that reveals which
+    method wins on which kind of query (the evidence for whether query routing would help). Types are
+    returned sorted; an unlabeled set collapses to a single ``""`` group."""
+    groups: dict[str, list[QueryReport]] = {}
+    for q in report.per_query:
+        groups.setdefault(q.query_type, []).append(q)
+    return {qtype: _aggregate(qs, report.k) for qtype, qs in sorted(groups.items())}
 
 
 async def sweep(
@@ -101,4 +119,30 @@ def format_reports(reports: dict[str, EvalReport]) -> str:
     if reports:
         any_report = next(iter(reports.values()))
         lines.append(f"\n(n={any_report.n} queries, k={any_report.k})")
+    return "\n".join(lines)
+
+
+_METRIC_LABELS = {"hit_at_k": "hit@k", "mrr": "mrr", "ndcg_at_k": "ndcg@k"}
+
+
+def format_segmented(reports: dict[str, EvalReport], metric: str = "mrr") -> str:
+    """A **pipeline × query-type** table of one ``metric`` (``hit_at_k`` | ``mrr`` | ``ndcg_at_k``),
+    with an ``all`` column for the overall mean — the per-type view that shows whether different query
+    types favour different methods (and so whether query-type routing would beat any single pipeline)."""
+    if metric not in _METRIC_LABELS:
+        raise ValueError(f"unknown metric {metric!r}; choose from {sorted(_METRIC_LABELS)}")
+    segmented = {name: by_query_type(r) for name, r in reports.items()}
+    types = sorted({qtype for seg in segmented.values() for qtype in seg})
+    cols = [*types, "all"]
+    w = max(9, max((len(c) for c in cols), default=0) + 2)
+    header = f"{_METRIC_LABELS[metric] + ' by type':<24}" + "".join(f"{c:>{w}}" for c in cols)
+    lines = [header, "-" * len(header)]
+    for name, report in reports.items():
+        seg = segmented[name]
+        values = [getattr(seg[t], metric) for t in types] + [getattr(report, metric)]
+        lines.append(f"{name:<24}" + "".join(f"{v:>{w}.3f}" for v in values))
+    if reports:
+        any_seg = next(iter(segmented.values()))
+        counts = ", ".join(f"{t}={any_seg[t].n}" for t in types)
+        lines.append(f"\n(n per type: {counts}; k={next(iter(reports.values())).k})")
     return "\n".join(lines)

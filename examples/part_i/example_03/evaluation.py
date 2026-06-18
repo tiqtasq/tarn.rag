@@ -3,11 +3,15 @@
 The payoff of the retrieval seams: **comparing methods is just swapping the RetrievalPipeline spec.**
 This sweeps three pipelines — dense, sparse (BM25), and hybrid (RRF over both) — against the SAME index
 that ``example_03/ingestion.py`` built, scores each over a small labeled query set (``evalset.json``),
-and prints a hit@k / MRR / nDCG@k comparison table.
+and prints a hit@k / MRR / nDCG@k comparison table — then a **per-query-type** breakdown.
 
-The corpus is tiny and the queries easy, so the scores run high — the point is the machinery (swap a
-spec, re-score), not the benchmark. Relevance is content-based: a hit counts if its chunk text contains
-one of a query's gold phrases (so labels survive re-chunking / re-embedding).
+The query set is labeled ``semantic`` (paraphrases with little keyword overlap) vs ``lexical`` (the exact
+terms from the docs). Segmenting the scores by that label answers the question that decides whether
+*query routing* is worth building: **does a different method win on a different kind of query?** (Spoiler
+for this corpus: sparse BM25 collapses on the semantic queries — no shared terms — while dense holds up.)
+
+The corpus is tiny, so treat the numbers as illustrative; the point is the machinery. Relevance is
+content-based: a hit counts if a result's chunk text contains one of a query's gold phrases.
 
 Run (after the ingestion example):
 
@@ -21,7 +25,7 @@ import asyncio
 from pathlib import Path
 
 from tarnrag import RetrievalEngine
-from tarnrag.eval import EvalReport, EvalSet, format_reports, sweep
+from tarnrag.eval import EvalReport, EvalSet, format_reports, format_segmented, sweep
 from tarnrag.retrieval import RetrievalContext
 
 from examples.common import base_settings, example_db, require_model
@@ -67,6 +71,10 @@ async def main() -> dict[str, EvalReport]:
         "(k=3, relevance = gold phrase in the chunk text):\n"
     )
     print(format_reports(reports))
+    print("\nSegmented by query type — does a different method win on a different kind of query?\n")
+    print(format_segmented(reports, metric="hit_at_k"))
+    print()
+    print(format_segmented(reports, metric="mrr"))
     return reports
 
 

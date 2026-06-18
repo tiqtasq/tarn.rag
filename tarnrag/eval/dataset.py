@@ -19,11 +19,13 @@ from tarnrag.retrieval.types import Purpose
 @dataclass
 class EvalQuery:
     """One labeled query: the text, the gold ``relevant`` phrases (a result is relevant iff its text
-    contains any, case-insensitive), and the retrieval ``purpose``."""
+    contains any, case-insensitive), the retrieval ``purpose``, and an optional ``query_type`` label
+    (e.g. "semantic" / "lexical") that the harness can segment metrics by."""
 
     text: str
     relevant: list[str]
     purpose: Purpose = Purpose.EXECUTION
+    query_type: str = ""
 
 
 @dataclass
@@ -34,13 +36,15 @@ class EvalSet:
 
     @classmethod
     def from_records(cls, records: list[dict]) -> EvalSet:
-        """Build from plain dicts: ``{"text": ..., "relevant": [...], "purpose"?: "EXECUTION"}``."""
+        """Build from plain dicts:
+        ``{"text": ..., "relevant": [...], "purpose"?: "EXECUTION", "query_type"?: "semantic"}``."""
         return cls(
             [
                 EvalQuery(
                     text=r["text"],
                     relevant=list(r["relevant"]),
                     purpose=Purpose(r.get("purpose", Purpose.EXECUTION)),
+                    query_type=r.get("query_type", ""),
                 )
                 for r in records
             ]

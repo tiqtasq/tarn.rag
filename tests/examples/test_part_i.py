@@ -16,6 +16,7 @@ import pytest
 from examples.part_i.example_01 import ingestion, retrieval
 from examples.part_i.example_02 import ingestion as ingestion_02, retrieval as retrieval_02
 from examples.part_i.example_03 import evaluation as evaluation_03, ingestion as ingestion_03
+from tarnrag.eval import by_query_type
 
 pytestmark = pytest.mark.requires_model
 
@@ -58,11 +59,15 @@ async def test_example_03_compares_retrieval_methods():
     assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
     assert sum(s.chunk_count for s in statuses) > 3
 
-    # The sweep scores every configured pipeline spec over the labeled set against the same index.
+    # The sweep scores every configured pipeline spec over the labeled (semantic vs lexical) set.
     reports = await evaluation_03.main()
     assert set(reports) == {"dense", "sparse (bm25)", "hybrid (rrf)"}
-    for report in reports.values():
-        assert report.n == 3
-        assert report.hit_at_k == 1.0  # every labeled query is answerable from this (easy) corpus
-    # The harness discriminates between methods: dense ranks the gold chunk at least as high as sparse.
-    assert reports["dense"].mrr >= reports["sparse (bm25)"].mrr
+    assert all(r.n == 6 for r in reports.values())
+
+    # The segmentation surfaces what the aggregate hides: sparse BM25 collapses on the semantic
+    # (paraphrase) queries — no shared terms — while it ties on the lexical ones; dense is robust on both.
+    sparse = by_query_type(reports["sparse (bm25)"])
+    dense = by_query_type(reports["dense"])
+    assert set(sparse) == {"lexical", "semantic"}
+    assert sparse["semantic"].hit_at_k < sparse["lexical"].hit_at_k       # the collapse
+    assert dense["semantic"].hit_at_k >= sparse["semantic"].hit_at_k      # dense more robust on semantic
