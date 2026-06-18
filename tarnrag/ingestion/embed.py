@@ -4,8 +4,8 @@ Uses the shared ONNX ``OnnxEmbedder`` (passage side), so ingestion embeds with e
 pipeline retrieval will replay for queries (§5.3). The embedding identity lives on the stage's
 ``Config`` as an ``EmbeddingSettings`` (the factory copies ``settings.embedding`` in, so it stays
 in sync with the retrieval-side embedder and its fingerprint). The embedder is built lazily via
-``OnnxEmbedder.create``; tests inject a fake by setting ``stage._embedder`` (anything with
-``embed_passages(list[str]) -> list[list[float]]``).
+``build_embedder`` (local ONNX or an API backend, per ``embedding.provider``); tests inject a fake by
+setting ``stage._embedder`` (anything with ``embed_passages(list[str]) -> list[list[float]]``).
 
 When ``embedding.inject_header_path`` is set, each chunk's section header path is prepended to its
 text before embedding (the chunk's structural context, from ``item.provenance.header_path``). It's an
@@ -77,9 +77,9 @@ class EmbedStage(PipelineStage):
 
     def _get_embedder(self):
         if self._embedder is None:
-            from tarnrag.core.embedder import OnnxEmbedder
+            from tarnrag.core.embedder import build_embedder
 
-            self._embedder = OnnxEmbedder.create(
+            self._embedder = build_embedder(
                 self.config.embedding, self.config.embedding_dimension
             )
         return self._embedder
