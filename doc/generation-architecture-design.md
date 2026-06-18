@@ -12,9 +12,13 @@ the existing retrieval engine. This doc fixes the seams before any code, the way
 2. **Dual-mode, permanently.** Retrieval-only stays a first-class product (it is the thing getting a
    future **C++ port**). Generation is *additive* — `IngestionEngine` / `RetrievalEngine` keep working
    untouched; a new `GenerationEngine` sits beside them.
-3. **Strict one-way dependency: `generation → retrieval`, never the reverse.** No LLM / generation
-   concept may leak into `tarnrag/retrieval/` or `tarnrag/ingestion/`. This keeps the retrieval core
-   clean and portable to C++. (Enforced by code review + the import graph.)
+3. **Strict one-way dependency: `generation → retrieval`, never the reverse.** No *generation* concept
+   (reasoner, proof-tree assembly, …) may leak into `tarnrag/retrieval/` or `tarnrag/ingestion/`. The
+   retrieval core stays **self-contained + LLM-free *by default*** — which is what keeps it portable to
+   C++ and valuable as a retrieval-only product. The LLM itself is a shared **`core` `Resource`** (§2.2),
+   not a generation-only thing, so retrieval *may opt in* to it (an LLM-based `Router`) without ever
+   depending on `generation/`. "LLM-free" is the default, not a prohibition; an LLM-based component the
+   C++ port can equally implement (an LLM call is just HTTP — *not* a portability barrier).
 4. **Lean now, MOTHRAG-extensible later.** Build the simplest production pipeline that works, on the
    **Component framework**, so MOTHRAG-parity is reached later by *adding components + swapping the spec*,
    framework intact — exactly as "compare retrieval methods = swap the `RetrievalPipeline` spec" works
@@ -75,17 +79,22 @@ Boundary properties (apply regardless of binding mechanism):
 ### 2.2 The LLM seam
 
 The reader/decomposer LLM is a new **`Resource`** (an engine-built, injected model — exactly like
-`Embedder` / `CrossEncoder`, *not* a `Component`):
+`Embedder` / `CrossEncoder`, *not* a `Component`), and it lives in **`core/`** — *not* in `generation/`:
 
 ```python
-class LanguageModel(Resource):                          # tarnrag/generation/llm/
+class LanguageModel(Resource):                          # tarnrag/core/llm.py
     async def complete(self, prompt: Prompt) -> Completion: ...   # text in / text (+ optional structured) out
     def identity(self) -> str: ...
 ```
 
 Provider-pluggable behind the same selector pattern as `build_embedder` (Anthropic / OpenAI / …),
-lazily-loaded client, faked in tests by injection. Confined entirely to `generation/` — it never appears
-in retrieval or ingestion. (Default provider: TBD — Claude is the leading candidate given the stack.)
+lazily-loaded client, faked in tests by injection. (Default provider: TBD — Claude is the leading
+candidate given the stack.)
+
+It lives in `core/` (not `generation/`) so that **any** layer that opts in can inject it — generation's
+`Reasoner` (its primary consumer) **and** an optional LLM-based retrieval `Router`. A retrieval router
+using the LLM depends on `core` (`retrieval → core`), so the one-way `generation → retrieval` rule is
+untouched. Generation is the LLM's heavy user; retrieval's *default* path uses no LLM at all.
 
 ## 3. The generation pipeline (a container Component, sibling of `RetrievalPipeline`)
 
@@ -111,11 +120,19 @@ class GenerationPipeline(Component):
     # route → reason (retrieve↔read loop, budgeted) → ground-check → assemble proof tree
 ```
 
-**Where the `Router` lives — a deliberate call.** A *heuristic* router (query features → retrieval spec,
-no LLM) is C++-portable and benefits **retrieval-only** users too, so it belongs in the **retrieval
-layer** (a routing `RetrievalPipeline` variant), driven by the segmentation evidence we just built. An
-*LLM-based* router would instead be a generation-layer `Router`. Slice 1 ships the heuristic one in
-retrieval (dual-mode win, stays portable); the generation `Router` seam can defer to it.
+**Where the `Router` lives — a deliberate call.** The `Router` is a **retrieval-layer seam** (a routing
+`RetrievalPipeline` variant): query features → which retrieval strategy. Putting it there means
+**retrieval-only** users get routing too, and it's driven by the segmentation evidence we built. It admits
+two kinds of implementation:
+
+- a **heuristic** router (rules/features over the query) — LLM-free, deterministic, trivially portable;
+  **slice 1 ships this**, so the retrieval core stays LLM-free *by default*;
+- an **LLM-based** router (classify the query with the `core` `LanguageModel`) — an *optional* component
+  on the same seam. It depends on `core` (not `generation`), so the one-way rule holds; and the **C++
+  port can implement it too** — an LLM call is just HTTP, not a portability barrier. The reason to default
+  to the heuristic one is self-containedness / determinism / cost, **not** that LLM routing is unportable.
+
+(An LLM-based router is also reusable by the generation layer; the seam is shared.)
 
 ## 4. Evidence: proof trees on *our* provenance (the differentiator)
 
@@ -172,9 +189,11 @@ spec**, no framework change:
 | **ChainFilter** (OpenIE chain density) | a retrieval-layer `Reranker`/filter component |
 | **query-type gating** | the `Router` (slice 1) |
 
-The two retrieval-layer items (multi-query, chain-density) stay subject to the C++-portability constraint:
-they ship as **optional, Python-only** components or move into ingestion — never baked into the portable
-retrieval core.
+The two retrieval-layer items (multi-query, chain-density) are **optional components outside the lean
+default core** — they bring extra dependencies (an LLM call for query expansion; an OpenIE model for chain
+density). A deployment opts into them on the same seams, in *either* language (the C++ port can make those
+calls too); the default lean retrieval core omits them, and chain-extraction may instead move into
+ingestion. The invariant is "lean + self-contained *by default*," not "no external calls ever."
 
 ## 7. Build slices
 
