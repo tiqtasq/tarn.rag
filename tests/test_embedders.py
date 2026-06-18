@@ -3,12 +3,12 @@
 No network and no ONNX model needed — the pooling is tested on the numpy helper directly, and each API
 backend is driven through a real ``httpx`` client backed by ``httpx.MockTransport`` (so the full
 ``_http()`` / ``_post()`` path and the API key reaching the request headers are exercised, with a mock
-handler standing in for the network).
+handler standing in for the network). ``httpx`` is optional (the ``embeddings-api`` extra), so the
+mock-transport tests ``importorskip`` it; the pooling / selector / fingerprint tests don't need it.
 """
 
 import json
 
-import httpx
 import numpy as np
 import pytest
 
@@ -73,10 +73,13 @@ def test_provider_is_part_of_the_fingerprint():
 def _mock_client(handler):
     """A real httpx client whose transport runs ``handler(request) -> httpx.Response`` — no network, but
     the embedder's ``_http()`` / ``_post()`` (and the request it builds) run for real."""
+    import httpx
+
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 def test_openai_full_http_path():
+    httpx = pytest.importorskip("httpx")  # optional dep (the embeddings-api extra)
     cap = {}
 
     def handler(request):
@@ -97,6 +100,7 @@ def test_openai_full_http_path():
 
 
 def test_voyage_full_http_path():
+    httpx = pytest.importorskip("httpx")
     bodies = []
 
     def handler(request):
@@ -113,6 +117,7 @@ def test_voyage_full_http_path():
 
 
 def test_gemini_full_http_path():
+    httpx = pytest.importorskip("httpx")
     cap = {}
 
     def handler(request):
@@ -131,6 +136,7 @@ def test_gemini_full_http_path():
 
 
 def test_api_key_falls_back_to_env_var(monkeypatch):
+    httpx = pytest.importorskip("httpx")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
     cap = {}
 
