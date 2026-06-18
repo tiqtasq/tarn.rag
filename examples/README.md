@@ -23,6 +23,9 @@ python -m examples.part_i.example_01.retrieval   # query that store
 
 python -m examples.part_i.example_02.ingestion   # same, but the pipeline is configured from pipeline.json
 python -m examples.part_i.example_02.retrieval   # query the JSON-configured store
+
+python -m examples.part_i.example_03.ingestion   # index the corpus with a small-chunk pipeline
+python -m examples.part_i.example_03.evaluation  # compare retrieval methods on a labeled set (eval harness)
 ```
 
 Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
@@ -39,10 +42,14 @@ examples/
 │   ├── example_01/      # minimal ingestion + retrieval (the default pipeline)
 │   │   ├── ingestion.py
 │   │   └── retrieval.py
-│   └── example_02/      # the ingestion pipeline configured from JSON
-│       ├── pipeline.json
+│   ├── example_02/      # the ingestion pipeline configured from JSON
+│   │   ├── pipeline.json
+│   │   ├── ingestion.py
+│   │   └── retrieval.py
+│   └── example_03/      # comparing retrieval methods with the eval harness
+│       ├── evalset.json
 │       ├── ingestion.py
-│       └── retrieval.py
+│       └── evaluation.py
 └── part_ii/             # production / eval / fine-tuning (coming)
 ```
 
