@@ -16,22 +16,20 @@ needs a local model dir to run.
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 
 from tarnrag.core.config import RerankSettings
+from tarnrag.core.resource import Resource
 
 
-class CrossEncoder(ABC):
-    """Port for a cross-encoder relevance scorer — injected at query time like the ``Embedder``."""
+class CrossEncoder(Resource):
+    """Port for a cross-encoder relevance scorer — a ``Resource`` injected at query time like the
+    ``Embedder`` (a model the reranker consumes, not a composed ``Component``)."""
 
     @abstractmethod
     def score(self, query: str, passages: list[str]) -> list[float]:
         """One relevance score per passage for ``query`` (higher = more relevant), input order kept."""
-
-    @abstractmethod
-    def model_identity(self) -> str:
-        """A short id of the model (for eval transparency / result provenance)."""
 
 
 class OnnxCrossEncoder(CrossEncoder):
@@ -68,7 +66,8 @@ class OnnxCrossEncoder(CrossEncoder):
             max_length=rerank.max_seq_length,
         )
 
-    def model_identity(self) -> str:
+    def identity(self) -> str:
+        """The ``Resource`` identity — the model id (for provenance / eval / logging)."""
         return f"{self.model_id}@{self.revision}" if self.revision else self.model_id
 
     def _load(self):

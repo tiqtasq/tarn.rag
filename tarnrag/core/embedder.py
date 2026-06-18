@@ -16,17 +16,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
 from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.resource import Resource
 
 
-class Embedder(ABC):
+class Embedder(Resource):
     """
     Port for the shared embedding pipeline — the seam that lets ingestion and retrieval use one
-    model (and lets tests swap in a fake).
+    model (and lets tests swap in a fake). A ``Resource`` (an injected model, not a ``Component``).
     """
 
     @abstractmethod
@@ -103,6 +104,11 @@ class OnnxEmbedder(Embedder):
 
     def dim(self) -> int:
         return self.embedding_dim
+
+    def identity(self) -> str:
+        """The ``Resource`` identity — the model id (for provenance / eval / logging). Distinct from
+        ``config_fingerprint``, which hashes the full pipeline identity to gate index compatibility."""
+        return f"{self.model_id}@{self.revision}" if self.revision else self.model_id
 
     def _tokenizer_sha256(self) -> str:
         return hashlib.sha256(self.tokenizer_path.read_bytes()).hexdigest()

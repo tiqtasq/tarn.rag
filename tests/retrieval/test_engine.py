@@ -42,7 +42,7 @@ class _FakeCrossEncoder:
     def score(self, query, passages):
         return [self._by_text[p] for p in passages]
 
-    def model_identity(self):
+    def identity(self):
         return "fake-ce"
 
 
