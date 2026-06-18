@@ -16,8 +16,12 @@ from __future__ import annotations
 from abc import abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from tarnrag.core.resource import Resource
+
+if TYPE_CHECKING:
+    from tarnrag.core.config import LLMSettings
 
 
 @dataclass(frozen=True)
@@ -64,3 +68,14 @@ class StaticLanguageModel(LanguageModel):
     async def complete(self, prompt: Prompt) -> Completion:
         text = self._reply(prompt) if callable(self._reply) else self._reply
         return Completion(text=text, stop_reason="static")
+
+
+def build_language_model(llm: LLMSettings) -> LanguageModel:
+    """Select + build the ``LanguageModel`` for the configured provider — the LLM analog of
+    ``build_embedder``. The provider map is imported lazily (it pulls the optional SDK)."""
+    from tarnrag.core.llm_api import LLM_PROVIDERS
+
+    provider = LLM_PROVIDERS.get(llm.provider)
+    if provider is None:
+        raise ValueError(f"unknown LLM provider {llm.provider!r}; choose from {sorted(LLM_PROVIDERS)}")
+    return provider.create(llm)
