@@ -14,13 +14,13 @@ the runtime. Tests use a fake ``Embedder``.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
 from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.hashing import sha256_file, sha256_hex
 from tarnrag.core.resource import Resource
 
 
@@ -114,7 +114,7 @@ class OnnxEmbedder(Embedder):
         return f"{self.model_id}@{self.revision}" if self.revision else self.model_id
 
     def _tokenizer_sha256(self) -> str:
-        return hashlib.sha256(self.tokenizer_path.read_bytes()).hexdigest()
+        return sha256_file(self.tokenizer_path)
 
     def _identity(self) -> dict[str, Any]:
         """
@@ -142,7 +142,7 @@ class OnnxEmbedder(Embedder):
         recorded in ``index_meta`` — retrieval refuses to open an index whose fingerprint differs.
         """
         blob = json.dumps(self._identity(), sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+        return sha256_hex(blob)
 
     def embed_meta(self) -> dict[str, str]:
         """The ``index_meta`` embedding keys (incl. ``embedding_config_fingerprint``): the

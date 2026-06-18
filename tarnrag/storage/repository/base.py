@@ -35,6 +35,7 @@ from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
     Chunk,
     ChunkProvenance,
+    ChunkRecord,
     ChunkStore,
     Document,
     DocumentFacts,
@@ -738,6 +739,19 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             chunk_index=r["ordinal"],
             provenance=cp.row_to_provenance(r),
             metadata=self._chunk_metadata(r),
+        )
+
+    @staticmethod
+    def _to_chunk_record(row, methods, provenance: ChunkProvenance | None) -> ChunkRecord:
+        """Assemble a ``ChunkRecord`` from a hydrate row + its method refs + provenance — the one place
+        the field list lives. Both dialects' ``hydrate`` queries select the same column order:
+        (chunk_id, text, document_id, source_kind, standard_id, locator, license_class,
+        ai_grounding_allowed, available), so the positional row is shared."""
+        return ChunkRecord(
+            chunk_id=row[0], text=row[1], document_id=row[2], source_kind=row[3],
+            standard_id=row[4], locator=row[5], license_class=row[6],
+            ai_grounding_allowed=bool(row[7]), available=bool(row[8]),
+            methods=[(mid, ver) for mid, ver in methods], provenance=provenance,
         )
 
     async def _attach_tables(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:

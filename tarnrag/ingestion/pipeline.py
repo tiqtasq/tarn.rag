@@ -79,8 +79,7 @@ class MapperStage(PipelineStage):
 
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
         new_text, updates = self.map(item.content, item.metadata)
-        yield PipelineItem(content=new_text, metadata={**item.metadata, **updates},
-                           document=item.document, provenance=item.provenance)
+        yield item.derive(content=new_text, metadata={**item.metadata, **updates})
 
 
 class FilterStage(PipelineStage):
@@ -101,8 +100,7 @@ class FilterStage(PipelineStage):
     def process(self, item: PipelineItem) -> Iterator[PipelineItem]:
         if self.should_keep(item.content, item.metadata):
             new_text, updates = self.maybe_transform(item.content, item.metadata)
-            yield PipelineItem(content=new_text, metadata={**item.metadata, **updates},
-                               document=item.document, provenance=item.provenance)
+            yield item.derive(content=new_text, metadata={**item.metadata, **updates})
 
 
 class Pipeline(Component):

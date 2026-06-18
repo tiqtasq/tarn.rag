@@ -210,15 +210,7 @@ class SqliteRepository(DocumentRepository):
                         (cid,),
                     )
                 ).fetchall()
-                records.append(
-                    ChunkRecord(
-                        chunk_id=r[0], text=r[1], document_id=r[2], source_kind=r[3],
-                        standard_id=r[4], locator=r[5], license_class=r[6],
-                        ai_grounding_allowed=bool(r[7]), available=bool(r[8]),
-                        methods=[(m, v) for m, v in methods],
-                        provenance=prov.get(cid),
-                    )
-                )
+                records.append(self._to_chunk_record(r, methods, prov.get(cid)))
         return records
 
     # ----- §8 search-index hooks (vec0 + FTS5 live outside the FK graph) -----

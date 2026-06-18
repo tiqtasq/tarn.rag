@@ -14,6 +14,10 @@ Severity legend: **[H]** worth doing soon · **[M]** worth doing · **[L]** cosm
 
 ## 1. Duplication / DRY
 
+> **Update:** §1.1–1.5 are now **implemented** in this PR (all behavior-preserving; full suite green).
+> §1.6 is **won't-fix** (the two helpers serve different consumers and can't disagree in practice). The
+> per-item write-ups below are kept as the rationale/record.
+
 ### 1.1 [M] `hydrate` assembles `ChunkRecord` twice (sqlite vs postgres)
 `SqliteRepository.hydrate` (`storage/repository/sqlite.py:184`) and `PostgresRepository.hydrate`
 (`storage/repository/postgres.py:71`) are ~40 near-parallel lines each: select chunk⨝document, fetch
