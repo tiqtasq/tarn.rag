@@ -20,7 +20,7 @@ from tarnrag.core.config import DatabaseSettings, EmbeddingSettings, Settings
 EXAMPLES_DIR = Path(__file__).resolve().parent          # the examples/ package
 REPO_ROOT = EXAMPLES_DIR.parent
 DOCS_DIR = EXAMPLES_DIR / "docs"                        # holds named corpora (docs/corpus-1, ...)
-MODEL_DIR = REPO_ROOT / "models" / "all-MiniLM-L6-v2"   # local ONNX model + tokenizer
+MODEL_DIR = REPO_ROOT / "models" / "gte-small"          # local ONNX model + tokenizer
 
 
 def corpus(name: str) -> Path:
@@ -64,7 +64,7 @@ def base_settings(db_path: Path, **overrides: object) -> Settings:
         "_env_file": None,           # explicit config only — ignore any ambient .env, for reproducibility
         "MODE": "embedded",          # whole pipeline in-process (no Postgres / job queue)
         "ID_POLICY": "caller",       # examples supply their own stable document ids
-        "EMBEDDING_DIMENSION": 384,  # output dimension of all-MiniLM-L6-v2
+        "EMBEDDING_DIMENSION": 384,  # output dimension of gte-small (the default model)
         "database": DatabaseSettings(document_url=f"sqlite:///{db_path}"),
         "embedding": EmbeddingSettings(model_dir=str(MODEL_DIR)),
     }

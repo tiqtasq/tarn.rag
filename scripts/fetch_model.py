@@ -16,10 +16,10 @@ from pathlib import Path
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", default="Xenova/all-MiniLM-L6-v2")
+    ap.add_argument("--repo", default="Xenova/gte-small")  # ONNX export of thenlper/gte-small (the default)
     ap.add_argument("--model-file", default="onnx/model.onnx")
     ap.add_argument("--tokenizer-file", default="tokenizer.json")
-    ap.add_argument("--dest", default="./models/all-MiniLM-L6-v2")
+    ap.add_argument("--dest", default="./models/gte-small")
     args = ap.parse_args()
 
     from huggingface_hub import hf_hub_download

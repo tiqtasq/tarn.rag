@@ -54,9 +54,9 @@ class EmbeddingSettings(BaseModel):
     # fingerprint, so a locally-built index won't ``open()`` against an API embedder (and vice versa).
     provider: Literal["onnx", "openai", "voyage", "gemini"] = "onnx"
 
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"  # HF id (onnx) or API model name
+    model: str = "thenlper/gte-small"  # HF id (onnx) or API model name
     revision: str = ""  # onnx only (recorded in index_meta)
-    model_dir: str = "./models/all-MiniLM-L6-v2"  # onnx only: local model.onnx + tokenizer.json
+    model_dir: str = "./models/gte-small"  # onnx only: local model.onnx + tokenizer.json
     max_seq_length: int = 512  # onnx only
     # onnx pooling over the token outputs: 'mean' (encoder models: MiniLM/BGE/E5) | 'last' (decoder
     # models, e.g. Qwen3-Embedding — last non-pad token) | 'cls'. 'normalize': 'l2' | 'none'.
