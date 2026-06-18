@@ -13,8 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from tarnrag.core.exceptions import IngestionError
-from tarnrag.contracts import ChunkStore
-from tarnrag.contracts import PipelineItem
+from tarnrag.contracts import ChunkStore, PipelineItem
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.ingestion.batch import BatchContext, BatchCoordinator
 from tarnrag.ingestion.jobs import Batch, IngestionJob

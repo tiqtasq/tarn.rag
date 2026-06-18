@@ -27,9 +27,8 @@ import sqlite_vec
 from sqlalchemy import Text, event
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from tarnrag.contracts import Chunk, Embedding
+from tarnrag.contracts import Candidate, Chunk, ChunkRecord, Embedding
 from tarnrag.storage.repository.base import DocumentRepository
-from tarnrag.contracts import Candidate, ChunkRecord
 
 
 class SqliteRepository(DocumentRepository):
