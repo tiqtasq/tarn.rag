@@ -39,7 +39,7 @@ the existing retrieval engine. This doc fixes the seams before any code, the way
   tarnrag/generation/        ← NEW layer (Python; LLM orchestration)
         │  depends on (one-way)
         ▼
-  RetrievalService (port) ──┬── RetrievalEngine            (Python-native, today)
+  RetrievalEngineProtocol (port) ──┬── RetrievalEngine            (Python-native, today)
                             └── C++RetrievalAdapter         (later; wraps the binding)
         ▲
   tarnrag/retrieval/ , tarnrag/ingestion/   ← unchanged; C++-portable core
@@ -55,13 +55,13 @@ retrieval port and an LLM; it is consumed by tiqtasq's REST layer.
 Generation never imports the concrete `RetrievalEngine`. It depends on a `Protocol`:
 
 ```python
-class RetrievalService(Protocol):                       # in tarnrag/retrieval/ (retrieval owns it)
+class RetrievalEngineProtocol(Protocol):                       # in tarnrag/retrieval/ (retrieval owns it)
     async def search(self, query: Query) -> list[RetrievalResult]: ...
 ```
 
 - **Python deployment:** `RetrievalEngine` *structurally* satisfies it (its `search` already has this
   shape — see `retrieval/engine.py`). Zero new code.
-- **C++ deployment (later):** a thin Python `C++RetrievalAdapter(RetrievalService)` wraps the binding.
+- **C++ deployment (later):** a thin Python `C++RetrievalAdapter(RetrievalEngineProtocol)` wraps the binding.
 
 The data crossing this seam — `Query` (in) and `RetrievalResult` / `ChunkProvenance` (out) — is the
 **cross-language schema**. It must stay serializable, flat-ish, **versioned**, and free of Python-only
@@ -112,7 +112,7 @@ and `RetrievalPipeline`), built from a `GENERATION_PIPELINE` spec in `Settings.c
 ```python
 @dataclass
 class GenerationContext:        # the runtime resources, injected at call time
-    retrieval: RetrievalService # the port (Python engine or C++ adapter)
+    retrieval: RetrievalEngineProtocol # the port (Python engine or C++ adapter)
     llm: LanguageModel          # the reader/decomposer
 
 class GenerationPipeline(Component):
@@ -167,7 +167,7 @@ class GenerationResult:         # the GenerationEngine's output (and tiqtasq's R
 `GenerationEngine` — the library entry point, sibling of `IngestionEngine` / `RetrievalEngine`:
 
 ```python
-engine = await GenerationEngine.create(settings)        # builds RetrievalService + LanguageModel + the
+engine = await GenerationEngine.create(settings)        # builds RetrievalEngineProtocol + LanguageModel + the
                                                         # GenerationPipeline from GENERATION_PIPELINE
 result = await engine.answer(Query(text="…"))           # GenerationResult (answer + proof tree + evidence)
 ```
@@ -202,7 +202,7 @@ ingestion. The invariant is "lean + self-contained *by default*," not "no extern
    benefits retrieval-only. *(Foundation; the only slice touching retrieval.)*
 2. **Generation MVP.** The LLM `Resource` seam + `GenerationPipeline` + a single-hop `Reasoner` + the
    `EvidenceAssembler` (proof tree from provenance) + the `GenerationEngine` facade + the
-   `RetrievalService` port. End-to-end: question → answer + evidence. No multi-hop yet.
+   `RetrievalEngineProtocol` port. End-to-end: question → answer + evidence. No multi-hop yet.
 3. **Grounding + abstention.** A `GroundingChecker` that verifies the proof tree against the evidence,
    with a best-grounded fallback (γ-cap analog) and an optional refusal path.
 4. **Multi-hop.** An iterative `Reasoner` (retrieve ↔ read loop, budgeted) + question decomposition into
