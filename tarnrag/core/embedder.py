@@ -67,6 +67,7 @@ class OnnxEmbedder(Embedder):
         normalize: str = "l2",
         query_prefix: str = "",
         passage_prefix: str = "",
+        inject_header_path: bool = False,
         model_file: str = "model.onnx",
         tokenizer_file: str = "tokenizer.json",
     ):
@@ -79,6 +80,7 @@ class OnnxEmbedder(Embedder):
         self.normalize = normalize
         self.query_prefix = query_prefix
         self.passage_prefix = passage_prefix
+        self.inject_header_path = inject_header_path
         self.model_path = self.model_dir / model_file
         self.tokenizer_path = self.model_dir / tokenizer_file
         self._session = None
@@ -98,6 +100,7 @@ class OnnxEmbedder(Embedder):
             max_length=embedding.max_seq_length,
             query_prefix=embedding.query_prefix,
             passage_prefix=embedding.passage_prefix,
+            inject_header_path=embedding.inject_header_path,
         )
 
     # ---------------- identity (no model load needed) ----------------
@@ -130,6 +133,7 @@ class OnnxEmbedder(Embedder):
             "query_prefix": self.query_prefix,
             "passage_prefix": self.passage_prefix,
             "max_length": self.max_length,
+            "inject_header_path": self.inject_header_path,
         }
 
     def config_fingerprint(self) -> str:
@@ -155,6 +159,7 @@ class OnnxEmbedder(Embedder):
             "query_prefix": ident["query_prefix"],
             "passage_prefix": ident["passage_prefix"],
             "max_length": str(ident["max_length"]),
+            "inject_header_path": str(ident["inject_header_path"]),
             "embedding_config_fingerprint": self.config_fingerprint(),
         }
 

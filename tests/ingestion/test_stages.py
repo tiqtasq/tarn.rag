@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from tarnrag.contracts import PipelineItem
+from tarnrag.contracts import ChunkProvenance, PipelineItem
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import EmbeddingSettings
 from tarnrag.ingestion.pipeline import Pipeline
@@ -85,6 +85,30 @@ def test_embed_produces_embeddings_with_model_batching():
     assert all(e.dimension == 3 and e.model.endswith("all-MiniLM-L6-v2") for e in embs)
     # batch_size=2 over 3 items -> two embed calls (two-tier batching)
     assert len(stage._embedder.calls) == 2
+
+
+def test_embed_injects_header_path_when_enabled():
+    """inject_header_path prepends the chunk's section header path to its text before embedding;
+    queries are never injected and a chunk with no header path is embedded as-is."""
+    item = PipelineItem(
+        content="Wear gloves.", metadata={"chunk_id": "c0", "source_id": "s1"},
+        provenance=ChunkProvenance(content_hash="h", header_path=["Safety", "PPE"]),
+    )
+    on = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(inject_header_path=True)))
+    on._embedder = _FakeEmbedder()
+    list(on.process_batch([item]))
+    assert on._embedder.calls[-1] == ["Safety > PPE\nWear gloves."]  # header path prepended
+
+    off = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(inject_header_path=False)))
+    off._embedder = _FakeEmbedder()
+    list(off.process_batch([item]))
+    assert off._embedder.calls[-1] == ["Wear gloves."]  # default: content only
+
+    # Injection on, but a plain-text item with no header path -> content embedded unchanged.
+    on2 = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(inject_header_path=True)))
+    on2._embedder = _FakeEmbedder()
+    list(on2.process_batch([_item("plain text", chunk_id="c1", source_id="s1")]))
+    assert on2._embedder.calls[-1] == ["plain text"]
 
 
 def test_stage_built_from_dict_spec_via_component_factory():

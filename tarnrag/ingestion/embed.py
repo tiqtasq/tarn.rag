@@ -6,6 +6,11 @@ pipeline retrieval will replay for queries (§5.3). The embedding identity lives
 in sync with the retrieval-side embedder and its fingerprint). The embedder is built lazily via
 ``OnnxEmbedder.create``; tests inject a fake by setting ``stage._embedder`` (anything with
 ``embed_passages(list[str]) -> list[list[float]]``).
+
+When ``embedding.inject_header_path`` is set, each chunk's section header path is prepended to its
+text before embedding (the chunk's structural context, from ``item.provenance.header_path``). It's an
+embed-time index variant — queries are never injected — and rides the embedding fingerprint, so an
+injected index won't ``open()`` with a non-injecting embedder; the two are compared as separate indexes.
 """
 
 from __future__ import annotations
@@ -47,10 +52,11 @@ class EmbedStage(PipelineStage):
         (``chunk_id`` taken from ``metadata['chunk_id']``).
         """
         embedder = self._get_embedder()
+        inject = self.config.embedding.inject_header_path
         batch_size = self.config.embedding.batch_size
         for i in range(0, len(items), batch_size):
             sub = items[i : i + batch_size]
-            vectors = embedder.embed_passages([it.content for it in sub])
+            vectors = embedder.embed_passages([self._embed_text(it, inject) for it in sub])
             for it, vec in zip(sub, vectors):
                 yield Embedding(
                     chunk_id=it.metadata["chunk_id"],
@@ -59,6 +65,15 @@ class EmbedStage(PipelineStage):
                     dimension=len(vec),
                     metadata={"source_id": it.metadata.get("source_id")},
                 )
+
+    @staticmethod
+    def _embed_text(item: PipelineItem, inject: bool) -> str:
+        """The passage text to embed: the chunk content, optionally prefixed with its section header
+        path (header-path injection — gives short chunks their structural context). No-op when the
+        item has no header path (the plain-text path), so the content is always embedded."""
+        if inject and item.provenance and item.provenance.header_path:
+            return " > ".join(item.provenance.header_path) + "\n" + item.content
+        return item.content
 
     def _get_embedder(self):
         if self._embedder is None:
