@@ -99,5 +99,5 @@ class PostgresRepository(DocumentRepository):
                         select(m.c.method_id, m.c.method_version).where(m.c.chunk_id == cid)
                     )
                 ).all()
-                records.append(self._to_chunk_record(r, methods, prov.get(cid)))
+                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
         return records

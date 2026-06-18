@@ -18,7 +18,7 @@ from pydantic import Field
 
 from tarnrag.contracts import Element, ElementKind, PipelineItem, Span, StructuredDocument
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.hashing import content_hash
+from tarnrag.core.hashing import compute_content_hash
 from tarnrag.ingestion.chunking.chunker import Chunker
 from tarnrag.ingestion.pipeline import PipelineStage
 
@@ -77,5 +77,5 @@ class ChunkStage(PipelineStage):
                 if text
                 else []
             ),
-            content_hash=content_hash(text),
+            content_hash=compute_content_hash(text),
         )

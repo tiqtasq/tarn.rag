@@ -210,7 +210,7 @@ class SqliteRepository(DocumentRepository):
                         (cid,),
                     )
                 ).fetchall()
-                records.append(self._to_chunk_record(r, methods, prov.get(cid)))
+                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
         return records
 
     # ----- §8 search-index hooks (vec0 + FTS5 live outside the FK graph) -----

@@ -30,7 +30,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from tarnrag.core.config import DatabaseSettings
-from tarnrag.core.hashing import content_hash
+from tarnrag.core.hashing import compute_content_hash
 from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
     Chunk,
@@ -713,7 +713,7 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                     "ordinal": ch.chunk_index,
                     "text": ch.content,
                     **{col: derive(md) for col, derive in _CHUNK_PROVENANCE.items()},
-                    "content_hash": content_hash(ch.content),
+                    "content_hash": compute_content_hash(ch.content),
                     **cp.provenance_columns(prov, parent_chunk_id),
                 }
             )
@@ -742,7 +742,7 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         )
 
     @staticmethod
-    def _to_chunk_record(row, methods, provenance: ChunkProvenance | None) -> ChunkRecord:
+    def _create_chunk_record(row, methods, provenance: ChunkProvenance | None) -> ChunkRecord:
         """Assemble a ``ChunkRecord`` from a hydrate row + its method refs + provenance — the one place
         the field list lives. Both dialects' ``hydrate`` queries select the same column order:
         (chunk_id, text, document_id, source_kind, standard_id, locator, license_class,

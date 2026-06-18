@@ -74,7 +74,7 @@ class StructureAwareChunker(Chunker):
             self._flatten(node, chunks, None)
         if not chunks and document.text.strip():  # no usable structure → one leaf over the whole text
             chunks.append(
-                self._temp_chunk(
+                self._create_temp_chunk(
                     document.text,
                     element_ids=[e.id for e in document.elements],
                     geometry=[Span(start=0, end=len(document.text))],
@@ -155,7 +155,7 @@ class StructureAwareChunker(Chunker):
         flush()
         return leaves
 
-    def _temp_chunk(
+    def _create_temp_chunk(
         self,
         text: str,
         *,
@@ -184,7 +184,7 @@ class StructureAwareChunker(Chunker):
 
     def _leaf(self, text: str, elements: list[Element], header_path: list[str]) -> Chunker.TempChunk:
         """A level-0 leaf over ``elements``, packed into ``text``."""
-        return self._temp_chunk(
+        return self._create_temp_chunk(
             text,
             element_ids=[e.id for e in elements],
             geometry=self._union_geometry(elements),
@@ -196,7 +196,7 @@ class StructureAwareChunker(Chunker):
         """A table's atomic leaf — its markdown is the searchable text; the ``Table`` rides on the
         provenance so cell geometry + header addressing can be persisted (the table_cells slice)."""
         text = element.text or (element.table.markdown if element.table else "")
-        return self._temp_chunk(
+        return self._create_temp_chunk(
             text,
             element_ids=[element.id],
             geometry=self._union_geometry([element]),
@@ -211,7 +211,7 @@ class StructureAwareChunker(Chunker):
         size = self.config.max_chars
         text = element.text
         return [
-            self._temp_chunk(
+            self._create_temp_chunk(
                 text[i : i + size],
                 element_ids=[element.id],
                 geometry=self._union_geometry([element]),
@@ -231,7 +231,7 @@ class StructureAwareChunker(Chunker):
         head_annotations = list(heading.annotations) if heading else []
         texts = ([heading.text] if heading else []) + [c.text for c in children]
         text = _JOIN.join(t for t in texts if t)
-        return self._temp_chunk(
+        return self._create_temp_chunk(
             text,
             element_ids=head_ids + [eid for c in children for eid in c.provenance.source_element_ids],
             geometry=head_geometry + [s for c in children for s in c.provenance.geometry],
