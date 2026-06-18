@@ -1,15 +1,16 @@
 """The shared embedding pipeline — used by ingestion (passages) and retrieval (queries).
 
 Writing it once is what guarantees the §5.3 requirement that retrieval replays *exactly* the
-pipeline ingestion used. The pipeline is: prefix → tokenize (HF ``tokenizers``) → ONNX Runtime
-(CPU) → mean-pool (attention mask) → L2-normalize. Its identity (model id+revision, dim,
-tokenizer sha256, pooling, normalize, prefixes, max_length) is summarized by
-``config_fingerprint()`` and recorded in ``index_meta``; retrieval refuses to ``open()`` on
-mismatch.
+pipeline ingestion used. The backend is **pluggable** behind the ``Embedder`` port (a ``Resource``):
+``OnnxEmbedder`` (local ONNX, the default — prefix → tokenize → ONNX → pool → normalize) and the HTTP
+API embedders (OpenAI / Voyage / Gemini, in ``embedder_api``). ``build_embedder`` selects one from
+``EmbeddingSettings.provider``; the embedder's identity (provider/model/dim/… for an API backend;
+model/tokenizer/pooling/… for ONNX) is summarized by ``config_fingerprint()`` and recorded in
+``index_meta``, so retrieval refuses to ``open()`` an index built by a different embedder.
 
-Heavy deps (``onnxruntime``, ``tokenizers``) are imported lazily so this module — and
-``config_fingerprint()``/``embed_meta()`` — work without the model loaded; only ``embed`` needs
-the runtime. Tests use a fake ``Embedder``.
+Heavy deps (``onnxruntime`` / ``tokenizers`` for ONNX; ``httpx`` for the API backends) are imported
+lazily, so this module — and ``config_fingerprint()`` / ``embed_meta()`` — work without them. Tests use
+a fake ``Embedder``.
 """
 
 from __future__ import annotations
@@ -47,6 +48,13 @@ class Embedder(Resource):
     @abstractmethod
     def embed_meta(self) -> dict[str, str]:
         """The ``index_meta`` embedding keys (incl. ``embedding_config_fingerprint``)."""
+
+    @staticmethod
+    def _fingerprint(identity: dict[str, Any]) -> str:
+        """Stable sha256 of an embedder's identity dict — the ``embedding_config_fingerprint`` recorded
+        in ``index_meta`` and validated at ``open()``. Shared by every backend so the gate is uniform."""
+        blob = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+        return sha256_hex(blob)
 
 
 class OnnxEmbedder(Embedder):
@@ -98,6 +106,8 @@ class OnnxEmbedder(Embedder):
             revision=embedding.revision,
             embedding_dim=embedding_dimension,
             max_length=embedding.max_seq_length,
+            pooling=embedding.pooling,
+            normalize=embedding.normalize,
             query_prefix=embedding.query_prefix,
             passage_prefix=embedding.passage_prefix,
             inject_header_path=embedding.inject_header_path,
@@ -141,8 +151,7 @@ class OnnxEmbedder(Embedder):
         Stable hash of the pipeline identity (model/tokenizer/pooling/normalize/prefixes/…),
         recorded in ``index_meta`` — retrieval refuses to open an index whose fingerprint differs.
         """
-        blob = json.dumps(self._identity(), sort_keys=True, separators=(",", ":"))
-        return sha256_hex(blob)
+        return self._fingerprint(self._identity())
 
     def embed_meta(self) -> dict[str, str]:
         """The ``index_meta`` embedding keys (incl. ``embedding_config_fingerprint``): the
@@ -185,7 +194,7 @@ class OnnxEmbedder(Embedder):
     def _embed(self, texts: list[str], prefix: str) -> list[list[float]]:
         """
         Run one batch through the pipeline: tokenize (with ``prefix``) → ONNX forward →
-        mean-pool over the attention mask → L2-normalize. One vector per input.
+        pool (``self.pooling``) → normalize (``self.normalize``). One vector per input.
         """
         if not texts:
             return []
@@ -200,13 +209,58 @@ class OnnxEmbedder(Embedder):
             feed["token_type_ids"] = np.array([e.type_ids for e in encs], dtype=np.int64)
 
         out = self._session.run(None, feed)[0]  # [B, L, dim]
-        m = mask[..., None].astype(np.float32)
-        pooled = (out * m).sum(axis=1) / np.clip(m.sum(axis=1), 1e-9, None)  # mean pool
-        norms = np.clip(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12, None)
-        return (pooled / norms).astype(np.float32).tolist()  # L2
+        return self._normalize(self._pool(out, mask)).tolist()
+
+    def _pool(self, out, mask):
+        """Pool the token outputs ``[B, L, dim]`` to ``[B, dim]`` per ``self.pooling``: ``mean`` over the
+        attention mask (encoder models), ``last`` non-pad token (decoder embedders, e.g. Qwen), or
+        ``cls`` (first token)."""
+        import numpy as np
+
+        if self.pooling == "mean":
+            m = mask[..., None].astype(np.float32)
+            return (out * m).sum(axis=1) / np.clip(m.sum(axis=1), 1e-9, None)
+        if self.pooling == "cls":
+            return out[:, 0]
+        if self.pooling == "last":  # last non-pad token (right-padded ⇒ index = count(mask) − 1)
+            last = mask.sum(axis=1).astype(np.int64) - 1
+            return out[np.arange(out.shape[0]), last]
+        raise ValueError(f"unknown pooling {self.pooling!r} (use 'mean', 'last', or 'cls')")
+
+    def _normalize(self, pooled):
+        """Normalize pooled vectors per ``self.normalize``: ``l2`` (unit length — cosine-equivalent KNN)
+        or ``none``."""
+        import numpy as np
+
+        if self.normalize == "l2":
+            norms = np.clip(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12, None)
+            return (pooled / norms).astype(np.float32)
+        if self.normalize == "none":
+            return pooled.astype(np.float32)
+        raise ValueError(f"unknown normalize {self.normalize!r} (use 'l2' or 'none')")
 
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
         return self._embed(texts, self.passage_prefix)
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed([text], self.query_prefix)[0]
+
+
+def build_embedder(embedding: EmbeddingSettings, embedding_dimension: int) -> Embedder:
+    """Build the configured embedder (a ``Resource``) from the embedding settings slice + the
+    cross-cutting ``embedding_dimension``. Local ``OnnxEmbedder`` by default; the HTTP API providers
+    (``openai`` / ``voyage`` / ``gemini``) are lazily imported (the ``embeddings-api`` extra). The two
+    construction sites — the engine and the Embed stage — both go through here, so a pipeline spec and
+    the retrieval side can't disagree on the backend."""
+    if embedding.provider == "onnx":
+        return OnnxEmbedder.create(embedding, embedding_dimension)
+    from tarnrag.core.embedder_api import EMBEDDER_PROVIDERS
+
+    try:
+        impl = EMBEDDER_PROVIDERS[embedding.provider]
+    except KeyError:
+        raise ValueError(
+            f"unknown embedding provider {embedding.provider!r}; "
+            f"choose 'onnx' or one of {sorted(EMBEDDER_PROVIDERS)}"
+        ) from None
+    return impl.create(embedding, embedding_dimension)

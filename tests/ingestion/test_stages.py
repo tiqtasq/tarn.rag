@@ -82,7 +82,7 @@ def test_embed_produces_embeddings_with_model_batching():
     ]
     embs = list(stage.process_batch(items))
     assert [e.chunk_id for e in embs] == ["c0", "c1", "c2"]
-    assert all(e.dimension == 3 and e.model.endswith("all-MiniLM-L6-v2") for e in embs)
+    assert all(e.dimension == 3 and e.model.endswith("gte-small") for e in embs)
     # batch_size=2 over 3 items -> two embed calls (two-tier batching)
     assert len(stage._embedder.calls) == 2
 

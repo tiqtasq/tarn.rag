@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Self
 
 from tarnrag.core.config import Settings
-from tarnrag.core.embedder import Embedder, OnnxEmbedder
+from tarnrag.core.embedder import Embedder, build_embedder
 from tarnrag.storage.repository import DocumentRepository
 
 
@@ -35,7 +35,7 @@ class Engine:
         repository = await DocumentRepository.create(
             settings.database, settings.EMBEDDING_DIMENSION
         )
-        embedder = OnnxEmbedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
+        embedder = build_embedder(settings.embedding, settings.EMBEDDING_DIMENSION)
         return repository, embedder
 
     async def aclose(self) -> None:

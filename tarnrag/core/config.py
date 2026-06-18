@@ -49,18 +49,32 @@ class EmbeddingSettings(BaseModel):
     is top-level — it's cross-cutting (index + repo must match it).
     """
 
-    model: str = "sentence-transformers/all-MiniLM-L6-v2"  # model id (recorded in index_meta)
-    revision: str = ""
-    model_dir: str = "./models/all-MiniLM-L6-v2"  # local model.onnx + tokenizer.json (offline)
-    max_seq_length: int = 512
-    query_prefix: str = ""  # non-empty for asymmetric models (BGE/E5)
-    passage_prefix: str = ""
-    batch_size: int = 32  # embed-stage batching
+    # Backend: 'onnx' = local ONNX (default, offline); 'openai' / 'voyage' / 'gemini' = HTTP embedding
+    # APIs (the ``embeddings-api`` extra). The provider + model + dimension are part of the index
+    # fingerprint, so a locally-built index won't ``open()`` against an API embedder (and vice versa).
+    provider: Literal["onnx", "openai", "voyage", "gemini"] = "onnx"
+
+    model: str = "thenlper/gte-small"  # HF id (onnx) or API model name
+    revision: str = ""  # onnx only (recorded in index_meta)
+    model_dir: str = "./models/gte-small"  # onnx only: local model.onnx + tokenizer.json
+    max_seq_length: int = 512  # onnx only
+    # onnx pooling over the token outputs: 'mean' (encoder models: MiniLM/BGE/E5) | 'last' (decoder
+    # models, e.g. Qwen3-Embedding — last non-pad token) | 'cls'. 'normalize': 'l2' | 'none'.
+    pooling: str = "mean"
+    normalize: str = "l2"
+    query_prefix: str = ""  # prepended to queries (asymmetric models: BGE/E5/Qwen)
+    passage_prefix: str = ""  # prepended to passages
+    batch_size: int = 32  # embed-stage / API-request batching
     # Header-path injection: prepend each chunk's section header path to its text before embedding
     # (the embed stage applies it; queries are never injected). Part of the embedding identity, so an
     # injected index has a distinct fingerprint and won't ``open()`` with a non-injecting embedder —
     # the two are compared by building separate indexes.
     inject_header_path: bool = False
+
+    # API providers only (provider != 'onnx'):
+    api_key: str = ""  # falls back to the provider's standard env var (OPENAI_API_KEY / VOYAGE_API_KEY / GEMINI_API_KEY)
+    api_base_url: str = ""  # falls back to the provider's default endpoint
+    api_timeout: float = 30.0
 
 
 class RerankSettings(BaseModel):

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-MODEL_DIR = Path("models/all-MiniLM-L6-v2")
+MODEL_DIR = Path("models/gte-small")
 pytestmark = pytest.mark.skipif(
     not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
 )
@@ -18,7 +18,7 @@ def _embedder():
     from tarnrag.core.embedder import OnnxEmbedder
 
     return OnnxEmbedder(
-        str(MODEL_DIR), model_id="sentence-transformers/all-MiniLM-L6-v2", embedding_dim=384
+        str(MODEL_DIR), model_id="thenlper/gte-small", embedding_dim=384
     )
 
 
@@ -59,7 +59,7 @@ def test_inject_header_path_changes_fingerprint():
 
     base = _embedder()  # inject_header_path defaults False
     injected = OnnxEmbedder(
-        str(MODEL_DIR), model_id="sentence-transformers/all-MiniLM-L6-v2",
+        str(MODEL_DIR), model_id="thenlper/gte-small",
         embedding_dim=384, inject_header_path=True,
     )
     # The injection flag is part of the embedding identity -> a distinct index fingerprint, so an

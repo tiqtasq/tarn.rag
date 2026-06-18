@@ -10,7 +10,8 @@ def test_defaults_and_groups():
     s = Settings(_env_file=None)  # ignore the local .env, exercise defaults
     assert s.MODE == "embedded"
     assert s.EMBEDDING_DIMENSION == 384
-    assert s.embedding.model.startswith("sentence-transformers")
+    assert s.embedding.provider == "onnx"  # local ONNX by default
+    assert s.embedding.model == "thenlper/gte-small"
     assert s.database.document_url.startswith("sqlite")  # zero-config embedded default
 
 
