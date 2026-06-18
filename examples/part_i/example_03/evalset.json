@@ -1,5 +1,8 @@
 [
-  {"text": "How do I check a storage tank for corrosion?", "relevant": ["corrosion", "shell thickness"]},
-  {"text": "Which animal is native to Western Australia?", "relevant": ["quokka", "Western Australia"]},
-  {"text": "How do I maintain a centrifugal pump?", "relevant": ["mechanical seal", "bearing lubrication"]}
+  {"text": "How do I keep a big metal container from rusting over time?", "relevant": ["corrosion"], "query_type": "semantic"},
+  {"text": "Which marsupial is famous for looking like it is grinning?", "relevant": ["quokka"], "query_type": "semantic"},
+  {"text": "How should I service a rotary fluid machine before powering it up?", "relevant": ["mechanical seal", "bearing lubrication"], "query_type": "semantic"},
+  {"text": "shell thickness ultrasonic testing", "relevant": ["ultrasonic", "shell thickness"], "query_type": "lexical"},
+  {"text": "quokka Western Australia macropod", "relevant": ["quokka", "Western Australia"], "query_type": "lexical"},
+  {"text": "mechanical seal bearing lubrication shaft alignment", "relevant": ["mechanical seal", "bearing lubrication"], "query_type": "lexical"}
 ]

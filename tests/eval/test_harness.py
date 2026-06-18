@@ -1,8 +1,18 @@
 """The eval harness: sweep retrieval-pipeline specs over a labeled query set against one index."""
 
+import pytest
+
 from tarnrag.contracts import Chunk, Document, Embedding
 from tarnrag.core.components import ComponentFactory
-from tarnrag.eval import EvalQuery, EvalSet, evaluate_pipeline, format_reports, sweep
+from tarnrag.eval import (
+    EvalQuery,
+    EvalSet,
+    by_query_type,
+    evaluate_pipeline,
+    format_reports,
+    format_segmented,
+    sweep,
+)
 from tarnrag.retrieval import RetrievalContext, RetrievalPipeline
 
 
@@ -65,3 +75,43 @@ async def test_evaluate_pipeline_scores_a_miss(repo):
     report = await evaluate_pipeline(pipeline, ctx, evalset, k=5)
     assert report.hit_at_k == 0.0 and report.mrr == 0.0 and report.ndcg_at_k == 0.0
     assert report.per_query[0].relevances and not any(report.per_query[0].relevances)
+
+
+def test_evalset_loads_query_type():
+    es = EvalSet.from_records([
+        {"text": "q1", "relevant": ["a"], "query_type": "semantic"},
+        {"text": "q2", "relevant": ["b"]},  # unlabeled -> ""
+    ])
+    assert es.queries[0].query_type == "semantic"
+    assert es.queries[1].query_type == ""
+
+
+async def test_segments_metrics_by_query_type(repo):
+    await _index(repo)
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder())
+    evalset = EvalSet([
+        EvalQuery(text="tank inspection", relevant=["tank"], query_type="hits"),     # sparse finds the tank chunk
+        EvalQuery(text="quokka marsupial", relevant=["tank"], query_type="misses"),  # sparse finds quokka -> no 'tank'
+    ])
+    report = await evaluate_pipeline(
+        ComponentFactory.get().create_as(_SPARSE, RetrievalPipeline), ctx, evalset, k=5
+    )
+    seg = by_query_type(report)
+    assert set(seg) == {"hits", "misses"}
+    assert seg["hits"].hit_at_k == 1.0 and seg["misses"].hit_at_k == 0.0  # the split the segmentation reveals
+    assert seg["hits"].n == 1 and seg["misses"].n == 1
+    assert report.hit_at_k == 0.5  # the overall report is the mean over both types
+
+
+async def test_format_segmented_table(repo):
+    await _index(repo)
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder())
+    evalset = EvalSet([
+        EvalQuery(text="tank inspection", relevant=["tank"], query_type="lexical"),
+        EvalQuery(text="quokka marsupial", relevant=["quokka"], query_type="lexical"),
+    ])
+    reports = await sweep({"dense": _DENSE, "sparse": _SPARSE}, ctx, evalset, k=5)
+    table = format_segmented(reports, metric="hit_at_k")
+    assert "lexical" in table and "all" in table and "dense" in table and "sparse" in table
+    with pytest.raises(ValueError, match="unknown metric"):
+        format_segmented(reports, metric="bogus")
