@@ -31,6 +31,19 @@ python -m examples.part_i.example_03.evaluation  # compare retrieval methods on 
 Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
 no `PYTHONPATH` or `sys.path` tweaks. (Directory names use underscores because they are module names.)
 
+## Interactive console
+
+For an interactive session instead of scripts, start the REPL with one JSON config:
+
+```bash
+python -m tarnrag.console examples/console.config.json
+```
+
+Then `ingest <path>` (or a directory; re-ingesting a file replaces it), `docs`, `delete <id>`,
+`retrieve <query>` (passages only), and `ask <query>` (retrieval + generation — answer + proof tree; needs
+`ANTHROPIC_API_KEY`). The config is a `Settings` document: the database, embedding, and llm settings plus
+the retrieval/generation pipeline specs under `components`.
+
 ## Layout
 
 ```

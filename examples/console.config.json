@@ -1,0 +1,29 @@
+{
+  "MODE": "embedded",
+  "EMBEDDING_DIMENSION": 384,
+  "ID_POLICY": "caller",
+  "embedding": {"model_dir": "./models/gte-small"},
+  "database": {"document_url": "sqlite:///./console.db"},
+  "llm": {"provider": "anthropic", "model": "claude-sonnet-4-6"},
+  "components": {
+    "retrieval_pipeline": {
+      "class_name": "retrieval_pipeline",
+      "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+      "fuser": {"class_name": "rrf"}
+    },
+    "generation_pipeline": {
+      "class_name": "generation_pipeline",
+      "reasoner": {"class_name": "single_hop", "top_k": 4},
+      "assembler": {"class_name": "provenance"},
+      "grounding_checker": {
+        "class_name": "cascading_grounding",
+        "checkers": [
+          {"class_name": "heuristic_grounding"},
+          {"class_name": "llm_grounding"}
+        ]
+      },
+      "min_grounded": 0.5,
+      "abstain": true
+    }
+  }
+}
