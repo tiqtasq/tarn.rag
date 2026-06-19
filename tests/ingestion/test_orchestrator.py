@@ -5,8 +5,8 @@ from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.engine.jobs import Batch
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import MapperStage
-from tarnrag.ingestion.queue import JobEnqueuer
-from tarnrag.ingestion.result_sink import (
+from tarnrag.ingestion.engine.queue import JobEnqueuer
+from tarnrag.ingestion.engine.result_sink import (
     FinalizationOutcome,
     PassthroughSink,
     ResultSink,

@@ -1,7 +1,7 @@
 import hashlib
 
 from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, PipelineItem
-from tarnrag.ingestion.result_sink import (
+from tarnrag.ingestion.engine.result_sink import (
     ChunkResultSink,
     DocumentResultSink,
     EmbeddingResultSink,

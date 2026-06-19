@@ -34,7 +34,7 @@ from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.queue import (
+from tarnrag.ingestion.engine.queue import (
     InMemoryJobQueue,
     JobConsumer,
     JobEnqueuer,
@@ -42,7 +42,7 @@ from tarnrag.ingestion.queue import (
 )
 from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 from tarnrag.ingestion.engine.worker import IngestionWorker
-from tarnrag.ingestion.result_sink import create_sink_registry
+from tarnrag.ingestion.engine.result_sink import create_sink_registry
 
 logger = logging.getLogger(__name__)
 

@@ -8,8 +8,8 @@ from tarnrag.contracts import build_index_meta
 from tarnrag.contracts import PipelineItem
 from tarnrag.retrieval import Query, RetrievalEngine
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
-from tarnrag.ingestion.queue import InMemoryJobQueue
-from tarnrag.ingestion.result_sink import create_sink_registry
+from tarnrag.ingestion.engine.queue import InMemoryJobQueue
+from tarnrag.ingestion.engine.result_sink import create_sink_registry
 from tarnrag.ingestion.components.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
 from tarnrag.core.engine.config import EmbeddingSettings

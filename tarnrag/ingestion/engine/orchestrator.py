@@ -17,8 +17,8 @@ from tarnrag.contracts import ChunkStore, PipelineItem
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.ingestion.batch import BatchContext, BatchCoordinator
 from tarnrag.ingestion.engine.jobs import Batch, IngestionJob
-from tarnrag.ingestion.queue import JobEnqueuer
-from tarnrag.ingestion.result_sink import ResultSink
+from tarnrag.ingestion.engine.queue import JobEnqueuer
+from tarnrag.ingestion.engine.result_sink import ResultSink
 
 logger = logging.getLogger(__name__)
 

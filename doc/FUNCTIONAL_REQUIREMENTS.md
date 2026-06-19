@@ -473,7 +473,7 @@ propagate (they merge metadata): `DocumentResultSink` writes `metadata['doc_id']
 so the FK chain (chunk→doc, embedding→chunk) resolves without relying on `item.id`
 (stages create fresh items) or on the repository honoring caller-supplied ids.
 
-### Interface + sinks (`tarnrag/ingestion/result_sink.py`)
+### Interface + sinks (`tarnrag/ingestion/engine/result_sink.py`)
 
 `ResultSink` (ABC): `submit(results)` + `close()` are sync (buffer-only, called by the
 worker); `async finalize() -> FinalizationOutcome(persisted, detail)` is called by the
@@ -492,7 +492,7 @@ re-exported from `tarnrag/ingestion/factories.py`).
 
 ---
 
-## Job Queue (`tarnrag/ingestion/queue.py`)
+## Job Queue (`tarnrag/ingestion/engine/queue.py`)
 
 pgQueuer owns the queue (claiming with `FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`,
 retries, dead-lettering, concurrency) — we hand-roll none of that. The surface is
