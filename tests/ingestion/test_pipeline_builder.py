@@ -7,14 +7,14 @@ import pytest
 
 from tarnrag.core.components import Component
 from tarnrag.core.components.registry import UnknownTagError
-from tarnrag.core.config import (
+from tarnrag.core.engine.config import (
     INGESTION_PIPELINE,
     EmbeddingSettings,
     Settings,
 )
 from tarnrag.ingestion import IngestionEngine
-from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.embed import EmbedStage
+from tarnrag.ingestion.pipeline.pipeline import Pipeline
+from tarnrag.ingestion.pipeline.embed import EmbedStage
 
 
 def _settings(**kwargs) -> Settings:

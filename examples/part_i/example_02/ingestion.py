@@ -26,7 +26,7 @@ import json
 from pathlib import Path
 
 from tarnrag import DocumentStatus, IngestionEngine
-from tarnrag.core.config import INGESTION_PIPELINE
+from tarnrag.core.engine.config import INGESTION_PIPELINE
 
 from examples.common import base_settings, corpus, example_db, require_model
 

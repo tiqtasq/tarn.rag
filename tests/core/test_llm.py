@@ -8,9 +8,9 @@ import types
 
 import pytest
 
-from tarnrag.core.config import LLMSettings
-from tarnrag.core.llm import LanguageModel, Prompt, StaticLanguageModel
-from tarnrag.core.llm_api import AnthropicLanguageModel
+from tarnrag.core.engine.config import LLMSettings
+from tarnrag.core.resources.llm import LanguageModel, Prompt, StaticLanguageModel
+from tarnrag.core.resources.llm_api import AnthropicLanguageModel
 
 
 def _fake_response(text, *, stop="end_turn", in_tok=10, out_tok=3):

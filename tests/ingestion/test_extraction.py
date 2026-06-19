@@ -5,7 +5,7 @@ import importlib.util
 import pytest
 
 from tarnrag.contracts import ElementKind
-from tarnrag.ingestion.extraction import (
+from tarnrag.ingestion.components.extraction import (
     HtmlExtractor,
     MarkdownExtractor,
     PlainTextExtractor,

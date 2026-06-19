@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 
 from tarnrag.contracts import ElementKind, StructuredDocument
-from tarnrag.ingestion.extraction import Source
-from tarnrag.ingestion.extraction.docling_pdf import DoclingExtractor
+from tarnrag.ingestion.components.extraction import Source
+from tarnrag.ingestion.components.extraction.docling_pdf import DoclingExtractor
 
 requires_docling_core = pytest.mark.skipif(
     importlib.util.find_spec("docling_core") is None, reason="docling-core not installed"

@@ -3,13 +3,13 @@ from pydantic import ValidationError
 
 from tarnrag.contracts import ChunkProvenance, PipelineItem
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.config import EmbeddingSettings
-from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.chunking.chunk import ChunkStage
-from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
-from tarnrag.ingestion.embed import EmbedStage
-from tarnrag.ingestion.enrichment.enrich import EnrichStage
-from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
+from tarnrag.core.engine.config import EmbeddingSettings
+from tarnrag.ingestion.pipeline.pipeline import Pipeline
+from tarnrag.ingestion.components.chunking.chunk import ChunkStage
+from tarnrag.ingestion.pipeline.clean_normalize import CleanAndNormalizeStage
+from tarnrag.ingestion.pipeline.embed import EmbedStage
+from tarnrag.ingestion.components.enrichment.enrich import EnrichStage
+from tarnrag.ingestion.components.extraction.load_parse import LoadAndParseStage
 
 
 def _item(content, **meta):
@@ -55,7 +55,7 @@ def test_chunk_splits_and_indexes():
 
 def test_chunk_validation():
     # The size/overlap validation lives on the recursive chunker's Config (pydantic).
-    from tarnrag.ingestion.chunking.recursive import RecursiveCharacterChunker
+    from tarnrag.ingestion.components.chunking.recursive import RecursiveCharacterChunker
 
     with pytest.raises(ValidationError):
         RecursiveCharacterChunker.Config(chunk_size=0)

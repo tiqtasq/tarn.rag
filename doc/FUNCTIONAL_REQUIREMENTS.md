@@ -243,7 +243,7 @@ inheritance.
 ### Model contracts
 
 Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/contracts/dtos.py`,
-`tarnrag/ingestion/jobs.py`.
+`tarnrag/ingestion/engine/jobs.py`.
 
 - **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`.
 - **`Document`**: `id`, `content`, `metadata` (carries `source_id`, the idempotency key).
@@ -422,7 +422,7 @@ CREATE INDEX idx_job_status_document ON job_status (document_id);
 
 ## Pipeline & Stages
 
-### Stage base classes (`tarnrag/ingestion/pipeline.py`)
+### Stage base classes (`tarnrag/ingestion/pipeline/pipeline.py`)
 
 ABCs, and config-driven **`Component`s** (`tarnrag/core/components`): each stage declares a typed
 nested `Config` (a pydantic model that pins a `class_name` tag plus the stage's fields) and is
@@ -473,7 +473,7 @@ propagate (they merge metadata): `DocumentResultSink` writes `metadata['doc_id']
 so the FK chain (chunk→doc, embedding→chunk) resolves without relying on `item.id`
 (stages create fresh items) or on the repository honoring caller-supplied ids.
 
-### Interface + sinks (`tarnrag/ingestion/result_sink.py`)
+### Interface + sinks (`tarnrag/ingestion/engine/result_sink.py`)
 
 `ResultSink` (ABC): `submit(results)` + `close()` are sync (buffer-only, called by the
 worker); `async finalize() -> FinalizationOutcome(persisted, detail)` is called by the
@@ -492,7 +492,7 @@ re-exported from `tarnrag/ingestion/factories.py`).
 
 ---
 
-## Job Queue (`tarnrag/ingestion/queue.py`)
+## Job Queue (`tarnrag/ingestion/engine/queue.py`)
 
 pgQueuer owns the queue (claiming with `FOR UPDATE SKIP LOCKED`, `LISTEN/NOTIFY`,
 retries, dead-lettering, concurrency) — we hand-roll none of that. The surface is
@@ -507,7 +507,7 @@ small `job_status` projection in the repository.
 > to `PgQueuerJobQueue` and should be confirmed against the pinned pgQueuer version.
 
 `JobEnqueuer` (ABC): `enqueue(job)`. `JobConsumer` (ABC): `set_handler(handler)`, `run()`.
-The handler receives a **`Batch`** (`ingestion/jobs.py`) — a homogeneous unit whose jobs
+The handler receives a **`Batch`** (`ingestion/engine/jobs.py`) — a homogeneous unit whose jobs
 all share one `stage_name`. Forming the Batch is the **consumer's** responsibility (it's what
 makes the worker a dead-simple "one batch → one stage" handler); `Batch`'s constructor
 enforces homogeneity (and rejects empties), so a mixed-stage claim fails loudly rather than
@@ -529,7 +529,7 @@ implement both ports:
 ## Orchestration & Workers
 
 **Handshake (BatchContext).** The worker↔orchestration handshake is a per-batch **unit of
-work** (`tarnrag/ingestion/batch.py`), not direct orchestrator calls. The worker
+work** (`tarnrag/ingestion/engine/batch.py`), not direct orchestrator calls. The worker
 depends only on two ABCs: `BatchCoordinator.begin_batch(batch) -> BatchContext`
 (records 'processing', picks the per-stage sink by `batch.stage_name`) and `BatchContext` — `submit(results)`,
 `async fail(error)`, and `async complete()` (finalize + persist + record + fan-out;
@@ -561,7 +561,7 @@ consumer → requeue (recovery, D5).
 The public surface is two engines, each built from `Settings` via a `create()` factory; jobs
 never leak into the contract.
 
-**`IngestionEngine`** (`tarnrag/ingestion/engine.py`) — document-centric producer/query facade.
+**`IngestionEngine`** (`tarnrag/ingestion/engine/engine.py`) — document-centric producer/query facade.
 - `await IngestionEngine.create(settings=None)` wires everything per `Settings.MODE`
   (`embedded` → in-process InMemory queue; `distributed` → pgQueuer + a separate `run_worker()`).
 - `ingest_paths(paths)`, `ingest_content(documents)`, `ingest_streams(streams)` shape
@@ -583,7 +583,7 @@ never leak into the contract.
 - `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless
   `APP__DEBUG`). Lifecycle: `aclose()` / `async with`.
 
-**`RetrievalEngine`** (`tarnrag/retrieval/engine.py`) — sync query facade over the §8 index.
+**`RetrievalEngine`** (`tarnrag/retrieval/engine/engine.py`) — sync query facade over the §8 index.
 - `RetrievalEngine.create(settings=None)` opens the index (read-only) + the shared embedder and
   validates schema + embedding fingerprint (`RetrievalEngine.open(...)` is the lower-level seam).
 - `search(Query)` / `search_text(text, *, top_k, dense_k)` → ranked `RetrievalResult`s;
@@ -594,7 +594,7 @@ never leak into the contract.
 
 ## Configuration
 
-**`Settings`** (`tarnrag/core/config.py`, pydantic-settings; cached `get_settings()`). Config is
+**`Settings`** (`tarnrag/core/engine/config.py`, pydantic-settings; cached `get_settings()`). Config is
 **grouped into nested sub-models** — `settings.embedding`, `settings.chunking`,
 `settings.database`, `settings.worker`, `settings.observability` — read from env via the
 `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`). Cross-cutting
@@ -616,7 +616,7 @@ environment template.
 
 ## Observability
 
-**Interface (`tarnrag/core/observability.py`).** `Observability` (ABC): abstract `async
+**Interface (`tarnrag/core/engine/observability.py`).** `Observability` (ABC): abstract `async
 log(level, message, **context)`, `counter(name, value=1, tags=None)`, `gauge(name, value,
 tags=None)`, plus a **concrete** `timer(name, tags=None)` `@contextmanager` that records
 elapsed seconds as `{name}.seconds` via `gauge` (so every adapter — and the no-op — gets it

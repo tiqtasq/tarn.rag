@@ -11,9 +11,9 @@ from tarnrag.contracts import (
     StructuredDocument,
 )
 from tarnrag.core.components import ComponentFactory
-from tarnrag.ingestion.enrichment.acronyms import AcronymEnricher
-from tarnrag.ingestion.enrichment.enrich import EnrichStage
-from tarnrag.ingestion.enrichment.enricher import Enricher
+from tarnrag.ingestion.components.enrichment.acronyms import AcronymEnricher
+from tarnrag.ingestion.components.enrichment.enrich import EnrichStage
+from tarnrag.ingestion.components.enrichment.enricher import Enricher
 
 
 def _single(text: str) -> StructuredDocument:

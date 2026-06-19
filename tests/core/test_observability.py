@@ -1,6 +1,6 @@
 """Observability ABC + NoOpObservability."""
 
-from tarnrag.core.observability import NoOpObservability, Observability
+from tarnrag.core.engine.observability import NoOpObservability, Observability
 
 
 async def test_noop_methods_are_callable_and_do_nothing():

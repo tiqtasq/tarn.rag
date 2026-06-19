@@ -3,8 +3,8 @@ from datetime import UTC, datetime
 import pytest
 
 from tarnrag.contracts import PipelineItem
-from tarnrag.ingestion.jobs import IngestionJob
-from tarnrag.ingestion.queue import InMemoryJobQueue
+from tarnrag.ingestion.engine.jobs import IngestionJob
+from tarnrag.ingestion.engine.queue import InMemoryJobQueue
 
 
 def _job(job_id):

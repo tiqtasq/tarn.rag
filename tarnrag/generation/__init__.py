@@ -10,11 +10,11 @@ composes the ``Reasoner`` + ``EvidenceAssembler`` seams. Slice 2 ships the singl
 check / multi-hop yet — slices 3 / 4).
 """
 
-from tarnrag.generation.assembler import EvidenceAssembler, ProvenanceAssembler
+from tarnrag.generation.components.assembler import EvidenceAssembler, ProvenanceAssembler
 from tarnrag.generation.context import GenerationContext
-from tarnrag.generation.engine import GenerationEngine
-from tarnrag.generation.pipeline import GenerationPipeline
-from tarnrag.generation.reasoner import ReasonedAnswer, ReasonedStep, Reasoner, SingleHopReasoner
+from tarnrag.generation.engine.engine import GenerationEngine
+from tarnrag.generation.pipeline.pipeline import GenerationPipeline
+from tarnrag.generation.components.reasoner import ReasonedAnswer, ReasonedStep, Reasoner, SingleHopReasoner
 from tarnrag.generation.types import Citation, GenerationResult, ProofStep
 
 __all__ = [

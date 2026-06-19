@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from tarnrag.core.llm import LanguageModel
-from tarnrag.retrieval.protocol import RetrievalEngineProtocol
+from tarnrag.core.resources.llm import LanguageModel
+from tarnrag.retrieval.engine.retrieval_engine_protocol import RetrievalEngineProtocol
 
 
 @dataclass
