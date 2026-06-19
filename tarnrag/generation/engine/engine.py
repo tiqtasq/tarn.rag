@@ -19,7 +19,7 @@ from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
 from tarnrag.retrieval.engine.engine import RetrievalEngine
-from tarnrag.retrieval.protocol import RetrievalEngineProtocol
+from tarnrag.retrieval.engine.retrieval_engine_protocol import RetrievalEngineProtocol
 from tarnrag.retrieval.types import Query
 
 _DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "generation_pipeline"}  # single-hop + provenance assembler
