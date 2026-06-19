@@ -529,7 +529,7 @@ implement both ports:
 ## Orchestration & Workers
 
 **Handshake (BatchContext).** The worker↔orchestration handshake is a per-batch **unit of
-work** (`tarnrag/ingestion/batch.py`), not direct orchestrator calls. The worker
+work** (`tarnrag/ingestion/engine/batch.py`), not direct orchestrator calls. The worker
 depends only on two ABCs: `BatchCoordinator.begin_batch(batch) -> BatchContext`
 (records 'processing', picks the per-stage sink by `batch.stage_name`) and `BatchContext` — `submit(results)`,
 `async fail(error)`, and `async complete()` (finalize + persist + record + fan-out;

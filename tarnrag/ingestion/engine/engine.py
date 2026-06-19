@@ -40,7 +40,7 @@ from tarnrag.ingestion.engine.queue import (
     JobEnqueuer,
     PgQueuerJobQueue,
 )
-from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
+from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.ingestion.engine.worker import IngestionWorker
 from tarnrag.ingestion.engine.result_sink import create_sink_registry
 

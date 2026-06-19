@@ -7,7 +7,7 @@ import uuid
 from contextlib import nullcontext
 from typing import Any
 
-from tarnrag.ingestion.batch import BatchCoordinator
+from tarnrag.ingestion.engine.batch import BatchCoordinator
 from tarnrag.ingestion.engine.jobs import Batch
 
 logger = logging.getLogger(__name__)

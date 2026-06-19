@@ -10,6 +10,6 @@ the engine's calls return. Everything else (orchestrator, queue, worker, stages)
 from tarnrag.ingestion.components import chunking, enrichment, extraction  # noqa: F401
 from tarnrag.ingestion.pipeline import clean_normalize, embed  # noqa: F401
 from tarnrag.ingestion.engine.engine import IngestionEngine, run_worker
-from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
+from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 
 __all__ = ["IngestionEngine", "run_worker", "DocumentStatus", "DocumentSummary"]
