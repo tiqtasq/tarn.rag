@@ -1,14 +1,17 @@
-"""The GroundingChecker seam: the heuristic (content-word overlap) + LLM (batched verdicts) checkers."""
+"""The GroundingChecker seam: the heuristic (3-band overlap) + LLM checkers, and the cascading composite."""
 
 import json
 
+from tarnrag.core.components import ComponentFactory
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import (
     GenerationContext,
+    GroundingChecker,
     HeuristicGroundingChecker,
     LLMGroundingChecker,
     ReasonedAnswer,
     ReasonedStep,
+    Verdict,
 )
 
 
@@ -24,47 +27,69 @@ def _llm(reply):
     return GenerationContext(None, StaticLanguageModel(reply))
 
 
-async def test_heuristic_grounds_a_supported_claim(make_result):
+def _counting_llm(reply):
+    """A context whose LM records each call — to assert the cascade skips it when nothing is uncertain."""
+    calls: list[int] = []
+
+    def _reply(_prompt):
+        calls.append(1)
+        return reply
+
+    return GenerationContext(None, StaticLanguageModel(_reply)), calls
+
+
+def _cascade(*child_specs):
+    spec = {"class_name": "cascading_grounding", "checkers": list(child_specs)}
+    return ComponentFactory.get().create_as(spec, GroundingChecker)
+
+
+# ---------------- heuristic (three bands) ----------------
+
+
+async def test_heuristic_grounds_a_fully_supported_claim(make_result):
     ev = [make_result("a", "Coatings resist corrosion on steel tanks.")]
     reasoned = _reasoned([ReasonedStep(claim="coatings resist corrosion", cited=[0])], ev)
-    assert await _heuristic().check(reasoned, None) == [True]
+    assert await _heuristic().check(reasoned, None) == [Verdict.GROUNDED]
 
 
-async def test_heuristic_flags_an_unsupported_claim(make_result):
+async def test_heuristic_flags_a_disjoint_claim_ungrounded(make_result):
     ev = [make_result("a", "Coatings resist corrosion."), make_result("b", "Quokkas are marsupials.")]
-    # the claim cites the coatings passage but is about quokkas -> no overlap -> ungrounded
-    reasoned = _reasoned([ReasonedStep(claim="quokkas are marsupials", cited=[0])], ev)
-    assert await _heuristic().check(reasoned, None) == [False]
+    reasoned = _reasoned([ReasonedStep(claim="quokkas are marsupials", cited=[0])], ev)  # cites coatings
+    assert await _heuristic().check(reasoned, None) == [Verdict.UNGROUNDED]
 
 
-async def test_heuristic_threshold_is_configurable(make_result):
+async def test_heuristic_is_uncertain_in_the_middle_band(make_result):
     ev = [make_result("a", "Coatings resist corrosion.")]
-    # claim shares 2 of its 3 content words (coatings, corrosion) with the passage -> 0.67
+    # "coatings prevent corrosion" shares 2 of its 3 content words with the passage -> overlap 0.667
     reasoned = _reasoned([ReasonedStep(claim="coatings prevent corrosion", cited=[0])], ev)
-    assert await _heuristic(min_overlap=0.6).check(reasoned, None) == [True]
-    assert await _heuristic(min_overlap=0.9).check(reasoned, None) == [False]
+    assert await _heuristic().check(reasoned, None) == [Verdict.UNCERTAIN]  # default band (0.1, 0.7)
+    assert await _heuristic(high_overlap=0.6).check(reasoned, None) == [Verdict.GROUNDED]  # 0.667 >= 0.6
+    assert await _heuristic(low_overlap=0.7).check(reasoned, None) == [Verdict.UNGROUNDED]  # 0.667 <= 0.7
 
 
 async def test_heuristic_claim_with_no_content_words_is_ungrounded(make_result):
     ev = [make_result("a", "anything at all")]
     reasoned = _reasoned([ReasonedStep(claim="the a of", cited=[0])], ev)  # all stopwords / single chars
-    assert await _heuristic().check(reasoned, None) == [False]
+    assert await _heuristic().check(reasoned, None) == [Verdict.UNGROUNDED]
 
 
-async def test_llm_parses_batched_verdicts(make_result):
+# ---------------- LLM (decisive) ----------------
+
+
+async def test_llm_parses_decisive_verdicts(make_result):
     ev = [make_result("a", "x"), make_result("b", "y")]
     reasoned = _reasoned([ReasonedStep(claim="c1", cited=[0]), ReasonedStep(claim="c2", cited=[1])], ev)
     out = await LLMGroundingChecker(LLMGroundingChecker.Config()).check(
         reasoned, _llm(json.dumps({"verdicts": [True, False]}))
     )
-    assert out == [True, False]
+    assert out == [Verdict.GROUNDED, Verdict.UNGROUNDED]
 
 
 async def test_llm_falls_back_to_grounded_on_bad_json(make_result):
     ev = [make_result("a", "x")]
     reasoned = _reasoned([ReasonedStep(claim="c", cited=[0])], ev)
     out = await LLMGroundingChecker(LLMGroundingChecker.Config()).check(reasoned, _llm("not json at all"))
-    assert out == [True]  # unparseable -> never spuriously refuse
+    assert out == [Verdict.GROUNDED]  # unparseable -> never spuriously refuse
 
 
 async def test_llm_pads_missing_verdicts_as_grounded(make_result):
@@ -73,4 +98,32 @@ async def test_llm_pads_missing_verdicts_as_grounded(make_result):
     out = await LLMGroundingChecker(LLMGroundingChecker.Config()).check(
         reasoned, _llm(json.dumps({"verdicts": [False]}))  # only one verdict for two steps
     )
-    assert out == [False, True]
+    assert out == [Verdict.UNGROUNDED, Verdict.GROUNDED]
+
+
+# ---------------- cascade ----------------
+
+
+async def test_cascade_escalates_only_the_uncertain_steps(make_result):
+    ev = [make_result("a", "Coatings resist corrosion.")]
+    reasoned = _reasoned(
+        [
+            ReasonedStep(claim="coatings resist corrosion", cited=[0]),  # overlap 1.0 -> GROUNDED (heuristic)
+            ReasonedStep(claim="coatings rust", cited=[0]),  # overlap 0.5 -> UNCERTAIN -> escalates
+        ],
+        ev,
+    )
+    ctx, calls = _counting_llm(json.dumps({"verdicts": [False]}))  # resolves the one escalated step
+    cascade = _cascade({"class_name": "heuristic_grounding"}, {"class_name": "llm_grounding"})
+    out = await cascade.check(reasoned, ctx)
+    assert out == [Verdict.GROUNDED, Verdict.UNGROUNDED]
+    assert len(calls) == 1  # the LLM ran once, only for the uncertain step
+
+
+async def test_cascade_skips_the_llm_when_the_heuristic_resolves_everything(make_result):
+    ev = [make_result("a", "Coatings resist corrosion.")]
+    reasoned = _reasoned([ReasonedStep(claim="coatings resist corrosion", cited=[0])], ev)  # -> GROUNDED
+    ctx, calls = _counting_llm(json.dumps({"verdicts": [False]}))
+    cascade = _cascade({"class_name": "heuristic_grounding"}, {"class_name": "llm_grounding"})
+    assert await cascade.check(reasoned, ctx) == [Verdict.GROUNDED]
+    assert calls == []  # the expensive checker was never called

@@ -1,42 +1,59 @@
-"""The GroundingChecker seam — verify each reasoning step's claim against its cited evidence (slice 3).
+"""The GroundingChecker seam — verify each reasoning step's claim against its cited evidence.
 
 A pure ``Component``: given a ``ReasonedAnswer`` (steps citing evidence by index + the evidence), it returns
-a per-step grounded verdict — is each claim actually supported by *its own* cited passages? Two backends,
-both config-driven:
+a per-step ``Verdict`` — ``GROUNDED`` / ``UNGROUNDED`` / ``UNCERTAIN`` — for whether each claim is supported
+by *its own* cited passages. The three-valued verdict is what lets verification **cascade**: a cheap checker
+marks what it's confident about and leaves the rest ``UNCERTAIN`` for a more expensive one to resolve.
+Backends, all config-driven:
 
-- ``HeuristicGroundingChecker`` — content-word overlap (LLM-free, no extra resources, C++-portable);
-- ``LLMGroundingChecker`` — a single batched verdict from the ``LanguageModel`` (catches paraphrase /
-  contradiction the overlap misses).
+- ``HeuristicGroundingChecker`` — content-word overlap; confident at the extremes, ``UNCERTAIN`` in the
+  middle band (LLM-free, no extra resources, C++-portable);
+- ``LLMGroundingChecker`` — a single batched, decisive verdict from the ``LanguageModel`` (catches
+  paraphrase / contradiction the overlap misses);
+- ``CascadingGroundingChecker`` — a container that runs child checkers in order and escalates only the
+  ``UNCERTAIN`` steps to the next, so the expensive checker runs only on what the cheap one couldn't decide
+  (and is skipped entirely when nothing is uncertain).
 
-The ``GenerationPipeline`` runs the configured checker (optional), stamps the verdicts onto the proof tree,
-and applies the abstention policy. None configured ⇒ no verification (``grounded`` stays ``True``),
-preserving the slice-2 behavior.
+The ``GenerationPipeline`` runs the configured checker (optional), collapses each verdict to a grounded
+flag, stamps it onto the proof tree, and applies the abstention policy. None configured ⇒ no verification.
 """
 
 from __future__ import annotations
 
 import re
 from abc import abstractmethod
-from typing import Literal
+from enum import Enum
+from typing import Any, Literal
+
+from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import Component
+from tarnrag.core.components import Component, ComponentFactory
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components._parsing import extract_json
 from tarnrag.generation.components.reasoner import ReasonedAnswer, ReasonedStep
 from tarnrag.generation.context import GenerationContext
 
 
+class Verdict(str, Enum):
+    """A grounding verdict for one step. ``UNCERTAIN`` is the cascade hinge — a checker emits it when it
+    can't decide, and a later checker resolves it."""
+
+    GROUNDED = "grounded"
+    UNGROUNDED = "ungrounded"
+    UNCERTAIN = "uncertain"
+
+
 class GroundingChecker(Component):
-    """Port: a per-step grounded verdict for a ``ReasonedAnswer`` — is each claim supported by its cited
-    evidence? Returns a ``list[bool]`` aligned to ``reasoned.steps``."""
+    """Port: a per-step ``Verdict`` for a ``ReasonedAnswer`` — is each claim supported by its cited
+    evidence? Returns a ``list[Verdict]`` aligned to ``reasoned.steps``."""
 
     class Config(Component.Config):
         """Base grounding-checker config; concrete checkers pin ``class_name``."""
 
     @abstractmethod
-    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[bool]:
-        """One grounded verdict per step (aligned to ``reasoned.steps``)."""
+    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[Verdict]:
+        """One ``Verdict`` per step (aligned to ``reasoned.steps``)."""
 
     @staticmethod
     def _cited_passages(step: ReasonedStep, reasoned: ReasonedAnswer) -> list[RetrievalResult]:
@@ -54,28 +71,35 @@ _TOKEN = re.compile(r"\w+")
 
 
 class HeuristicGroundingChecker(GroundingChecker):
-    """LLM-free: a claim is grounded when enough of its content words appear in its cited passages — the
-    overlap ratio is ``>= min_overlap``. Cheap, deterministic, C++-portable; it misses paraphrase and
-    contradiction (that's what the LLM checker is for)."""
+    """LLM-free: score each claim by the fraction of its content words that appear in its cited passages,
+    and be **honest about confidence** — overlap ``>= high_overlap`` ⇒ ``GROUNDED``, ``<= low_overlap`` ⇒
+    ``UNGROUNDED``, and the murky middle ⇒ ``UNCERTAIN`` (which a cascade escalates). Cheap, deterministic,
+    C++-portable; it can't tell paraphrase from coincidence, so it leaves those for the next checker."""
 
     class Config(GroundingChecker.Config):
         class_name: Literal["heuristic_grounding"] = "heuristic_grounding"
-        min_overlap: float = 0.6  # fraction of the claim's content words that must appear in cited text
+        high_overlap: float = 0.7  # >= this fraction of the claim's content words covered ⇒ GROUNDED
+        low_overlap: float = 0.1  # <= ⇒ UNGROUNDED; strictly between the two ⇒ UNCERTAIN
         stopwords: list[str] | None = None  # None ⇒ built-in set
 
     config: HeuristicGroundingChecker.Config
 
-    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[bool]:
+    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[Verdict]:
         stop = frozenset(self.config.stopwords) if self.config.stopwords is not None else _STOPWORDS
-        verdicts: list[bool] = []
+        verdicts: list[Verdict] = []
         for step in reasoned.steps:
             claim_words = self._content_words(step.claim, stop)
             if not claim_words:
-                verdicts.append(False)  # a claim with no content words can't be shown grounded
+                verdicts.append(Verdict.UNGROUNDED)  # a claim with no content words can't be grounded
                 continue
             cited_text = " ".join(p.text for p in self._cited_passages(step, reasoned))
-            covered = len(claim_words & self._content_words(cited_text, stop))
-            verdicts.append(covered / len(claim_words) >= self.config.min_overlap)
+            overlap = len(claim_words & self._content_words(cited_text, stop)) / len(claim_words)
+            if overlap >= self.config.high_overlap:
+                verdicts.append(Verdict.GROUNDED)
+            elif overlap <= self.config.low_overlap:
+                verdicts.append(Verdict.UNGROUNDED)
+            else:
+                verdicts.append(Verdict.UNCERTAIN)
         return verdicts
 
     @staticmethod
@@ -91,16 +115,16 @@ _SYSTEM = (
 
 
 class LLMGroundingChecker(GroundingChecker):
-    """Verify each claim against its cited passages with the ``LanguageModel`` — one batched call returning
-    a boolean per step. Falls back to ``grounded=True`` if the reply isn't parseable, so a verification
-    hiccup never spuriously refuses an otherwise-good answer."""
+    """Verify each claim against its cited passages with the ``LanguageModel`` — one batched, decisive call
+    (``GROUNDED`` / ``UNGROUNDED`` per step). Falls back to ``GROUNDED`` if the reply isn't parseable, so a
+    verification hiccup never spuriously refuses an otherwise-good answer."""
 
     class Config(GroundingChecker.Config):
         class_name: Literal["llm_grounding"] = "llm_grounding"
 
     config: LLMGroundingChecker.Config
 
-    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[bool]:
+    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[Verdict]:
         if not reasoned.steps:
             return []
         completion = await ctx.llm.complete(Prompt(system=_SYSTEM, user=self._format(reasoned)))
@@ -117,11 +141,44 @@ class LLMGroundingChecker(GroundingChecker):
         return "\n\n".join(blocks)
 
     @staticmethod
-    def _parse(text: str, n: int) -> list[bool]:
-        """Parse ``{\"verdicts\": [bool, ...]}``; pad/truncate to ``n``; fall back to all-grounded."""
+    def _parse(text: str, n: int) -> list[Verdict]:
+        """Parse ``{\"verdicts\": [bool, ...]}`` to decisive verdicts; pad/truncate to ``n``; fall back to
+        all-grounded on an unparseable reply."""
         data = extract_json(text)
-        verdicts = data.get("verdicts") if isinstance(data, dict) else None
-        if not isinstance(verdicts, list):
-            return [True] * n  # unparseable ⇒ don't penalize (no spurious refusal)
-        out = [bool(v) for v in verdicts[:n]]
-        return out + [True] * (n - len(out))  # pad any missing verdicts as grounded
+        raw = data.get("verdicts") if isinstance(data, dict) else None
+        if not isinstance(raw, list):
+            return [Verdict.GROUNDED] * n  # unparseable ⇒ don't penalize (no spurious refusal)
+        out = [Verdict.GROUNDED if bool(v) else Verdict.UNGROUNDED for v in raw[:n]]
+        return out + [Verdict.GROUNDED] * (n - len(out))  # pad any missing verdicts as grounded
+
+
+class CascadingGroundingChecker(GroundingChecker):
+    """A container that runs child checkers in order and escalates only the steps still ``UNCERTAIN`` to the
+    next — so the cheap checker resolves what it can and the expensive one (e.g. the LLM) adjudicates just
+    the leftovers, and is skipped entirely when nothing is uncertain. Usual config: ``[heuristic, llm]``."""
+
+    class Config(GroundingChecker.Config):
+        class_name: Literal["cascading_grounding"] = "cascading_grounding"
+        checkers: list[dict[str, Any]] = Field(default_factory=list)  # child checkers, cheap → expensive
+
+    config: CascadingGroundingChecker.Config
+
+    def __init__(self, config: CascadingGroundingChecker.Config) -> None:
+        super().__init__(config)
+        self._checkers: list[GroundingChecker] = []
+
+    def _build_children(self, factory: ComponentFactory) -> None:
+        self._checkers = [factory.create_as(spec, GroundingChecker) for spec in self.config.checkers]
+
+    async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[Verdict]:
+        self._ensure_children()
+        verdicts: list[Verdict] = [Verdict.UNCERTAIN] * len(reasoned.steps)
+        for checker in self._checkers:
+            pending = [i for i, v in enumerate(verdicts) if v is Verdict.UNCERTAIN]
+            if not pending:
+                break  # everything resolved — skip the remaining (more expensive) checkers
+            subset = ReasonedAnswer(reasoned.answer, [reasoned.steps[i] for i in pending], reasoned.evidence)
+            resolved = await checker.check(subset, ctx)
+            for j, i in enumerate(pending):
+                verdicts[i] = resolved[j]
+        return verdicts

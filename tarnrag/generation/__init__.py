@@ -12,9 +12,11 @@ grounding + abstention; multi-hop is slice 4.
 
 from tarnrag.generation.components.assembler import EvidenceAssembler, ProvenanceAssembler
 from tarnrag.generation.components.grounding import (
+    CascadingGroundingChecker,
     GroundingChecker,
     HeuristicGroundingChecker,
     LLMGroundingChecker,
+    Verdict,
 )
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.engine.engine import GenerationEngine
@@ -44,6 +46,8 @@ __all__ = [
     "GroundingChecker",
     "HeuristicGroundingChecker",
     "LLMGroundingChecker",
+    "CascadingGroundingChecker",
+    "Verdict",
     "Citation",
     "ProofStep",
     "GenerationResult",
