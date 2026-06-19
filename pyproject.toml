@@ -20,9 +20,10 @@ api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
 onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # ONNX embedding pipeline (R4)
 embeddings-api = ["httpx"]  # HTTP embedding-API backends (OpenAI / Voyage / Gemini)
 generation = ["anthropic"]  # the generation LanguageModel backend (Claude, official SDK)
+console = ["rich"]  # rich terminal UI for the interactive console (python -m tarnrag.console)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 docling = ["docling"]  # high-fidelity layout-aware PDF extraction (heavy; pulls docling-core + models)
-dev = ["pytest", "pytest-asyncio", "httpx"]
+dev = ["pytest", "pytest-asyncio", "httpx", "rich"]
 
 [build-system]
 requires = ["setuptools>=68"]

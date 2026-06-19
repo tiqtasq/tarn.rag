@@ -9,17 +9,18 @@ ingestion / retrieval / generation pipeline specs under ``components`` (a sample
 ``examples/console.config.json``). The API key is read from the environment (``ANTHROPIC_API_KEY``), not
 the config. Then type commands at the ``tarn>`` prompt::
 
-    ingest <path> [<path> ...]   ingest (or RE-ingest) files; a directory ingests the files in it.
-                                 The document id is the filename stem, so re-ingesting a file replaces it.
-    docs                         list the ingested documents (id, chunks, embeddings)
-    delete <id>                  delete a document and everything derived from it
-    retrieve <query>             retrieval only — the ranked passages
-    ask <query>                  retrieval + generation — the grounded answer + its proof tree
-    help                         show this list
-    quit                         exit
+    ingest <path> ...    ingest (or RE-ingest) files; a directory ingests the files in it. The document
+                         id is the filename stem, so re-ingesting a file replaces it.
+    docs                 list ingested documents (id, chunks, embeddings)
+    delete <id>          delete a document and everything derived from it
+    retrieve <query>     retrieval only — the ranked passages
+    ask <query>          retrieval + generation — the grounded answer + its proof tree
+    help                 show the commands
+    quit                 exit
 
-The command methods (``ingest`` / ``retrieve`` / ``ask`` / ``docs`` / ``delete``) return data and are
-unit-tested directly; ``run()`` is the thin parse-and-print REPL on top of them.
+Output is rendered with ``rich`` (install the ``console`` extra: ``pip install '.[console]'``). The command
+methods (``ingest`` / ``retrieve`` / ``ask`` / ``docs`` / ``delete``) return data and are unit-tested
+directly; ``run()`` is the rich parse-and-print REPL on top of them.
 """
 
 from __future__ import annotations
@@ -30,6 +31,12 @@ import os
 import sys
 from pathlib import Path
 
+from rich.console import Console as RichConsole
+from rich.markup import escape
+from rich.panel import Panel
+from rich.table import Table
+from rich.tree import Tree
+
 from tarnrag import DocumentStatus, DocumentSummary, IngestionEngine, RetrievalEngine
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import ComponentFactory
@@ -38,14 +45,17 @@ from tarnrag.core.resources.embedder import build_embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation import GenerationEngine, GenerationPipeline, GenerationResult
 
-_HELP = """commands:
-  ingest <path> [<path> ...]   ingest (or re-ingest) files; a directory ingests the files in it
-  docs                         list the ingested documents
-  delete <id>                  delete a document and everything derived from it
-  retrieve <query>             retrieval only — the ranked passages
-  ask <query>                  retrieval + generation — the grounded answer + its proof tree
-  help                         show this list
-  quit                         exit"""
+_out = RichConsole()
+
+_COMMANDS = [
+    ("ingest <path> ...", "ingest (or re-ingest) files; a directory ingests the files in it"),
+    ("docs", "list the ingested documents"),
+    ("delete <id>", "delete a document and everything derived from it"),
+    ("retrieve <query>", "retrieval only — the ranked passages"),
+    ("ask <query>", "retrieval + generation — the grounded answer + its proof tree"),
+    ("help", "show this list"),
+    ("quit", "exit"),
+]
 
 
 def load_settings(config_path: str | Path) -> Settings:
@@ -85,7 +95,7 @@ class Console:
     async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
-    # ---------------- commands (return data; the REPL prints it) ----------------
+    # ---------------- commands (return data; the REPL renders it) ----------------
 
     async def ingest(self, paths: list[str]) -> list[DocumentStatus]:
         """Ingest (or re-ingest) the given files / directories. The document id is each file's stem, so
@@ -126,11 +136,12 @@ class Console:
             )
         return LanguageModel.create(self.settings.llm)
 
-    # ---------------- the REPL ----------------
+    # ---------------- the REPL (rich rendering) ----------------
 
     async def run(self) -> None:
         """Read commands at the ``tarn>`` prompt until EOF / quit."""
-        print(f"tarn.rag console — {self.settings.database.document_url}.  Type 'help', or 'quit' to exit.")
+        _out.print(f"[bold]tarn.rag console[/]  [dim]{escape(self.settings.database.document_url)}[/]")
+        _out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.\n")
         handlers = {
             "help": self._do_help,
             "ingest": self._do_ingest,
@@ -141,9 +152,9 @@ class Console:
         }
         while True:
             try:
-                line = (await asyncio.to_thread(input, "tarn> ")).strip()
+                line = (await asyncio.to_thread(_out.input, "[bold cyan]tarn>[/] ")).strip()
             except (EOFError, KeyboardInterrupt):
-                print()
+                _out.print()
                 break
             if not line:
                 continue
@@ -153,61 +164,98 @@ class Console:
                 break
             handler = handlers.get(command)
             if handler is None:
-                print(f"unknown command {command!r} — type 'help'")
+                _out.print(f"[red]unknown command[/] {command!r} — type [cyan]help[/]")
                 continue
             try:
                 await handler(arg.strip())
             except Exception as exc:  # keep the session alive on any command error
-                print(f"error: {exc}")
-        print("bye")
+                _out.print(f"[red]error:[/] {escape(str(exc))}")
+        _out.print("[dim]bye[/]")
 
     async def _do_help(self, _arg: str) -> None:
-        print(_HELP)
+        table = Table(title="commands", show_edge=False, title_justify="left", header_style="bold")
+        table.add_column("command", style="cyan", no_wrap=True)
+        table.add_column("description", style="dim")
+        for command, description in _COMMANDS:
+            table.add_row(command, description)
+        _out.print(table)
 
     async def _do_ingest(self, arg: str) -> None:
         if not arg:
-            print("usage: ingest <path> [<path> ...]")
+            _out.print("usage: ingest <path> ...", style="dim")
             return
         statuses = await self.ingest(arg.split())
+        if not statuses:
+            _out.print("[yellow]nothing ingested[/]")
+            return
+        table = Table(show_edge=False, header_style="bold")
+        table.add_column("document", style="cyan")
+        table.add_column("status")
+        table.add_column("chunks", justify="right")
+        table.add_column("embeddings", justify="right")
         for s in statuses:
-            print(f"  {s.document_id:20}  {s.status:9}  chunks={s.chunk_count}  embeddings={s.embedding_count}")
-        print(f"({len(statuses)} document(s))")
+            color = {"complete": "green", "failed": "red"}.get(s.status, "yellow")
+            table.add_row(s.document_id, f"[{color}]{s.status}[/]", str(s.chunk_count), str(s.embedding_count))
+        _out.print(table)
 
     async def _do_docs(self, _arg: str) -> None:
         summaries = await self.docs()
+        if not summaries:
+            _out.print("[yellow]no documents — ingest some first[/]")
+            return
+        table = Table(show_edge=False, header_style="bold")
+        table.add_column("document", style="cyan")
+        table.add_column("chunks", justify="right")
+        table.add_column("embeddings", justify="right")
         for d in summaries:
-            print(f"  {d.document_id:20}  chunks={d.chunk_count}  embeddings={d.embedding_count}")
-        print(f"({len(summaries)} document(s))")
+            table.add_row(d.document_id, str(d.chunk_count), str(d.embedding_count))
+        _out.print(table)
+        _out.print(f"[dim]{len(summaries)} document(s)[/]")
 
     async def _do_delete(self, arg: str) -> None:
         if not arg:
-            print("usage: delete <document-id>")
+            _out.print("usage: delete <document-id>", style="dim")
             return
-        print("deleted" if await self.delete(arg) else f"no such document: {arg}")
+        if await self.delete(arg):
+            _out.print(f"[green]deleted[/] {escape(arg)}")
+        else:
+            _out.print(f"[yellow]no such document:[/] {escape(arg)}")
 
     async def _do_retrieve(self, arg: str) -> None:
         if not arg:
-            print("usage: retrieve <query>")
+            _out.print("usage: retrieve <query>", style="dim")
             return
         results = await self.retrieve(arg)
         if not results:
-            print("  (no results — ingest some documents first)")
+            _out.print("[yellow]no results — ingest some documents first[/]")
+            return
+        table = Table(show_edge=False, header_style="bold")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("score", justify="right")
+        table.add_column("document", style="cyan")
+        table.add_column("passage")
         for rank, r in enumerate(results, 1):
-            print(f"  {rank}. [{r.score:.3f}] {r.document_id}: {_snippet(r.text)}")
+            table.add_row(str(rank), f"{r.score:.3f}", r.document_id, escape(_snippet(r.text)))
+        _out.print(table)
 
     async def _do_ask(self, arg: str) -> None:
         if not arg:
-            print("usage: ask <query>")
+            _out.print("usage: ask <query>", style="dim")
             return
         result = await self.ask(arg)
         if result.abstained:
-            print(f"  [abstained] {result.answer}")
+            _out.print(Panel(escape(result.answer), title="abstained", border_style="yellow"))
             return
-        print(f"  {result.answer}    (grounded={result.grounded})")
+        border = "green" if result.grounded else "yellow"
+        label = "grounded" if result.grounded else "not fully grounded"
+        _out.print(Panel(escape(result.answer), title=f"answer  ([{border}]{label}[/])", border_style=border))
+        tree = Tree("[bold]proof[/]")
         for step in result.proof:
-            mark = "grounded" if step.grounded else "UNSUPPORTED"
-            cites = ", ".join(_cite(c) for c in step.citations) or "(no citations)"
-            print(f"    - [{mark}] {step.claim}  <- {cites}")
+            mark = "[green]✓[/]" if step.grounded else "[red]✗[/]"
+            node = tree.add(f"{mark} {escape(step.claim)}")
+            for c in step.citations:
+                node.add(f"[dim]cite[/] {escape(_cite(c))}")
+        _out.print(tree)
 
 
 def _expand(paths: list[str]) -> list[Path]:
@@ -220,7 +268,7 @@ def _expand(paths: list[str]) -> list[Path]:
         elif path.is_file():
             files.append(path)
         else:
-            print(f"  skipping (not found): {raw}")
+            _out.print(f"[yellow]skipping (not found):[/] {escape(raw)}")
     return files
 
 
