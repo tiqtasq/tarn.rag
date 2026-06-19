@@ -18,7 +18,7 @@ from pydantic import Field
 
 from tarnrag.core.components import Component, ComponentFactory
 from tarnrag.generation.components.assembler import EvidenceAssembler
-from tarnrag.generation.components.grounding import GroundingChecker
+from tarnrag.generation.components.grounding import GroundingChecker, Verdict
 from tarnrag.generation.components.reasoner import Reasoner
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.types import GenerationResult
@@ -34,6 +34,7 @@ class GenerationPipeline(Component):
         reasoner: dict[str, Any] = Field(default_factory=lambda: {"class_name": "single_hop"})
         assembler: dict[str, Any] = Field(default_factory=lambda: {"class_name": "provenance"})
         grounding_checker: dict[str, Any] | None = None  # None ⇒ no verification (grounded stays True)
+        uncertain_is_grounded: bool = True  # how to collapse an UNCERTAIN verdict (lenient by default)
         # Abstention policy (γ-cap): an answer counts as grounded iff at least ``min_grounded`` of its
         # steps pass verification; below that, ``abstain`` decides refusal vs. a best-grounded flag.
         min_grounded: float = 1.0
@@ -61,12 +62,24 @@ class GenerationPipeline(Component):
     async def answer(self, query: Query, ctx: GenerationContext) -> GenerationResult:
         self._ensure_children()
         reasoned = await self._reasoner.reason(query, ctx)
-        verdicts = await self._grounding.check(reasoned, ctx) if self._grounding is not None else None
-        proof = self._assembler.assemble(reasoned, verdicts)
-        answer, grounded, abstained = self._apply_policy(reasoned.answer, verdicts)
+        flags = None
+        if self._grounding is not None:
+            verdicts = await self._grounding.check(reasoned, ctx)
+            flags = [self._is_grounded(v) for v in verdicts]  # collapse each Verdict to a grounded flag
+        proof = self._assembler.assemble(reasoned, flags)
+        answer, grounded, abstained = self._apply_policy(reasoned.answer, flags)
         return GenerationResult(
             answer=answer, proof=proof, evidence=reasoned.evidence, grounded=grounded, abstained=abstained
         )
+
+    def _is_grounded(self, verdict: Verdict) -> bool:
+        """Collapse a three-valued ``Verdict`` to the grounded flag the proof tree + policy consume —
+        ``UNCERTAIN`` resolves per the ``uncertain_is_grounded`` config (lenient by default)."""
+        if verdict is Verdict.GROUNDED:
+            return True
+        if verdict is Verdict.UNGROUNDED:
+            return False
+        return self.config.uncertain_is_grounded
 
     def _apply_policy(self, answer: str, verdicts: list[bool] | None) -> tuple[str, bool, bool]:
         """Map the per-step verdicts to ``(answer, grounded, abstained)`` via the abstention policy.
