@@ -52,6 +52,27 @@ class LanguageModel(Resource):
     async def complete(self, prompt: Prompt) -> Completion:
         """Generate a completion for ``prompt``."""
 
+    @staticmethod
+    def create(llm: LLMSettings) -> LanguageModel:
+        """Build the ``LanguageModel`` for the configured provider, mapping the ``LLMSettings`` slice to
+        the provider's constructor. The provider map is local (single use) and the import lazy (it pulls
+        the optional SDK). LLM construction is uniform, so — unlike ``build_embedder`` — no per-provider
+        ``create`` is needed; a provider with bespoke construction would reintroduce one."""
+        from tarnrag.core.llm_api import AnthropicLanguageModel
+
+        providers: dict[str, type[LanguageModel]] = {"anthropic": AnthropicLanguageModel}
+        provider = providers.get(llm.provider)
+        if provider is None:
+            raise ValueError(f"unknown LLM provider {llm.provider!r}; choose from {sorted(providers)}")
+        return provider(
+            model=llm.model,
+            api_key=llm.api_key,
+            base_url=llm.api_base_url,
+            max_tokens=llm.max_tokens,
+            temperature=llm.temperature,
+            timeout=llm.api_timeout,
+        )
+
 
 class StaticLanguageModel(LanguageModel):
     """A deterministic, network-free ``LanguageModel``: returns a canned reply, or one computed from the
@@ -68,14 +89,3 @@ class StaticLanguageModel(LanguageModel):
     async def complete(self, prompt: Prompt) -> Completion:
         text = self._reply(prompt) if callable(self._reply) else self._reply
         return Completion(text=text, stop_reason="static")
-
-
-def build_language_model(llm: LLMSettings) -> LanguageModel:
-    """Select + build the ``LanguageModel`` for the configured provider — the LLM analog of
-    ``build_embedder``. The provider map is imported lazily (it pulls the optional SDK)."""
-    from tarnrag.core.llm_api import LLM_PROVIDERS
-
-    provider = LLM_PROVIDERS.get(llm.provider)
-    if provider is None:
-        raise ValueError(f"unknown LLM provider {llm.provider!r}; choose from {sorted(LLM_PROVIDERS)}")
-    return provider.create(llm)

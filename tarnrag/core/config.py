@@ -96,13 +96,13 @@ class RerankSettings(BaseModel):
 
 class LLMSettings(BaseModel):
     """
-    The generation ``LanguageModel`` (the reader/decomposer). Built by ``build_language_model`` and
+    The generation ``LanguageModel`` (the reader/decomposer). Built by ``LanguageModel.create`` and
     injected into the ``GenerationContext``; only constructed when a ``GenerationEngine`` is created, so a
-    retrieval-only deployment never needs an LLM key. Provider-pluggable behind the selector (the embedder
-    pattern). ``temperature`` / ``max_tokens`` are the defaults a ``Prompt`` may override per call.
+    retrieval-only deployment never needs an LLM key. Provider-pluggable behind that factory.
+    ``temperature`` / ``max_tokens`` are the defaults a ``Prompt`` may override per call.
     """
 
-    provider: Literal["anthropic"] = "anthropic"  # more backends add here + in ``LLM_PROVIDERS``
+    provider: Literal["anthropic"] = "anthropic"  # more backends add here + in ``LanguageModel.create``
     model: str = "claude-sonnet-4-6"
     api_key: str = ""  # falls back to ANTHROPIC_API_KEY
     api_base_url: str = ""  # falls back to the SDK default endpoint

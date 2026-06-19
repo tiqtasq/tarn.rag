@@ -9,7 +9,7 @@ import types
 import pytest
 
 from tarnrag.core.config import LLMSettings
-from tarnrag.core.llm import Prompt, StaticLanguageModel, build_language_model
+from tarnrag.core.llm import LanguageModel, Prompt, StaticLanguageModel
 from tarnrag.core.llm_api import AnthropicLanguageModel
 
 
@@ -65,11 +65,11 @@ def test_anthropic_missing_key_raises(monkeypatch):
         AnthropicLanguageModel(model="m")._key()
 
 
-def test_build_language_model_selects_anthropic():
-    lm = build_language_model(LLMSettings(api_key="k"))
+def test_create_selects_anthropic():
+    lm = LanguageModel.create(LLMSettings(api_key="k"))
     assert isinstance(lm, AnthropicLanguageModel) and lm.identity() == "anthropic:claude-sonnet-4-6"
 
 
-def test_build_language_model_rejects_unknown_provider():
+def test_create_rejects_unknown_provider():
     with pytest.raises(ValueError, match="unknown LLM provider"):
-        build_language_model(types.SimpleNamespace(provider="bogus"))  # bypass the Literal validation
+        LanguageModel.create(types.SimpleNamespace(provider="bogus"))  # bypass the Literal validation

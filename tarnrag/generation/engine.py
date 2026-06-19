@@ -2,7 +2,7 @@
 
 The library entry point, sibling of ``IngestionEngine`` / ``RetrievalEngine``. ``create()`` wires the
 composition root: it builds the retrieval engine (consumed through the ``RetrievalEngineProtocol`` port),
-the ``LanguageModel`` resource (``build_language_model`` over ``Settings.llm``), and the
+the ``LanguageModel`` resource (``LanguageModel.create`` over ``Settings.llm``), and the
 ``GenerationPipeline`` from the ``GENERATION_PIPELINE`` spec — then delegates ``answer`` to the pipeline
 over a ``GenerationContext``. tiqtasq.backend wraps this in REST. Building a concrete ``RetrievalEngine``
 here is the allowed direction (``generation → retrieval``); the pipeline + seams only ever see the port.
@@ -14,7 +14,7 @@ from typing import Any, Self
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import GENERATION_PIPELINE, Settings, get_settings
-from tarnrag.core.llm import LanguageModel, build_language_model
+from tarnrag.core.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
@@ -44,7 +44,7 @@ class GenerationEngine:
         """Wire the composition: the retrieval engine (as the port), the LLM, and the pipeline spec."""
         settings = settings or get_settings()
         retrieval = await RetrievalEngine.create(settings)
-        llm = build_language_model(settings.llm)
+        llm = LanguageModel.create(settings.llm)
         spec = settings.components.get(GENERATION_PIPELINE) or _DEFAULT_PIPELINE
         pipeline = ComponentFactory.get().create_as(spec, GenerationPipeline)
         return cls(retrieval, llm, pipeline)

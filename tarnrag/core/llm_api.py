@@ -1,10 +1,11 @@
-"""LLM backends — Anthropic (Claude) via the official SDK, behind the ``build_language_model`` selector.
+"""LLM backends — Anthropic (Claude) via the official SDK, behind ``LanguageModel.create``.
 
 ``AnthropicLanguageModel`` is a ``LanguageModel`` (a ``Resource``, like the embedders) selected via
-``LLMSettings.provider``. The official ``anthropic`` SDK is imported **lazily** (the ``generation`` extra),
-and the one network call goes through a single stubbable seam — ``_create`` — so request-shaping and
-response-parsing are unit-tested by injecting a fake client, without the SDK or a key (the same honest
-gating as the API embedders' ``_post``). New providers add a backend here + an entry in ``LLM_PROVIDERS``.
+``LLMSettings.provider`` by ``LanguageModel.create``. The official ``anthropic`` SDK is imported **lazily**
+(the ``generation`` extra), and the one network call goes through a single stubbable seam — ``_create`` —
+so request-shaping and response-parsing are unit-tested by injecting a fake client, without the SDK or a
+key (the same honest gating as the API embedders' ``_post``). New providers add a backend here + an entry
+in ``LanguageModel.create``'s provider map.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from tarnrag.core.config import LLMSettings
 from tarnrag.core.llm import Completion, LanguageModel, Prompt
 
 
@@ -41,17 +41,6 @@ class AnthropicLanguageModel(LanguageModel):
         self.default_temperature = temperature
         self.timeout = timeout
         self._client = client  # injected in tests; built lazily from the SDK otherwise
-
-    @classmethod
-    def create(cls, llm: LLMSettings) -> AnthropicLanguageModel:
-        return cls(
-            model=llm.model,
-            api_key=llm.api_key,
-            base_url=llm.api_base_url,
-            max_tokens=llm.max_tokens,
-            temperature=llm.temperature,
-            timeout=llm.api_timeout,
-        )
 
     def identity(self) -> str:
         return f"{self.PROVIDER}:{self.model}"
@@ -122,8 +111,3 @@ class AnthropicLanguageModel(LanguageModel):
             "input_tokens": getattr(usage, "input_tokens", 0),
             "output_tokens": getattr(usage, "output_tokens", 0),
         }
-
-
-LLM_PROVIDERS: dict[str, type[LanguageModel]] = {
-    "anthropic": AnthropicLanguageModel,
-}
