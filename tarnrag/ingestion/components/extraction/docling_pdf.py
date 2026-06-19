@@ -24,7 +24,7 @@ from tarnrag.contracts import (
     Table,
     TableCell,
 )
-from tarnrag.ingestion.extraction.extractor import Extractor, Source
+from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
 
 _SEP = "\n\n"  # joins element texts into StructuredDocument.text
 

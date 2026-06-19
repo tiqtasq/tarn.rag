@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import Literal
 
 from tarnrag.contracts import StructuredDocument, Table, TableCell
-from tarnrag.ingestion.extraction._blocks import Block, assemble
-from tarnrag.ingestion.extraction.extractor import Extractor, Source
+from tarnrag.ingestion.components.extraction._blocks import Block, assemble
+from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
 
 _HEADINGS = {"h1", "h2", "h3", "h4", "h5", "h6"}
 _SKIP = {"script", "style", "head"}  # non-content subtrees

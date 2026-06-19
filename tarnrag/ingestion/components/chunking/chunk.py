@@ -19,7 +19,7 @@ from pydantic import Field
 from tarnrag.contracts import Element, ElementKind, PipelineItem, Span, StructuredDocument
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.hashing import compute_content_hash
-from tarnrag.ingestion.chunking.chunker import Chunker
+from tarnrag.ingestion.components.chunking.chunker import Chunker
 from tarnrag.ingestion.pipeline import PipelineStage
 
 

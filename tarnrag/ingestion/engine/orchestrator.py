@@ -16,7 +16,7 @@ from tarnrag.core.exceptions import IngestionError
 from tarnrag.contracts import ChunkStore, PipelineItem
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.ingestion.batch import BatchContext, BatchCoordinator
-from tarnrag.ingestion.jobs import Batch, IngestionJob
+from tarnrag.ingestion.engine.jobs import Batch, IngestionJob
 from tarnrag.ingestion.queue import JobEnqueuer
 from tarnrag.ingestion.result_sink import ResultSink
 

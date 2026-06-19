@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from tarnrag.ingestion.extraction import PdfTextExtractor, Source
+from tarnrag.ingestion.components.extraction import PdfTextExtractor, Source
 
 pytestmark = pytest.mark.skipif(
     importlib.util.find_spec("pdfplumber") is None,

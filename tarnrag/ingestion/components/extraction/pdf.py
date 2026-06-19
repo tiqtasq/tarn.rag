@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Literal
 
 from tarnrag.contracts import Element, ElementKind, PageBox, Span, StructuredDocument
-from tarnrag.ingestion.extraction.extractor import Extractor, Source
+from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
 
 _SEP = "\n"  # joins line texts into StructuredDocument.text
 

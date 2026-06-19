@@ -7,13 +7,13 @@ global ``ComponentFactory`` (each self-registers under its ``class_name``), so `
 submodule, which the lines above have already loaded.
 """
 
-from tarnrag.ingestion.extraction.extractor import Extractor, Source
-from tarnrag.ingestion.extraction.docling_pdf import DoclingExtractor
-from tarnrag.ingestion.extraction.html import HtmlExtractor
-from tarnrag.ingestion.extraction.markdown import MarkdownExtractor
-from tarnrag.ingestion.extraction.pdf import PdfTextExtractor
-from tarnrag.ingestion.extraction.plain_text import PlainTextExtractor
-from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
+from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
+from tarnrag.ingestion.components.extraction.docling_pdf import DoclingExtractor
+from tarnrag.ingestion.components.extraction.html import HtmlExtractor
+from tarnrag.ingestion.components.extraction.markdown import MarkdownExtractor
+from tarnrag.ingestion.components.extraction.pdf import PdfTextExtractor
+from tarnrag.ingestion.components.extraction.plain_text import PlainTextExtractor
+from tarnrag.ingestion.components.extraction.load_parse import LoadAndParseStage
 
 __all__ = [
     "Extractor",

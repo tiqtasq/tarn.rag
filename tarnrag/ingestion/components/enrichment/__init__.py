@@ -6,8 +6,8 @@ register their own ``Enricher`` components on the same framework. The enrichers 
 ``EnrichStage`` (the driver builds enricher children).
 """
 
-from tarnrag.ingestion.enrichment.enricher import Enricher
-from tarnrag.ingestion.enrichment.acronyms import AcronymEnricher
-from tarnrag.ingestion.enrichment.enrich import EnrichStage
+from tarnrag.ingestion.components.enrichment.enricher import Enricher
+from tarnrag.ingestion.components.enrichment.acronyms import AcronymEnricher
+from tarnrag.ingestion.components.enrichment.enrich import EnrichStage
 
 __all__ = ["Enricher", "AcronymEnricher", "EnrichStage"]

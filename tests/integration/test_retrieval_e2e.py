@@ -7,15 +7,15 @@ store (no separate index file). InMemoryJobQueue + SQLite repo + a fake 3-d embe
 from tarnrag.contracts import build_index_meta
 from tarnrag.contracts import PipelineItem
 from tarnrag.retrieval import Query, RetrievalEngine
-from tarnrag.ingestion.orchestrator import PipelineDAG, PipelineOrchestrator
+from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
 from tarnrag.ingestion.queue import InMemoryJobQueue
 from tarnrag.ingestion.result_sink import create_sink_registry
-from tarnrag.ingestion.chunking.chunk import ChunkStage
+from tarnrag.ingestion.components.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
 from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.ingestion.embed import EmbedStage
-from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
-from tarnrag.ingestion.worker import IngestionWorker
+from tarnrag.ingestion.components.extraction.load_parse import LoadAndParseStage
+from tarnrag.ingestion.engine.worker import IngestionWorker
 
 
 class _FakeEmbedder:

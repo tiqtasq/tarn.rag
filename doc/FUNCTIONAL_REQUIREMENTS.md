@@ -243,7 +243,7 @@ inheritance.
 ### Model contracts
 
 Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/contracts/dtos.py`,
-`tarnrag/ingestion/jobs.py`.
+`tarnrag/ingestion/engine/jobs.py`.
 
 - **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`.
 - **`Document`**: `id`, `content`, `metadata` (carries `source_id`, the idempotency key).
@@ -507,7 +507,7 @@ small `job_status` projection in the repository.
 > to `PgQueuerJobQueue` and should be confirmed against the pinned pgQueuer version.
 
 `JobEnqueuer` (ABC): `enqueue(job)`. `JobConsumer` (ABC): `set_handler(handler)`, `run()`.
-The handler receives a **`Batch`** (`ingestion/jobs.py`) — a homogeneous unit whose jobs
+The handler receives a **`Batch`** (`ingestion/engine/jobs.py`) — a homogeneous unit whose jobs
 all share one `stage_name`. Forming the Batch is the **consumer's** responsibility (it's what
 makes the worker a dead-simple "one batch → one stage" handler); `Batch`'s constructor
 enforces homogeneity (and rejects empties), so a mixed-stage claim fails loudly rather than
@@ -561,7 +561,7 @@ consumer → requeue (recovery, D5).
 The public surface is two engines, each built from `Settings` via a `create()` factory; jobs
 never leak into the contract.
 
-**`IngestionEngine`** (`tarnrag/ingestion/engine.py`) — document-centric producer/query facade.
+**`IngestionEngine`** (`tarnrag/ingestion/engine/engine.py`) — document-centric producer/query facade.
 - `await IngestionEngine.create(settings=None)` wires everything per `Settings.MODE`
   (`embedded` → in-process InMemory queue; `distributed` → pgQueuer + a separate `run_worker()`).
 - `ingest_paths(paths)`, `ingest_content(documents)`, `ingest_streams(streams)` shape

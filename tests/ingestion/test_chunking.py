@@ -11,9 +11,9 @@ from tarnrag.contracts import (
     Table,
     TableCell,
 )
-from tarnrag.ingestion.chunking.chunk import ChunkStage
-from tarnrag.ingestion.chunking.recursive import RecursiveCharacterChunker
-from tarnrag.ingestion.chunking.structure_aware import StructureAwareChunker
+from tarnrag.ingestion.components.chunking.chunk import ChunkStage
+from tarnrag.ingestion.components.chunking.recursive import RecursiveCharacterChunker
+from tarnrag.ingestion.components.chunking.structure_aware import StructureAwareChunker
 
 
 def _doc(elements, text="x" * 400):

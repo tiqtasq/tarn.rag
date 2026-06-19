@@ -10,7 +10,7 @@ import re
 from typing import Literal
 
 from tarnrag.contracts import StructuredDocument
-from tarnrag.ingestion.enrichment.enricher import Enricher
+from tarnrag.ingestion.components.enrichment.enricher import Enricher
 
 _ACRONYM = re.compile(r"\b[A-Z]{2,}\b")  # 2+ consecutive capitals — an acronym/initialism token
 

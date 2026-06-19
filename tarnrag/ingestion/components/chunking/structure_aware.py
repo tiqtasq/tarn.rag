@@ -32,7 +32,7 @@ from tarnrag.contracts import (
     StructuredDocument,
     Table,
 )
-from tarnrag.ingestion.chunking.chunker import Chunker
+from tarnrag.ingestion.components.chunking.chunker import Chunker
 
 _JOIN = "\n\n"  # joins packed element texts within a chunk
 

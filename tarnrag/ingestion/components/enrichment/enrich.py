@@ -16,7 +16,7 @@ from pydantic import Field
 
 from tarnrag.contracts import PipelineItem
 from tarnrag.core.components import ComponentFactory
-from tarnrag.ingestion.enrichment.enricher import Enricher
+from tarnrag.ingestion.components.enrichment.enricher import Enricher
 from tarnrag.ingestion.pipeline import PipelineStage
 
 

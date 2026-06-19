@@ -13,8 +13,8 @@ import re
 from typing import Literal
 
 from tarnrag.contracts import StructuredDocument, Table, TableCell
-from tarnrag.ingestion.extraction._blocks import Block, assemble
-from tarnrag.ingestion.extraction.extractor import Extractor, Source
+from tarnrag.ingestion.components.extraction._blocks import Block, assemble
+from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
 
 _HEADING = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _LIST_ITEM = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(.*\S)\s*$")  # -, *, +, or "1." / "1)" markers

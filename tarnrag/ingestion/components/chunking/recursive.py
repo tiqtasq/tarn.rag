@@ -14,7 +14,7 @@ from typing import Literal
 from pydantic import Field, model_validator
 
 from tarnrag.contracts import ChunkProvenance, Element, Span, StructuredDocument
-from tarnrag.ingestion.chunking.chunker import Chunker
+from tarnrag.ingestion.components.chunking.chunker import Chunker
 
 _SEPARATORS = ["\n\n", "\n", ". ", " ", ""]
 
