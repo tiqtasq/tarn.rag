@@ -1,14 +1,17 @@
 """The Reasoner seam — retrieve, read, and produce an answer with supporting reasoning steps.
 
 A ``Reasoner`` is a config-driven ``Component`` (a pure strategy; resources injected via
-``GenerationContext``). The slice-2 ``SingleHopReasoner`` does **one** retrieval round: it searches the
-port, lays the hits out as numbered passages, asks the ``LanguageModel`` to answer using ONLY those
-passages and to cite — per claim — the passage numbers it relied on (a strict-JSON reply), and parses that
-into reasoning steps. Multi-hop (a retrieve↔read loop + question decomposition) is slice 4, behind the
-same seam.
+``GenerationContext``). It returns a ``ReasonedAnswer`` (answer + steps citing evidence *by index* + the
+evidence list); the ``EvidenceAssembler`` turns those cited indices into provenance-bearing ``Citation``s.
+Three strategies share the seam (swap the reasoner spec):
 
-It returns a ``ReasonedAnswer`` (answer + steps citing evidence *by index* + the evidence list); the
-``EvidenceAssembler`` turns those cited indices into provenance-bearing ``Citation``s.
+- ``SingleHopReasoner`` — one retrieval round + one read (the MVP).
+- ``IterativeReasoner`` — multi-hop by a retrieve↔read loop: the model answers or asks for a follow-up
+  search; evidence accumulates until it's confident or ``max_hops`` is reached (handles dependent chains).
+- ``DecompositionReasoner`` — multi-hop by splitting the question into independent sub-questions up front,
+  retrieving for each, then synthesizing one answer.
+
+The passage-formatting / cited-index parsing / read logic live on the base, so all three reuse them.
 """
 
 from __future__ import annotations
@@ -42,6 +45,18 @@ class ReasonedAnswer:
     evidence: list[RetrievalResult]
 
 
+# The read prompt — answer using ONLY the numbered passages, citing per claim. Shared by the single-hop
+# read and the decomposition synthesis (both are "read these passages → answer + cited steps").
+_READ_SYSTEM = (
+    "You are a careful technical assistant. Answer the question using ONLY the numbered passages "
+    "provided; do not use outside knowledge. If the passages do not contain the answer, say so plainly.\n\n"
+    "Reply with a SINGLE JSON object and nothing else:\n"
+    '{"answer": "<concise answer>", "steps": [{"claim": "<one supported statement>", '
+    '"cited": [<passage numbers this claim relies on>]}]}\n'
+    'Each claim\'s "cited" lists the 1-based passage numbers that support it; use only numbers shown.'
+)
+
+
 class Reasoner(Component):
     """Port: produce a ``ReasonedAnswer`` for a query over the ``GenerationContext`` (retrieve + read)."""
 
@@ -52,43 +67,14 @@ class Reasoner(Component):
     async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
         """Retrieve, read, and return the answer + supporting steps + the evidence drawn on."""
 
-
-_SYSTEM = (
-    "You are a careful technical assistant. Answer the question using ONLY the numbered passages "
-    "provided; do not use outside knowledge. If the passages do not contain the answer, say so plainly.\n\n"
-    "Reply with a SINGLE JSON object and nothing else:\n"
-    '{"answer": "<concise answer>", "steps": [{"claim": "<one supported statement>", '
-    '"cited": [<passage numbers this claim relies on>]}]}\n'
-    'Each claim\'s "cited" lists the 1-based passage numbers that support it; use only numbers shown.'
-)
-
-
-class SingleHopReasoner(Reasoner):
-    """One retrieval round + one read — the MVP reasoner. Search → numbered passages → strict-JSON answer
-    with per-claim citations. Falls back to citing all retrieved passages if the reply isn't parseable
-    JSON, so an answer always carries its evidence."""
-
-    class Config(Reasoner.Config):
-        class_name: Literal["single_hop"] = "single_hop"
-        top_k: int = 8  # passages to retrieve and lay before the model
-
-    config: SingleHopReasoner.Config
-
-    async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
-        results = await ctx.retrieval.search(replace(query, top_k=self.config.top_k))
-        completion = await ctx.llm.complete(Prompt(system=_SYSTEM, user=self._format(query.text, results)))
-        answer, steps = self._parse(completion.text, len(results))
-        return ReasonedAnswer(answer=answer, steps=steps, evidence=results)
+    # ---------------- shared helpers (used by every reasoner) ----------------
 
     @staticmethod
-    def _format(question: str, results: list[RetrievalResult]) -> str:
-        """The user message: the question + the retrieved passages, numbered 1-based for citation."""
+    def _numbered_passages(results: list[RetrievalResult]) -> str:
+        """The retrieved passages, numbered 1-based for citation (``(none retrieved)`` when empty)."""
         if not results:
-            return f"Question: {question}\n\nPassages: (none retrieved)"
-        passages = "\n".join(
-            f"[{i + 1}] {SingleHopReasoner._label(r)}{r.text}" for i, r in enumerate(results)
-        )
-        return f"Question: {question}\n\nPassages:\n{passages}"
+            return "(none retrieved)"
+        return "\n".join(f"[{i + 1}] {Reasoner._label(r)}{r.text}" for i, r in enumerate(results))
 
     @staticmethod
     def _label(result: RetrievalResult) -> str:
@@ -99,23 +85,27 @@ class SingleHopReasoner(Reasoner):
         return f"{result.locator} — " if result.locator else ""
 
     @staticmethod
-    def _parse(text: str, n: int) -> tuple[str, list[ReasonedStep]]:
-        """Parse ``{answer, steps:[{claim, cited}]}`` from the reply; fall back to ``(text, cite-all)``."""
+    def _read(text: str, n: int) -> tuple[str, list[ReasonedStep]]:
+        """Parse a read reply ``{answer, steps:[{claim, cited}]}``; fall back to ``(text, cite-all)``."""
         data = extract_json(text)
         if not isinstance(data, dict) or "answer" not in data:
             answer = text.strip()
             return answer, [ReasonedStep(claim=answer, cited=list(range(n)))]
         answer = str(data.get("answer", "")).strip()
+        return answer, Reasoner._parse_steps(data.get("steps"), answer, n)
+
+    @staticmethod
+    def _parse_steps(raw_steps: Any, answer: str, n: int) -> list[ReasonedStep]:
+        """Parse a ``steps`` array into ``ReasonedStep``s with validated cited indices; fall back to one
+        cite-all step over ``answer`` when none are usable."""
         steps: list[ReasonedStep] = []
-        for s in data.get("steps") or []:
+        for s in raw_steps or []:
             if not isinstance(s, dict):
                 continue
             claim = str(s.get("claim", "")).strip()
             if claim:
-                steps.append(ReasonedStep(claim=claim, cited=SingleHopReasoner._valid_indices(s.get("cited"), n)))
-        if not steps:  # well-formed answer but no usable steps -> one step over all evidence
-            steps = [ReasonedStep(claim=answer, cited=list(range(n)))]
-        return answer, steps
+                steps.append(ReasonedStep(claim=claim, cited=Reasoner._valid_indices(s.get("cited"), n)))
+        return steps or [ReasonedStep(claim=answer, cited=list(range(n)))]
 
     @staticmethod
     def _valid_indices(cited: Any, n: int) -> list[int]:
@@ -131,3 +121,119 @@ class SingleHopReasoner(Reasoner):
             if 0 <= i < n and i not in out:
                 out.append(i)
         return out
+
+
+class SingleHopReasoner(Reasoner):
+    """One retrieval round + one read — the MVP reasoner. Search → numbered passages → strict-JSON answer
+    with per-claim citations. Falls back to citing all retrieved passages if the reply isn't parseable
+    JSON, so an answer always carries its evidence."""
+
+    class Config(Reasoner.Config):
+        class_name: Literal["single_hop"] = "single_hop"
+        top_k: int = 8  # passages to retrieve and lay before the model
+
+    config: SingleHopReasoner.Config
+
+    async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
+        results = await ctx.retrieval.search(replace(query, top_k=self.config.top_k))
+        user = f"Question: {query.text}\n\nPassages:\n{self._numbered_passages(results)}"
+        completion = await ctx.llm.complete(Prompt(system=_READ_SYSTEM, user=user))
+        answer, steps = self._read(completion.text, len(results))
+        return ReasonedAnswer(answer=answer, steps=steps, evidence=results)
+
+
+_ITER_SYSTEM = (
+    "You research a question over a corpus you can search in steps. Given the question and the passages "
+    "gathered SO FAR (numbered), decide whether they suffice — use ONLY these passages.\n\n"
+    "Reply with a SINGLE JSON object and nothing else:\n"
+    '{"done": <true|false>, "answer": "<answer, if done>", '
+    '"follow_up": "<one focused search query, if not done>", '
+    '"steps": [{"claim": "<supported statement>", "cited": [<passage numbers>]}]}\n'
+    "When the passages are enough, set done=true with answer + steps. Otherwise done=false with a follow_up "
+    "search that would fill the gap. On the final step you must answer with what you have."
+)
+
+
+class IterativeReasoner(Reasoner):
+    """Multi-hop by an iterative retrieve↔read loop: each step searches, the model either answers or asks
+    for a follow-up search, evidence accumulates, until it's confident or ``max_hops`` is reached. Handles
+    dependent chains — a later hop can build on what an earlier one found."""
+
+    class Config(Reasoner.Config):
+        class_name: Literal["iterative"] = "iterative"
+        max_hops: int = 3
+        top_k: int = 8  # passages retrieved per hop
+
+    config: IterativeReasoner.Config
+
+    async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
+        evidence: list[RetrievalResult] = []
+        seen: set[str] = set()
+        search_query = query.text
+        for hop in range(self.config.max_hops):
+            results = await ctx.retrieval.search(replace(query, text=search_query, top_k=self.config.top_k))
+            for r in results:
+                if r.chunk_id not in seen:
+                    seen.add(r.chunk_id)
+                    evidence.append(r)
+            completion = await ctx.llm.complete(
+                Prompt(
+                    system=_ITER_SYSTEM,
+                    user=f"Question: {query.text}\n\nPassages so far:\n{self._numbered_passages(evidence)}",
+                )
+            )
+            data = extract_json(completion.text)
+            if not isinstance(data, dict):  # unparseable ⇒ answer with the raw text, citing all gathered
+                answer = completion.text.strip()
+                return ReasonedAnswer(answer, [ReasonedStep(answer, list(range(len(evidence))))], evidence)
+            follow_up = str(data.get("follow_up", "")).strip()
+            if hop == self.config.max_hops - 1 or data.get("done") or not follow_up:
+                answer = str(data.get("answer", "")).strip()
+                return ReasonedAnswer(answer, self._parse_steps(data.get("steps"), answer, len(evidence)), evidence)
+            search_query = follow_up
+        return ReasonedAnswer("", [], evidence)  # only reached if max_hops <= 0
+
+
+_DECOMPOSE_SYSTEM = (
+    "Break the question into a few INDEPENDENT sub-questions whose answers together answer it. Keep them "
+    'focused and few. Reply with a SINGLE JSON object and nothing else: {"sub_questions": ["...", "..."]}.'
+)
+
+
+class DecompositionReasoner(Reasoner):
+    """Multi-hop by decomposition: the model splits the question into independent sub-questions up front,
+    each is retrieved for, and the gathered evidence is synthesized into one answer. Good for questions
+    that gather several independent facts (the sub-queries don't depend on each other)."""
+
+    class Config(Reasoner.Config):
+        class_name: Literal["decomposition"] = "decomposition"
+        max_subquestions: int = 4
+        top_k: int = 8  # passages retrieved per sub-question
+
+    config: DecompositionReasoner.Config
+
+    async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
+        evidence: list[RetrievalResult] = []
+        seen: set[str] = set()
+        for sub_question in await self._decompose(query.text, ctx):
+            results = await ctx.retrieval.search(replace(query, text=sub_question, top_k=self.config.top_k))
+            for r in results:
+                if r.chunk_id not in seen:
+                    seen.add(r.chunk_id)
+                    evidence.append(r)
+        completion = await ctx.llm.complete(
+            Prompt(
+                system=_READ_SYSTEM,
+                user=f"Question: {query.text}\n\nPassages:\n{self._numbered_passages(evidence)}",
+            )
+        )
+        answer, steps = self._read(completion.text, len(evidence))
+        return ReasonedAnswer(answer=answer, steps=steps, evidence=evidence)
+
+    async def _decompose(self, question: str, ctx: GenerationContext) -> list[str]:
+        """The sub-questions to retrieve for — falls back to the original question if none parse."""
+        completion = await ctx.llm.complete(Prompt(system=_DECOMPOSE_SYSTEM, user=f"Question: {question}"))
+        data = extract_json(completion.text)
+        raw = data.get("sub_questions") if isinstance(data, dict) else None
+        subs = [str(s).strip() for s in raw if str(s).strip()] if isinstance(raw, list) else []
+        return subs[: self.config.max_subquestions] or [question]

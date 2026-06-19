@@ -19,7 +19,14 @@ from tarnrag.generation.components.grounding import (
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
-from tarnrag.generation.components.reasoner import ReasonedAnswer, ReasonedStep, Reasoner, SingleHopReasoner
+from tarnrag.generation.components.reasoner import (
+    DecompositionReasoner,
+    IterativeReasoner,
+    ReasonedAnswer,
+    ReasonedStep,
+    Reasoner,
+    SingleHopReasoner,
+)
 from tarnrag.generation.types import Citation, GenerationResult, ProofStep
 
 __all__ = [
@@ -28,6 +35,8 @@ __all__ = [
     "GenerationContext",
     "Reasoner",
     "SingleHopReasoner",
+    "IterativeReasoner",
+    "DecompositionReasoner",
     "ReasonedAnswer",
     "ReasonedStep",
     "EvidenceAssembler",
