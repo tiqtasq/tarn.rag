@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(
 def _embedder():
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
-    from tarnrag.core.embedder import OnnxEmbedder
+    from tarnrag.core.resources.embedder import OnnxEmbedder
 
     return OnnxEmbedder(
         str(MODEL_DIR), model_id="thenlper/gte-small", embedding_dim=384
@@ -55,7 +55,7 @@ def test_fingerprint_stable_and_meta_complete():
 
 
 def test_inject_header_path_changes_fingerprint():
-    from tarnrag.core.embedder import OnnxEmbedder
+    from tarnrag.core.resources.embedder import OnnxEmbedder
 
     base = _embedder()  # inject_header_path defaults False
     injected = OnnxEmbedder(

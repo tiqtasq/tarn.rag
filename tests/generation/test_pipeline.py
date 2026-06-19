@@ -3,7 +3,7 @@
 import json
 
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.llm import StaticLanguageModel
+from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import GenerationContext, GenerationEngine, GenerationPipeline
 from tarnrag.retrieval.types import Query
 

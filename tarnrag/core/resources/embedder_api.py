@@ -18,7 +18,7 @@ from abc import abstractmethod
 from typing import Any
 
 from tarnrag.core.config import EmbeddingSettings
-from tarnrag.core.embedder import Embedder
+from tarnrag.core.resources.embedder import Embedder
 
 
 class _ApiEmbedder(Embedder):

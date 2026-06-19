@@ -14,8 +14,8 @@ from typing import Any
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings, get_settings
-from tarnrag.core.cross_encoder import CrossEncoder, OnnxCrossEncoder
-from tarnrag.core.embedder import Embedder
+from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
+from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult

@@ -20,7 +20,7 @@ from abc import abstractmethod
 from pathlib import Path
 
 from tarnrag.core.config import RerankSettings
-from tarnrag.core.resource import Resource
+from tarnrag.core.resources.resource import Resource
 
 
 class CrossEncoder(Resource):

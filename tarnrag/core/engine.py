@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Self
 
 from tarnrag.core.config import Settings
-from tarnrag.core.embedder import Embedder, build_embedder
+from tarnrag.core.resources.embedder import Embedder, build_embedder
 from tarnrag.storage.repository import DocumentRepository
 
 

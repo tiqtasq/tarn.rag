@@ -22,7 +22,7 @@ from typing import Any
 
 from tarnrag.core.config import EmbeddingSettings
 from tarnrag.core.hashing import sha256_file, sha256_hex
-from tarnrag.core.resource import Resource
+from tarnrag.core.resources.resource import Resource
 
 
 class Embedder(Resource):
@@ -254,7 +254,7 @@ def build_embedder(embedding: EmbeddingSettings, embedding_dimension: int) -> Em
     the retrieval side can't disagree on the backend."""
     if embedding.provider == "onnx":
         return OnnxEmbedder.create(embedding, embedding_dimension)
-    from tarnrag.core.embedder_api import EMBEDDER_PROVIDERS
+    from tarnrag.core.resources.embedder_api import EMBEDDER_PROVIDERS
 
     try:
         impl = EMBEDDER_PROVIDERS[embedding.provider]

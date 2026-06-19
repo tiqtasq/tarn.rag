@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import Component
-from tarnrag.core.llm import Prompt
+from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.context import GenerationContext
 from tarnrag.retrieval.types import Query
 

@@ -82,7 +82,7 @@ The reader/decomposer LLM is a new **`Resource`** (an engine-built, injected mod
 `Embedder` / `CrossEncoder`, *not* a `Component`), and it lives in **`core/`** — *not* in `generation/`:
 
 ```python
-class LanguageModel(Resource):                          # tarnrag/core/llm.py
+class LanguageModel(Resource):                          # tarnrag/core/resources/llm.py
     async def complete(self, prompt: Prompt) -> Completion: ...   # text in / text (+ optional structured) out
     def identity(self) -> str: ...
 ```

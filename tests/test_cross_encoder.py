@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
 def _cross_encoder():
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
-    from tarnrag.core.cross_encoder import OnnxCrossEncoder
+    from tarnrag.core.resources.cross_encoder import OnnxCrossEncoder
 
     return OnnxCrossEncoder(str(MODEL_DIR), model_id="cross-encoder/ms-marco-MiniLM-L-6-v2")
 

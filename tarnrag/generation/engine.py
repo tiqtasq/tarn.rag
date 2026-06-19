@@ -14,7 +14,7 @@ from typing import Any, Self
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.config import GENERATION_PIPELINE, Settings, get_settings
-from tarnrag.core.llm import LanguageModel
+from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult

@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from tarnrag.core.resource import Resource
+from tarnrag.core.resources.resource import Resource
 
 if TYPE_CHECKING:
     from tarnrag.core.config import LLMSettings
@@ -58,7 +58,7 @@ class LanguageModel(Resource):
         the provider's constructor. The provider map is local (single use) and the import lazy (it pulls
         the optional SDK). LLM construction is uniform, so — unlike ``build_embedder`` — no per-provider
         ``create`` is needed; a provider with bespoke construction would reintroduce one."""
-        from tarnrag.core.llm_api import AnthropicLanguageModel
+        from tarnrag.core.resources.llm_api import AnthropicLanguageModel
 
         providers: dict[str, type[LanguageModel]] = {"anthropic": AnthropicLanguageModel}
         provider = providers.get(llm.provider)

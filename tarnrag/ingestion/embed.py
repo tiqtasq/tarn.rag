@@ -77,7 +77,7 @@ class EmbedStage(PipelineStage):
 
     def _get_embedder(self):
         if self._embedder is None:
-            from tarnrag.core.embedder import build_embedder
+            from tarnrag.core.resources.embedder import build_embedder
 
             self._embedder = build_embedder(
                 self.config.embedding, self.config.embedding_dimension

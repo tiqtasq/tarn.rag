@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from tarnrag.core.llm import Completion, LanguageModel, Prompt
+from tarnrag.core.resources.llm import Completion, LanguageModel, Prompt
 
 
 class AnthropicLanguageModel(LanguageModel):

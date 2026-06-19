@@ -2,9 +2,9 @@
 
 from tarnrag.core.components import Component
 from tarnrag.core.config import EmbeddingSettings, RerankSettings
-from tarnrag.core.cross_encoder import CrossEncoder, OnnxCrossEncoder
-from tarnrag.core.embedder import Embedder, OnnxEmbedder
-from tarnrag.core.resource import Resource
+from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
+from tarnrag.core.resources.embedder import Embedder, OnnxEmbedder
+from tarnrag.core.resources.resource import Resource
 
 
 def test_models_are_resources_not_components():

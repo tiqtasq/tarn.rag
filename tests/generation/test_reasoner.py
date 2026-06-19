@@ -2,7 +2,7 @@
 
 import json
 
-from tarnrag.core.llm import StaticLanguageModel
+from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import SingleHopReasoner
 from tarnrag.generation.context import GenerationContext
 from tarnrag.retrieval.types import Query

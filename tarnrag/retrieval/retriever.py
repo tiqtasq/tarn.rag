@@ -15,8 +15,8 @@ from typing import Literal
 
 from tarnrag.contracts import Candidate, RetrievalStore
 from tarnrag.core.components import Component
-from tarnrag.core.cross_encoder import CrossEncoder
-from tarnrag.core.embedder import Embedder
+from tarnrag.core.resources.cross_encoder import CrossEncoder
+from tarnrag.core.resources.embedder import Embedder
 from tarnrag.retrieval.types import Query
 
 
