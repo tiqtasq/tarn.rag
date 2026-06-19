@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
-from tarnrag.contracts import MethodRef
+from tarnrag.contracts import Annotation, MethodRef
 
 
 class Purpose(str, Enum):
@@ -26,7 +26,13 @@ ALL = "ALL"
 class Query:
     """
     A retrieval request: the query text plus knobs (purpose, method scope, top_k / dense_k /
-    sparse_k).
+    sparse_k), and a classification (``query_type`` + ``annotations``) a ``QueryClassifier`` may fill.
+
+    ``query_type`` is the cheap route key the ``RoutingRetrievalPipeline`` dispatches on; ``annotations``
+    is the rich, extensible channel a classifier writes its findings to — the same ``Annotation`` type
+    enrichment uses on chunks (so an LLM classifier's findings carry the ``deterministic`` flag, and a
+    span can mark which substring is an identifier). Both default empty: an unclassified query routes to
+    the pipeline's default. Set them via a classifier or supply them directly.
     """
 
     text: str
@@ -35,3 +41,5 @@ class Query:
     top_k: int = 8
     dense_k: int = 50
     sparse_k: int = 50  # used in Step B (sparse retriever)
+    query_type: str = ""  # headline classification label; the router's route key
+    annotations: list[Annotation] = field(default_factory=list)  # the classifier's rich findings

@@ -10,6 +10,16 @@ terms from the docs). Segmenting the scores by that label answers the question t
 *query routing* is worth building: **does a different method win on a different kind of query?** (Spoiler
 for this corpus: sparse BM25 collapses on the semantic queries — no shared terms — while dense holds up.)
 
+When it does, a **`RoutingRetrievalPipeline`** classifies each query and sends it to the per-type-best
+method. The ``"routed (by type)"`` spec below does that; the eval supplies the labeled ``query_type``, so
+it routes on those labels (an *oracle*, isolating "does routing help?" from classifier accuracy), and the
+domain-independent **`StructuralQueryClassifier`** then reproduces those labels with no labels of its own
+(the classifier check at the end), so the same routing happens automatically in production.
+
+Routing's ceiling is the best method *on each type*, so it only beats a single pipeline when the per-type
+winners differ. On this tiny corpus dense is robust on both types, so ``routed`` simply matches ``dense``;
+the case where routing wins outright (each method best on one type) is in ``tests/eval/test_harness.py``.
+
 The corpus is tiny, so treat the numbers as illustrative; the point is the machinery. Relevance is
 content-based: a hit counts if a result's chunk text contains one of a query's gold phrases.
 
@@ -26,7 +36,7 @@ from pathlib import Path
 
 from tarnrag import RetrievalEngine
 from tarnrag.eval import EvalReport, EvalSet, format_reports, format_segmented, sweep
-from tarnrag.retrieval import RetrievalContext
+from tarnrag.retrieval import Query, RetrievalContext, StructuralQueryClassifier
 
 from examples.common import base_settings, example_db, require_model
 
@@ -47,6 +57,17 @@ PIPELINES = {
     },
 }
 
+# Routing: classify the query, then dispatch to the per-type-best method (sparse on lexical, dense on
+# semantic). Because the eval supplies the labeled query_type, the router dispatches on those labels and
+# skips its classifier entirely (a caller-supplied query_type wins) = oracle routing, which isolates "does
+# routing help?" from classifier accuracy. The classifier check at the end shows the domain-independent
+# StructuralQueryClassifier reproducing those labels with no labels of its own.
+ROUTED = {
+    "class_name": "routing_retrieval_pipeline",
+    "routes": {"lexical": PIPELINES["sparse (bm25)"], "semantic": PIPELINES["dense"]},
+    "default": PIPELINES["dense"],
+}
+
 
 async def main() -> dict[str, EvalReport]:
     """Sweep the pipelines over the labeled set against the example_03 store; print the table."""
@@ -64,10 +85,10 @@ async def main() -> dict[str, EvalReport]:
     # only its store + embedder as the shared context the pipeline specs all run against.
     async with await RetrievalEngine.create(settings) as engine:
         ctx = RetrievalContext(engine.repository, engine.embedder)
-        reports = await sweep(PIPELINES, ctx, evalset, k=3)
+        reports = await sweep({**PIPELINES, "routed (by type)": ROUTED}, ctx, evalset, k=3)
 
     print(
-        f"Comparing {len(PIPELINES)} retrieval pipelines over {len(evalset.queries)} queries "
+        f"Comparing {len(reports)} retrieval pipelines over {len(evalset.queries)} queries "
         "(k=3, relevance = gold phrase in the chunk text):\n"
     )
     print(format_reports(reports))
@@ -75,6 +96,16 @@ async def main() -> dict[str, EvalReport]:
     print(format_segmented(reports, metric="hit_at_k"))
     print()
     print(format_segmented(reports, metric="mrr"))
+
+    # The router above used the labeled types (oracle). Show the domain-independent classifier
+    # reproducing them with no labels — so that routing is what you'd get automatically in production.
+    print("\nStructuralQueryClassifier (domain-independent, no labels) vs the labels:")
+    classifier = StructuralQueryClassifier(StructuralQueryClassifier.Config())
+    for q in evalset.queries:
+        probe = Query(text=q.text)
+        classifier.classify(probe, None)
+        flag = "ok  " if probe.query_type == q.query_type else "MISS"
+        print(f"  [{flag}] predicted {probe.query_type:9} labeled {q.query_type:9} {q.text}")
     return reports
 
 
