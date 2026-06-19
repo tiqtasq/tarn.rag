@@ -7,8 +7,8 @@ the engine's calls return. Everything else (orchestrator, queue, worker, stages)
 
 # Importing each capability package / stage module self-registers its stages + components with the
 # global ComponentFactory, so Pipeline.from_spec can build them from Settings.components.
-from tarnrag.ingestion import clean_normalize, embed  # noqa: F401
 from tarnrag.ingestion.components import chunking, enrichment, extraction  # noqa: F401
+from tarnrag.ingestion.pipeline import clean_normalize, embed  # noqa: F401
 from tarnrag.ingestion.engine.engine import IngestionEngine, run_worker
 from tarnrag.ingestion.types import DocumentStatus, DocumentSummary
 

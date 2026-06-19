@@ -6,7 +6,7 @@ from tarnrag.contracts import PipelineItem
 from tarnrag.ingestion.batch import BatchContext, BatchCoordinator
 from tarnrag.ingestion.engine.jobs import IngestionJob
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
-from tarnrag.ingestion.pipeline import PipelineStage
+from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 from tarnrag.ingestion.engine.queue import InMemoryJobQueue
 from tarnrag.ingestion.engine.result_sink import PassthroughSink
 from tarnrag.ingestion.engine.worker import IngestionWorker

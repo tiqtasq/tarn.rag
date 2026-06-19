@@ -13,8 +13,8 @@ from tarnrag.core.engine.config import (
     Settings,
 )
 from tarnrag.ingestion import IngestionEngine
-from tarnrag.ingestion.pipeline import Pipeline
-from tarnrag.ingestion.embed import EmbedStage
+from tarnrag.ingestion.pipeline.pipeline import Pipeline
+from tarnrag.ingestion.pipeline.embed import EmbedStage
 
 
 def _settings(**kwargs) -> Settings:

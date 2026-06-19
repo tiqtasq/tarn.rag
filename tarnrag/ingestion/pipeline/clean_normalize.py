@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from tarnrag.ingestion.pipeline import MapperStage
+from tarnrag.ingestion.pipeline.pipeline import MapperStage
 
 _C0_CONTROL = re.compile(r"[\x01-\x08\x0b\x0c\x0e-\x1f]")
 

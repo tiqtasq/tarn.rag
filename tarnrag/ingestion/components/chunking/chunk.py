@@ -20,7 +20,7 @@ from tarnrag.contracts import Element, ElementKind, PipelineItem, Span, Structur
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.hashing import compute_content_hash
 from tarnrag.ingestion.components.chunking.chunker import Chunker
-from tarnrag.ingestion.pipeline import PipelineStage
+from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 
 
 class ChunkStage(PipelineStage):

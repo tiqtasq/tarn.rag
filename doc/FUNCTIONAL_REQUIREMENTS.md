@@ -422,7 +422,7 @@ CREATE INDEX idx_job_status_document ON job_status (document_id);
 
 ## Pipeline & Stages
 
-### Stage base classes (`tarnrag/ingestion/pipeline.py`)
+### Stage base classes (`tarnrag/ingestion/pipeline/pipeline.py`)
 
 ABCs, and config-driven **`Component`s** (`tarnrag/core/components`): each stage declares a typed
 nested `Config` (a pydantic model that pins a `class_name` tag plus the stage's fields) and is

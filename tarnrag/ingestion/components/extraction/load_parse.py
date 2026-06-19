@@ -26,7 +26,7 @@ from pydantic import Field
 from tarnrag.contracts import PipelineItem
 from tarnrag.core.components import ComponentFactory
 from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
-from tarnrag.ingestion.pipeline import PipelineStage
+from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 
 # Default source_kind -> extractor spec. Config-driven: override per format via Settings.components.
 _DEFAULT_ROUTES: dict[str, dict[str, Any]] = {

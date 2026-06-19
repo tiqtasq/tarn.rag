@@ -16,7 +16,7 @@ from tarnrag.core.components import ComponentFactory
 from tarnrag.eval.dataset import EvalSet
 from tarnrag.eval.metrics import hit_at_k, ndcg_at_k, reciprocal_rank
 from tarnrag.retrieval.components.retriever import RetrievalContext
-from tarnrag.retrieval.components.searcher import Searcher
+from tarnrag.retrieval.pipeline.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 

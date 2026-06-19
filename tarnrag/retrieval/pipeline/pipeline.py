@@ -23,7 +23,7 @@ from tarnrag.retrieval.components.fuser import Fuser
 from tarnrag.retrieval.components.merger import Merger
 from tarnrag.retrieval.components.reranker import Reranker
 from tarnrag.retrieval.components.retriever import RetrievalContext, Retriever
-from tarnrag.retrieval.components.searcher import Searcher
+from tarnrag.retrieval.pipeline.searcher import Searcher
 from tarnrag.retrieval.types import ALL, Purpose, Query
 
 

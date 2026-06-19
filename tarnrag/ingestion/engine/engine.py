@@ -33,7 +33,7 @@ from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_met
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
-from tarnrag.ingestion.pipeline import Pipeline
+from tarnrag.ingestion.pipeline.pipeline import Pipeline
 from tarnrag.ingestion.engine.queue import (
     InMemoryJobQueue,
     JobConsumer,

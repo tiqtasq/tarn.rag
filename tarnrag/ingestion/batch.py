@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from tarnrag.ingestion.engine.jobs import Batch
-from tarnrag.ingestion.pipeline import PipelineStage
+from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 
 
 class BatchContext(ABC):
