@@ -7,6 +7,19 @@ is relevant iff its text contains a gold phrase — so labels survive re-ingesti
 
 from tarnrag.eval import metrics
 from tarnrag.eval.dataset import EvalQuery, EvalSet
+from tarnrag.eval.generation import (
+    GenEvalQuery,
+    GenEvalReport,
+    GenEvalSet,
+    GenQueryReport,
+    citation_coverage,
+    content_hit,
+    evaluate_generation,
+    exact_match,
+    format_generation_reports,
+    sweep_generation,
+    token_f1,
+)
 from tarnrag.eval.harness import (
     EvalReport,
     QueryReport,
@@ -19,6 +32,7 @@ from tarnrag.eval.harness import (
 
 __all__ = [
     "metrics",
+    # retrieval eval
     "EvalQuery",
     "EvalSet",
     "EvalReport",
@@ -28,4 +42,16 @@ __all__ = [
     "by_query_type",
     "format_reports",
     "format_segmented",
+    # generation eval
+    "GenEvalQuery",
+    "GenEvalSet",
+    "GenEvalReport",
+    "GenQueryReport",
+    "evaluate_generation",
+    "sweep_generation",
+    "format_generation_reports",
+    "content_hit",
+    "token_f1",
+    "exact_match",
+    "citation_coverage",
 ]
