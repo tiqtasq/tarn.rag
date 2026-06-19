@@ -7,7 +7,7 @@ import pytest
 
 from tarnrag.core.components import Component
 from tarnrag.core.components.registry import UnknownTagError
-from tarnrag.core.config import (
+from tarnrag.core.engine.config import (
     INGESTION_PIPELINE,
     EmbeddingSettings,
     Settings,

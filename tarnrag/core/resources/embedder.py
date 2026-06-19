@@ -20,7 +20,7 @@ from abc import abstractmethod
 from pathlib import Path
 from typing import Any
 
-from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.core.hashing import sha256_file, sha256_hex
 from tarnrag.core.resources.resource import Resource
 

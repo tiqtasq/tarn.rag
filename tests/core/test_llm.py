@@ -8,7 +8,7 @@ import types
 
 import pytest
 
-from tarnrag.core.config import LLMSettings
+from tarnrag.core.engine.config import LLMSettings
 from tarnrag.core.resources.llm import LanguageModel, Prompt, StaticLanguageModel
 from tarnrag.core.resources.llm_api import AnthropicLanguageModel
 

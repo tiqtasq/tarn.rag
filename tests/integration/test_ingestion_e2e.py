@@ -11,7 +11,7 @@ from tarnrag.ingestion.queue import InMemoryJobQueue
 from tarnrag.ingestion.result_sink import create_sink_registry
 from tarnrag.ingestion.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
-from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.ingestion.embed import EmbedStage
 from tarnrag.ingestion.extraction.load_parse import LoadAndParseStage
 from tarnrag.ingestion.worker import IngestionWorker

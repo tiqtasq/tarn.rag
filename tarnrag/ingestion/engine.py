@@ -25,10 +25,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
 
-from tarnrag.core.config import INGESTION_PIPELINE, IdPolicy, Settings, get_settings
+from tarnrag.core.engine.config import INGESTION_PIPELINE, IdPolicy, Settings, get_settings
 from tarnrag.core.hashing import sha256_file, sha256_hex
-from tarnrag.core.observability import NoOpObservability
-from tarnrag.core.engine import Engine
+from tarnrag.core.engine.observability import NoOpObservability
+from tarnrag.core.engine.engine import Engine
 from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader

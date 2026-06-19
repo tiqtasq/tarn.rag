@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.contracts import Embedding, PipelineItem
 from tarnrag.ingestion.pipeline import PipelineStage
 

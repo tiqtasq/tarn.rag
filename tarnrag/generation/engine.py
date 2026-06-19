@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Self
 
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.config import GENERATION_PIPELINE, Settings, get_settings
+from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline import GenerationPipeline

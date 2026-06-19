@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from tarnrag.core.resources.resource import Resource
 
 if TYPE_CHECKING:
-    from tarnrag.core.config import LLMSettings
+    from tarnrag.core.engine.config import LLMSettings
 
 
 @dataclass(frozen=True)

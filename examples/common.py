@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tarnrag.core.config import DatabaseSettings, EmbeddingSettings, Settings
+from tarnrag.core.engine.config import DatabaseSettings, EmbeddingSettings, Settings
 
 EXAMPLES_DIR = Path(__file__).resolve().parent          # the examples/ package
 REPO_ROOT = EXAMPLES_DIR.parent

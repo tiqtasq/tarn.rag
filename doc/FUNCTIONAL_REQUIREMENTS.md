@@ -594,7 +594,7 @@ never leak into the contract.
 
 ## Configuration
 
-**`Settings`** (`tarnrag/core/config.py`, pydantic-settings; cached `get_settings()`). Config is
+**`Settings`** (`tarnrag/core/engine/config.py`, pydantic-settings; cached `get_settings()`). Config is
 **grouped into nested sub-models** — `settings.embedding`, `settings.chunking`,
 `settings.database`, `settings.worker`, `settings.observability` — read from env via the
 `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`, `DATABASE__DOCUMENT_URL`). Cross-cutting
@@ -616,7 +616,7 @@ environment template.
 
 ## Observability
 
-**Interface (`tarnrag/core/observability.py`).** `Observability` (ABC): abstract `async
+**Interface (`tarnrag/core/engine/observability.py`).** `Observability` (ABC): abstract `async
 log(level, message, **context)`, `counter(name, value=1, tags=None)`, `gauge(name, value,
 tags=None)`, plus a **concrete** `timer(name, tags=None)` `@contextmanager` that records
 elapsed seconds as `{name}.seconds` via `gauge` (so every adapter — and the no-op — gets it

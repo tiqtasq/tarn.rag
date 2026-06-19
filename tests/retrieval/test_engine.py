@@ -6,7 +6,7 @@ from tarnrag.contracts import build_index_meta
 from tarnrag.contracts import (
     Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
 )
-from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings
+from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval import (
     AutoMerger, CrossEncoderReranker, Query, RetrievalContext, RetrievalEngine, RetrievalError,
     RetrievalPipeline,

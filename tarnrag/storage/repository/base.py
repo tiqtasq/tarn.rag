@@ -29,7 +29,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
-from tarnrag.core.config import DatabaseSettings
+from tarnrag.core.engine.config import DatabaseSettings
 from tarnrag.core.hashing import compute_content_hash
 from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (

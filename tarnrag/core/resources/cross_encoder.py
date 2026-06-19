@@ -19,7 +19,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from pathlib import Path
 
-from tarnrag.core.config import RerankSettings
+from tarnrag.core.engine.config import RerankSettings
 from tarnrag.core.resources.resource import Resource
 
 

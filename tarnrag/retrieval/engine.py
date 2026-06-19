@@ -13,10 +13,10 @@ from __future__ import annotations
 from typing import Any
 
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.config import RETRIEVAL_PIPELINE, Settings, get_settings
+from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
-from tarnrag.core.engine import Engine
+from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository

@@ -17,7 +17,7 @@ import os
 from abc import abstractmethod
 from typing import Any
 
-from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.core.resources.embedder import Embedder
 
 

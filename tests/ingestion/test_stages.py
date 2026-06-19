@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from tarnrag.contracts import ChunkProvenance, PipelineItem
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.config import EmbeddingSettings
+from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.ingestion.pipeline import Pipeline
 from tarnrag.ingestion.chunking.chunk import ChunkStage
 from tarnrag.ingestion.clean_normalize import CleanAndNormalizeStage
