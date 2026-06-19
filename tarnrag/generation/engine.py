@@ -18,7 +18,7 @@ from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
-from tarnrag.retrieval.engine import RetrievalEngine
+from tarnrag.retrieval.engine.engine import RetrievalEngine
 from tarnrag.retrieval.protocol import RetrievalEngineProtocol
 from tarnrag.retrieval.types import Query
 

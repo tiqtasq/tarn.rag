@@ -20,8 +20,8 @@ from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
-from tarnrag.retrieval.retriever import RetrievalContext
-from tarnrag.retrieval.searcher import Searcher
+from tarnrag.retrieval.components.retriever import RetrievalContext
+from tarnrag.retrieval.components.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 _DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser

@@ -60,7 +60,7 @@ class RetrievalEngineProtocol(Protocol):                       # in tarnrag/retr
 ```
 
 - **Python deployment:** `RetrievalEngine` *structurally* satisfies it (its `search` already has this
-  shape — see `retrieval/engine.py`). Zero new code.
+  shape — see `retrieval/engine/engine.py`). Zero new code.
 - **C++ deployment (later):** a thin Python `C++RetrievalAdapter(RetrievalEngineProtocol)` wraps the binding.
 
 The data crossing this seam — `Query` (in) and `RetrievalResult` / `ChunkProvenance` (out) — is the

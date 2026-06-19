@@ -19,11 +19,11 @@ from pydantic import Field
 
 from tarnrag.contracts import ChunkRecord, RetrievalResult
 from tarnrag.core.components import ComponentFactory
-from tarnrag.retrieval.fuser import Fuser
-from tarnrag.retrieval.merger import Merger
-from tarnrag.retrieval.reranker import Reranker
-from tarnrag.retrieval.retriever import RetrievalContext, Retriever
-from tarnrag.retrieval.searcher import Searcher
+from tarnrag.retrieval.components.fuser import Fuser
+from tarnrag.retrieval.components.merger import Merger
+from tarnrag.retrieval.components.reranker import Reranker
+from tarnrag.retrieval.components.retriever import RetrievalContext, Retriever
+from tarnrag.retrieval.components.searcher import Searcher
 from tarnrag.retrieval.types import ALL, Purpose, Query
 
 

@@ -25,7 +25,7 @@ from typing import Any, Literal
 
 from tarnrag.contracts import Annotation, Geometry
 from tarnrag.core.components import Component
-from tarnrag.retrieval.retriever import RetrievalContext
+from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query
 
 

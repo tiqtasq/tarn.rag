@@ -583,7 +583,7 @@ never leak into the contract.
 - `document_jobs(document_id)` is the **debug-gated** window into per-job state (raises unless
   `APP__DEBUG`). Lifecycle: `aclose()` / `async with`.
 
-**`RetrievalEngine`** (`tarnrag/retrieval/engine.py`) — sync query facade over the §8 index.
+**`RetrievalEngine`** (`tarnrag/retrieval/engine/engine.py`) — sync query facade over the §8 index.
 - `RetrievalEngine.create(settings=None)` opens the index (read-only) + the shared embedder and
   validates schema + embedding fingerprint (`RetrievalEngine.open(...)` is the lower-level seam).
 - `search(Query)` / `search_text(text, *, top_k, dense_k)` → ranked `RetrievalResult`s;

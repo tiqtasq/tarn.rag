@@ -17,9 +17,9 @@ from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import ComponentFactory
-from tarnrag.retrieval.classifier import QueryClassifier
-from tarnrag.retrieval.retriever import RetrievalContext
-from tarnrag.retrieval.searcher import Searcher
+from tarnrag.retrieval.components.classifier import QueryClassifier
+from tarnrag.retrieval.components.retriever import RetrievalContext
+from tarnrag.retrieval.components.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 _DEFAULT_SEARCHER: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser

@@ -19,7 +19,7 @@ from typing import Literal
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import Component
 from tarnrag.core.exceptions import RetrievalError
-from tarnrag.retrieval.retriever import RetrievalContext
+from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query
 
 
