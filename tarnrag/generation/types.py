@@ -42,10 +42,12 @@ class Citation:
 
 @dataclass(frozen=True)
 class ProofStep:
-    """One reasoning step: a claim plus the evidence it rests on."""
+    """One reasoning step: a claim, the evidence it rests on, and whether the grounding check found that
+    evidence to support it (``grounded`` is ``True`` when no checker ran — see the pipeline)."""
 
     claim: str
     citations: list[Citation] = field(default_factory=list)
+    grounded: bool = True
 
 
 @dataclass(frozen=True)

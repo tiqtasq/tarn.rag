@@ -54,3 +54,51 @@ async def test_no_results_yields_an_answer_with_empty_evidence(make_result, fake
     res = await _pipeline().answer(Query(text="q"), ctx)
     assert res.answer == "No passages found." and res.evidence == []
     assert res.proof and res.proof[0].citations == []  # one step, nothing to cite
+
+
+def _grounded(**extra):
+    """A generation spec with the heuristic grounding checker (no LLM, so it doesn't clash with the
+    reasoner's canned reply) + any abstention overrides."""
+    return {"class_name": "generation_pipeline", "grounding_checker": {"class_name": "heuristic_grounding"}, **extra}
+
+
+async def test_grounding_stamps_verdicts_and_keeps_a_supported_answer(make_result, fake_retrieval):
+    results = [make_result("a", "Coatings resist corrosion."), make_result("b", "Quokkas grin.")]
+    reply = json.dumps(
+        {"answer": "Apply a coating.", "steps": [{"claim": "coatings resist corrosion", "cited": [1]}]}
+    )
+    ctx = GenerationContext(fake_retrieval(results), StaticLanguageModel(reply))
+    res = await _pipeline(_grounded()).answer(Query(text="?"), ctx)
+    assert res.proof[0].grounded is True
+    assert res.grounded is True and res.abstained is False
+
+
+async def test_grounding_flags_an_unsupported_answer_without_abstaining(make_result, fake_retrieval):
+    results = [make_result("a", "Coatings resist corrosion."), make_result("b", "Quokkas grin.")]
+    # the claim cites passage 1 (coatings) but is about quokkas -> ungrounded
+    reply = json.dumps(
+        {"answer": "Quokkas are great.", "steps": [{"claim": "quokkas are marsupials", "cited": [1]}]}
+    )
+    ctx = GenerationContext(fake_retrieval(results), StaticLanguageModel(reply))
+    res = await _pipeline(_grounded()).answer(Query(text="?"), ctx)
+    assert res.proof[0].grounded is False
+    assert res.grounded is False and res.abstained is False  # best-grounded flag (abstain off by default)
+    assert res.answer == "Quokkas are great."  # the answer is kept
+
+
+async def test_grounding_abstains_below_threshold(make_result, fake_retrieval):
+    results = [make_result("a", "Coatings resist corrosion.")]
+    reply = json.dumps(
+        {"answer": "Quokkas are great.", "steps": [{"claim": "quokkas are marsupials", "cited": [0]}]}
+    )
+    ctx = GenerationContext(fake_retrieval(results), StaticLanguageModel(reply))
+    res = await _pipeline(_grounded(abstain=True)).answer(Query(text="?"), ctx)
+    assert res.abstained is True and res.grounded is False
+    assert "grounded evidence" in res.answer.lower()  # the refusal replaced the answer
+
+
+async def test_no_checker_preserves_grounded_default(make_result, fake_retrieval):
+    results = [make_result("a", "x")]
+    ctx = GenerationContext(fake_retrieval(results), StaticLanguageModel(json.dumps({"answer": "ok"})))
+    res = await _pipeline().answer(Query(text="?"), ctx)
+    assert res.grounded is True and res.abstained is False and res.proof[0].grounded is True
