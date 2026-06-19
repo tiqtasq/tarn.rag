@@ -16,9 +16,9 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.core.components import Component, ComponentFactory
-from tarnrag.generation.assembler import EvidenceAssembler
+from tarnrag.generation.components.assembler import EvidenceAssembler
 from tarnrag.generation.context import GenerationContext
-from tarnrag.generation.reasoner import Reasoner
+from tarnrag.generation.components.reasoner import Reasoner
 from tarnrag.generation.types import GenerationResult
 from tarnrag.retrieval.types import Query
 

@@ -16,7 +16,7 @@ from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
-from tarnrag.generation.pipeline import GenerationPipeline
+from tarnrag.generation.pipeline.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 from tarnrag.retrieval.protocol import RetrievalEngineProtocol
