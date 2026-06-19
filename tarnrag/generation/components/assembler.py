@@ -24,8 +24,9 @@ class EvidenceAssembler(Component):
         """Base assembler config; concrete assemblers pin ``class_name``."""
 
     @abstractmethod
-    def assemble(self, reasoned: ReasonedAnswer) -> list[ProofStep]:
-        """Map each step's cited evidence to ``Citation``s, producing the inspectable proof tree."""
+    def assemble(self, reasoned: ReasonedAnswer, grounded: list[bool] | None = None) -> list[ProofStep]:
+        """Map each step's cited evidence to ``Citation``s, producing the inspectable proof tree.
+        ``grounded`` (aligned to ``reasoned.steps``) stamps each step's verdict; ``None`` ⇒ all grounded."""
 
 
 class ProvenanceAssembler(EvidenceAssembler):
@@ -36,11 +37,12 @@ class ProvenanceAssembler(EvidenceAssembler):
 
     config: ProvenanceAssembler.Config
 
-    def assemble(self, reasoned: ReasonedAnswer) -> list[ProofStep]:
+    def assemble(self, reasoned: ReasonedAnswer, grounded: list[bool] | None = None) -> list[ProofStep]:
         return [
             ProofStep(
                 claim=step.claim,
                 citations=[Citation.from_result(reasoned.evidence[i]) for i in step.cited],
+                grounded=grounded[idx] if grounded is not None else True,
             )
-            for step in reasoned.steps
+            for idx, step in enumerate(reasoned.steps)
         ]

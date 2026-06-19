@@ -6,11 +6,16 @@ tiqtasq's REST layer. The dependency is strictly one-way (``generation → retri
 retrieval core self-contained and C++-portable. See ``doc/generation-architecture-design.md``.
 
 ``GenerationEngine.create()`` is the entry point (question → ``GenerationResult``); ``GenerationPipeline``
-composes the ``Reasoner`` + ``EvidenceAssembler`` seams. Slice 2 ships the single-hop MVP (no grounding
-check / multi-hop yet — slices 3 / 4).
+composes the ``Reasoner`` + ``EvidenceAssembler`` (+ optional ``GroundingChecker``) seams. Slice 3 adds
+grounding + abstention; multi-hop is slice 4.
 """
 
 from tarnrag.generation.components.assembler import EvidenceAssembler, ProvenanceAssembler
+from tarnrag.generation.components.grounding import (
+    GroundingChecker,
+    HeuristicGroundingChecker,
+    LLMGroundingChecker,
+)
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
@@ -27,6 +32,9 @@ __all__ = [
     "ReasonedStep",
     "EvidenceAssembler",
     "ProvenanceAssembler",
+    "GroundingChecker",
+    "HeuristicGroundingChecker",
+    "LLMGroundingChecker",
     "Citation",
     "ProofStep",
     "GenerationResult",

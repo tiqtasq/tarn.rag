@@ -13,7 +13,6 @@ It returns a ``ReasonedAnswer`` (answer + steps citing evidence *by index* + the
 
 from __future__ import annotations
 
-import json
 from abc import abstractmethod
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -21,6 +20,7 @@ from typing import Any, Literal
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import Component
 from tarnrag.core.resources.llm import Prompt
+from tarnrag.generation.components._parsing import extract_json
 from tarnrag.generation.context import GenerationContext
 from tarnrag.retrieval.types import Query
 
@@ -101,7 +101,7 @@ class SingleHopReasoner(Reasoner):
     @staticmethod
     def _parse(text: str, n: int) -> tuple[str, list[ReasonedStep]]:
         """Parse ``{answer, steps:[{claim, cited}]}`` from the reply; fall back to ``(text, cite-all)``."""
-        data = SingleHopReasoner._extract_json(text)
+        data = extract_json(text)
         if not isinstance(data, dict) or "answer" not in data:
             answer = text.strip()
             return answer, [ReasonedStep(claim=answer, cited=list(range(n)))]
@@ -116,21 +116,6 @@ class SingleHopReasoner(Reasoner):
         if not steps:  # well-formed answer but no usable steps -> one step over all evidence
             steps = [ReasonedStep(claim=answer, cited=list(range(n)))]
         return answer, steps
-
-    @staticmethod
-    def _extract_json(text: str) -> Any:
-        """The first parseable JSON object in ``text`` (whole string, else the outermost ``{...}``)."""
-        text = text.strip()
-        try:
-            return json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            start, end = text.find("{"), text.rfind("}")
-            if 0 <= start < end:
-                try:
-                    return json.loads(text[start : end + 1])
-                except (json.JSONDecodeError, ValueError):
-                    return None
-            return None
 
     @staticmethod
     def _valid_indices(cited: Any, n: int) -> list[int]:
