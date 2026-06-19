@@ -13,9 +13,13 @@ from __future__ import annotations
 
 import pytest
 
+import json
+
 from examples.part_i.example_01 import ingestion, retrieval
 from examples.part_i.example_02 import ingestion as ingestion_02, retrieval as retrieval_02
 from examples.part_i.example_03 import evaluation as evaluation_03, ingestion as ingestion_03
+from examples.part_i.example_04 import generation as generation_04, ingestion as ingestion_04
+from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.eval import by_query_type
 
 pytestmark = pytest.mark.requires_model
@@ -78,3 +82,45 @@ async def test_example_03_compares_retrieval_methods():
     # sparse's lexical strength and dense's semantic robustness instead of either single method's weak side.
     assert routed["lexical"].hit_at_k == sparse["lexical"].hit_at_k
     assert routed["semantic"].hit_at_k == dense["semantic"].hit_at_k
+
+
+# Canned answers for example 04, routed on the question line (not the whole prompt, whose passages would
+# false-match). Lets the smoke test exercise the real reasoner + grounding + abstention flow with no key.
+_EX04_ANSWERS = {
+    "pump": {"answer": "Check the mechanical seal, bearing lubrication, and shaft alignment.",
+             "steps": [{"claim": "service the mechanical seal and bearing lubrication", "cited": [1]}]},
+    "corrosion": {"answer": "Visual inspection plus ultrasonic shell-thickness testing.",
+                  "steps": [{"claim": "ultrasonic testing measures shell thickness for corrosion", "cited": [1]}]},
+    "capital": {"answer": "Paris.", "steps": [{"claim": "the capital of france is paris", "cited": [1]}]},
+}
+
+
+def _example04_llm() -> StaticLanguageModel:
+    def _reply(prompt):
+        if prompt.system and "fact-checker" in prompt.system:  # the grounding checker's prompt
+            return json.dumps({"verdicts": [True, True, True, True]})  # say grounded (parser pads to n)
+        question_line = prompt.user.split("\n", 1)[0].lower()  # "question: ..."
+        for key, reply in _EX04_ANSWERS.items():
+            if key in question_line:
+                return json.dumps(reply)
+        return json.dumps({"answer": "I don't know.", "steps": []})
+
+    return StaticLanguageModel(_reply)
+
+
+async def test_example_04_generation_end_to_end():
+    # Ingestion is offline (local embedder); only generation needs an LLM, which we inject (no key).
+    statuses = await ingestion_04.main()
+    assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
+
+    results = await generation_04.main(llm=_example04_llm())
+    assert len(results) == 3  # one GenerationResult per question in questions.json
+
+    # The two corpus questions are answered + grounded (their claims overlap the cited passages);
+    # the off-topic "capital of France" has no support in the corpus -> the policy abstains.
+    pump, corrosion, france = results
+    assert not pump.abstained and pump.grounded and pump.proof[0].grounded
+    assert not corrosion.abstained and corrosion.grounded
+    assert france.abstained  # the abstention policy refused the unsupported question
+    # The proof tree cites the readable source document the answer rests on.
+    assert pump.proof[0].citations[0].document_id == "pump-maintenance"

@@ -1,0 +1,5 @@
+{
+  "class_name": "retrieval_pipeline",
+  "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+  "fuser": {"class_name": "rrf"}
+}
