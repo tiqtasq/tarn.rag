@@ -58,12 +58,12 @@ PIPELINES = {
 }
 
 # Routing: classify the query, then dispatch to the per-type-best method (sparse on lexical, dense on
-# semantic). The "noop" classifier + the labeled query_type the eval supplies = oracle routing, which
-# isolates "does routing help?" from classifier accuracy. The classifier check at the end shows the
-# domain-independent StructuralQueryClassifier reproducing those labels with no labels of its own.
+# semantic). Because the eval supplies the labeled query_type, the router dispatches on those labels and
+# skips its classifier entirely (a caller-supplied query_type wins) = oracle routing, which isolates "does
+# routing help?" from classifier accuracy. The classifier check at the end shows the domain-independent
+# StructuralQueryClassifier reproducing those labels with no labels of its own.
 ROUTED = {
     "class_name": "routing_retrieval_pipeline",
-    "classifier": {"class_name": "noop"},
     "routes": {"lexical": PIPELINES["sparse (bm25)"], "semantic": PIPELINES["dense"]},
     "default": PIPELINES["dense"],
 }

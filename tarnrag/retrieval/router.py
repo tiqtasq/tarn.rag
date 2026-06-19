@@ -30,7 +30,7 @@ class RoutingRetrievalPipeline(Searcher):
 
     class Config(Searcher.Config):
         class_name: Literal["routing_retrieval_pipeline"] = "routing_retrieval_pipeline"
-        classifier: dict[str, Any] = Field(default_factory=lambda: {"class_name": "noop"})
+        classifier: dict[str, Any] = Field(default_factory=lambda: {"class_name": "generic"})
         routes: dict[str, dict[str, Any]] = Field(default_factory=dict)  # query_type → Searcher spec
         default: dict[str, Any] = Field(default_factory=lambda: dict(_DEFAULT_SEARCHER))
 

@@ -105,7 +105,7 @@ async def test_segments_metrics_by_query_type(repo):
 
 _ROUTED = {
     "class_name": "routing_retrieval_pipeline",
-    "classifier": {"class_name": "noop"},  # route on the supplied (labeled) query_type
+    # The eval supplies query_type, so the router dispatches on those labels and skips its classifier.
     "routes": {"lexical": _SPARSE, "semantic": _DENSE},
     "default": _DENSE,
 }

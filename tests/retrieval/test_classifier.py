@@ -1,8 +1,8 @@
-"""The QueryClassifier seam: the NoOp default + the domain-independent StructuralQueryClassifier."""
+"""The QueryClassifier seam: the generic default + the domain-independent StructuralQueryClassifier."""
 
 import pytest
 
-from tarnrag.retrieval import NoOpQueryClassifier, Query, StructuralQueryClassifier
+from tarnrag.retrieval import GenericQueryClassifier, Query, StructuralQueryClassifier
 
 
 def _structural(**overrides) -> StructuralQueryClassifier:
@@ -15,10 +15,22 @@ def _classify(text: str, **overrides) -> Query:
     return q
 
 
-def test_noop_classifies_nothing():
+def test_generic_classifier_tags_generic_and_annotates():
+    # The default classifier guarantees a query_type + a matching annotation, uniform with the structural
+    # one — so downstream never has to special-case an unclassified query.
     q = Query(text="anything at all")
-    NoOpQueryClassifier(NoOpQueryClassifier.Config()).classify(q, None)
-    assert q.query_type == "" and q.annotations == []
+    GenericQueryClassifier(GenericQueryClassifier.Config()).classify(q, None)
+    assert q.query_type == "generic"
+    assert len(q.annotations) == 1
+    ann = q.annotations[0]
+    assert ann.producer == "generic" and ann.type == "query_classification"
+    assert ann.value == {"label": "generic"} and ann.deterministic is True
+
+
+def test_generic_query_type_is_configurable():
+    q = Query(text="x")
+    GenericQueryClassifier(GenericQueryClassifier.Config(query_type="default")).classify(q, None)
+    assert q.query_type == "default" and q.annotations[0].value["label"] == "default"
 
 
 @pytest.mark.parametrize(
@@ -64,6 +76,12 @@ def test_function_word_heavy_phrase_is_semantic_without_a_question():
 def test_exact_match_cues_force_lexical(text):
     # Even an otherwise natural-language phrasing routes lexical when it carries an exact-match cue.
     assert _classify(text).query_type == "lexical"
+
+
+def test_punctuation_only_token_is_not_an_identifier():
+    # A token that strips to empty (all punctuation) isn't an identifier — the empty-core guard.
+    assert StructuralQueryClassifier._looks_like_identifier("--") is False
+    assert _classify("corrosion -- inspection").query_type == "lexical"  # still a plain keyword phrase
 
 
 def test_records_a_rich_annotation():

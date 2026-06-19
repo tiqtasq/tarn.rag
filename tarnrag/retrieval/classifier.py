@@ -5,8 +5,9 @@ same way an ``Enricher`` annotates a chunk: it sets the cheap ``query_type`` rou
 ``Annotation``s (each carrying the ``deterministic`` flag, so an LLM classifier's findings are flagged,
 never silently trusted). Classification is opt-in:
 
-- ``NoOpQueryClassifier`` — the **default**; classifies nothing (an unconfigured router falls through to
-  its ``default`` route ≡ a single pipeline).
+- ``GenericQueryClassifier`` — the **default**; tags every query with one constant ``query_type``
+  (``"generic"``) and records the annotation, so a router with no real classifier still **guarantees a
+  query_type annotation exists** while routing everything to its ``default`` route.
 - ``StructuralQueryClassifier`` — the first real, **domain-independent** classifier: a heuristic over the
   query's *form* (not its subject), → ``query_type ∈ {lexical, semantic}``.
 
@@ -30,8 +31,8 @@ from tarnrag.retrieval.types import Query
 
 class QueryClassifier(Component):
     """Port: classify a ``Query`` in place — set ``query.query_type`` and/or append ``query.annotations``.
-    Subclasses call ``annotate`` rather than touching ``.annotations`` directly, so the ``producer`` is
-    recorded automatically (mirrors ``Enricher.annotate``)."""
+    Subclasses call ``_annotate`` rather than touching ``.annotations`` directly, so the ``producer`` is
+    recorded automatically (the protected helper analog of ``Enricher.annotate``)."""
 
     class Config(Component.Config):
         """Base classifier config; concrete classifiers pin ``class_name``."""
@@ -41,7 +42,7 @@ class QueryClassifier(Component):
         """Annotate ``query`` in place: set its ``query_type`` and/or append annotations. ``ctx`` is
         available for classifiers that need the embedder/store/LLM (the structural one ignores it)."""
 
-    def annotate(
+    def _annotate(
         self,
         query: Query,
         type: str,
@@ -63,17 +64,22 @@ class QueryClassifier(Component):
         )
 
 
-class NoOpQueryClassifier(QueryClassifier):
-    """The default: classify nothing, leaving ``query_type`` as supplied. So a router with no classifier
-    configured dispatches on a caller-supplied ``query_type`` (or its ``default`` route when none)."""
+class GenericQueryClassifier(QueryClassifier):
+    """The default classifier: tag every query with one constant ``query_type`` (``"generic"`` by default)
+    and record the matching annotation — so a router with no real classifier configured still **guarantees
+    a query_type annotation exists** (uniform with the structural one), while routing everything to its
+    ``default`` route (no ``"generic"`` route ⇒ the fallthrough). A caller-supplied ``query_type`` still
+    wins, since the router only invokes a classifier when ``query_type`` is empty."""
 
     class Config(QueryClassifier.Config):
-        class_name: Literal["noop"] = "noop"
+        class_name: Literal["generic"] = "generic"
+        query_type: str = "generic"  # the constant label assigned to every query
 
-    config: NoOpQueryClassifier.Config
+    config: GenericQueryClassifier.Config
 
     def classify(self, query: Query, ctx: RetrievalContext) -> None:
-        return None
+        query.query_type = self.config.query_type
+        self._annotate(query, "query_classification", {"label": self.config.query_type})
 
 
 # Compact, domain-independent word lists (English defaults; override via Config). They lean English, but
@@ -135,7 +141,7 @@ class StructuralQueryClassifier(QueryClassifier):
             label = cfg.lexical_type
 
         query.query_type = label
-        self.annotate(
+        self._annotate(
             query,
             "query_classification",
             {

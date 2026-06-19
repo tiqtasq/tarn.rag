@@ -10,7 +10,7 @@ These are the seams users plug into; the repository, embedder, and cross-encoder
 
 from tarnrag.contracts import MethodRef, RetrievalResult
 from tarnrag.retrieval.classifier import (
-    NoOpQueryClassifier,
+    GenericQueryClassifier,
     QueryClassifier,
     StructuralQueryClassifier,
 )
@@ -34,7 +34,7 @@ __all__ = [
     "RetrievalPipeline",
     "RoutingRetrievalPipeline",
     "QueryClassifier",
-    "NoOpQueryClassifier",
+    "GenericQueryClassifier",
     "StructuralQueryClassifier",
     "Retriever",
     "Fuser",

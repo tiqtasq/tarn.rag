@@ -2,7 +2,7 @@
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.retrieval import (
-    NoOpQueryClassifier,
+    GenericQueryClassifier,
     Query,
     RetrievalPipeline,
     RoutingRetrievalPipeline,
@@ -62,11 +62,13 @@ async def test_supplied_query_type_wins_and_skips_the_classifier():
 
 async def test_unknown_type_falls_through_to_default():
     dflt = _RecordingSearcher("DEF")
-    # NoOp leaves query_type "" -> not in routes -> the default route.
+    # Generic tags "generic" -> not in routes -> the default route (and it annotated the query).
     router = _router(
-        NoOpQueryClassifier(NoOpQueryClassifier.Config()), {"lexical": _RecordingSearcher("LEX")}, dflt
+        GenericQueryClassifier(GenericQueryClassifier.Config()), {"lexical": _RecordingSearcher("LEX")}, dflt
     )
-    assert await router.search(Query(text="whatever this is"), None) == ["DEF"]
+    q = Query(text="whatever this is")
+    assert await router.search(q, None) == ["DEF"]
+    assert q.query_type == "generic" and len(q.annotations) == 1
 
 
 def test_factory_builds_a_router_as_a_searcher():
@@ -87,7 +89,7 @@ def test_factory_builds_a_router_as_a_searcher():
 
 
 def test_default_router_is_just_the_default_pipeline():
-    # All defaults (noop classifier, no routes, dense default): builds, and behaves as a single pipeline.
+    # All defaults (generic classifier, no routes, dense default): builds, and behaves as a single pipeline.
     router = ComponentFactory.get().create_as({"class_name": "routing_retrieval_pipeline"}, Searcher)
     router._ensure_children()
     assert router._routes == {} and isinstance(router._default, RetrievalPipeline)
