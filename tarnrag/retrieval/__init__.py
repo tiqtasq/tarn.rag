@@ -18,6 +18,7 @@ from tarnrag.retrieval.engine import RetrievalEngine, RetrievalError
 from tarnrag.retrieval.fuser import Fuser
 from tarnrag.retrieval.merger import AutoMerger, Merger
 from tarnrag.retrieval.pipeline import RetrievalPipeline
+from tarnrag.retrieval.protocol import RetrievalEngineProtocol
 from tarnrag.retrieval.reranker import CrossEncoderReranker, Reranker
 from tarnrag.retrieval.retriever import RetrievalContext, Retriever
 from tarnrag.retrieval.router import RoutingRetrievalPipeline
@@ -27,6 +28,7 @@ from tarnrag.retrieval.types import Query
 __all__ = [
     "RetrievalEngine",
     "RetrievalError",
+    "RetrievalEngineProtocol",
     "Query",
     "RetrievalResult",
     "MethodRef",

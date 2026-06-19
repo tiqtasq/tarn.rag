@@ -30,6 +30,10 @@ IdPolicy = Literal["caller", "uuid"]
 # Key under ``Settings.components`` holding the ingestion pipeline spec (a Pipeline-component spec).
 INGESTION_PIPELINE = "ingestion_pipeline"
 RETRIEVAL_PIPELINE = "retrieval_pipeline"
+# The generation composition (Goal 3). Unlike the two above it is NOT auto-filled — generation is an
+# opt-in layer, so retrieval-only Settings carry no generation spec; ``GenerationEngine`` falls back to a
+# default when the key is absent (the same posture ``RetrievalEngine`` takes for its own default).
+GENERATION_PIPELINE = "generation_pipeline"
 
 
 class AppSettings(BaseModel):
@@ -90,6 +94,23 @@ class RerankSettings(BaseModel):
     max_seq_length: int = 512
 
 
+class LLMSettings(BaseModel):
+    """
+    The generation ``LanguageModel`` (the reader/decomposer). Built by ``LanguageModel.create`` and
+    injected into the ``GenerationContext``; only constructed when a ``GenerationEngine`` is created, so a
+    retrieval-only deployment never needs an LLM key. Provider-pluggable behind that factory.
+    ``temperature`` / ``max_tokens`` are the defaults a ``Prompt`` may override per call.
+    """
+
+    provider: Literal["anthropic"] = "anthropic"  # more backends add here + in ``LanguageModel.create``
+    model: str = "claude-sonnet-4-6"
+    api_key: str = ""  # falls back to ANTHROPIC_API_KEY
+    api_base_url: str = ""  # falls back to the SDK default endpoint
+    api_timeout: float = 60.0
+    max_tokens: int = 1024
+    temperature: float = 0.0
+
+
 class DatabaseSettings(BaseModel):
     """
     The two stores — never conflate them. ``document_url`` is the repository (documents, chunks,
@@ -146,6 +167,7 @@ class Settings(BaseSettings):
     app: AppSettings = AppSettings()
     embedding: EmbeddingSettings = EmbeddingSettings()
     rerank: RerankSettings = RerankSettings()
+    llm: LLMSettings = LLMSettings()  # the generation reader (built only by GenerationEngine)
     database: DatabaseSettings = DatabaseSettings()
     worker: WorkerSettings = WorkerSettings()
     observability: ObservabilitySettings = ObservabilitySettings()
