@@ -1,14 +1,17 @@
 import hashlib
 
 import pytest
+from sqlalchemy import insert
 from sqlalchemy.exc import IntegrityError
 
 from tarnrag.contracts import (
     Annotation,
     Chunk,
+    ChunkFilter,
     ChunkProvenance,
     Document,
     Embedding,
+    MethodRef,
     PageBox,
     Span,
     Table,
@@ -328,6 +331,68 @@ async def test_sparse_search_ranks_lexical_matches(repo):
     [rec] = await repo.hydrate([hits[0].chunk_id])
     assert rec.text == "storage tank corrosion inspection"  # the lexical match ranks first
     assert await repo.sparse_search("zzznomatch", k=5) == []  # no terms match -> empty
+
+
+async def test_dense_knn_filter_backfills_past_disallowed(repo):
+    """A filtered dense KNN returns the k nearest *permitted* chunks — over-fetch backfills past the
+    nearest chunks the filter drops, so a tight filter can't under-return (finding 1.2)."""
+    _, (c1, c2, c3, c4) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            _chunk("nearest A", 0, 4, available=0),  # nearest, but unavailable
+            _chunk("nearest B", 1, 4, ai_grounding_allowed=0),  # 2nd nearest, not grounding-allowed
+            _chunk("third C", 2, 4),  # permitted
+            _chunk("far D", 3, 4),  # permitted
+        ],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c3, vector=[0.8, 0.2, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c4, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+    ])
+    query = [1.0, 0.0, 0.0]  # nearest order: c1, c2, c3, c4
+    assert [c.chunk_id for c in await repo.dense_knn(query, k=2)] == [c1, c2]  # unfiltered: nearest two
+    # available-only: c1 (unavailable) drops; the next permitted backfills.
+    avail = await repo.dense_knn(query, k=2, filter=ChunkFilter(require_available=True))
+    assert [c.chunk_id for c in avail] == [c2, c3]
+    # also require grounding: c1 (unavailable) AND c2 (not grounding) drop -> c3, c4.
+    grounded = await repo.dense_knn(
+        query, k=2, filter=ChunkFilter(require_available=True, require_grounding=True)
+    )
+    assert [c.chunk_id for c in grounded] == [c3, c4]
+    assert [c.rank for c in grounded] == [1, 2]  # re-ranked 1..k over the permitted set
+
+
+async def test_dense_knn_filter_restricts_to_method_scope(repo):
+    """A method-scoped filter restricts dense results to chunks reachable from the scoped methods (the
+    SQL method_chunks pre-filter); an empty scope permits nothing."""
+    _, (c1, c2) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("in scope", 0, 2), _chunk("out of scope", 1, 2)],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+    ])
+    async with repo.engine.begin() as conn:
+        await conn.execute(
+            insert(repo.method_chunks),
+            [{"method_id": "M1", "method_version": "v1", "chunk_id": c1}],
+        )
+    scoped = await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=(MethodRef("M1"),)))
+    assert [c.chunk_id for c in scoped] == [c1]  # version-agnostic MethodRef matches v1
+    assert await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=())) == []
+
+
+async def test_sparse_search_filter_drops_unavailable(repo):
+    """The permitted-chunk filter applies to sparse retrieval too."""
+    _, (c1, c2) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("tank inspection alpha", 0, 2, available=0), _chunk("tank inspection beta", 1, 2)],
+    )
+    hits = await repo.sparse_search("tank inspection", k=5, filter=ChunkFilter(require_available=True))
+    assert [h.chunk_id for h in hits] == [c2]  # the unavailable lexical match is dropped
 
 
 async def test_hydrate_carries_layout_aware_provenance(repo):

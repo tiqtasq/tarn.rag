@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, false, func, or_, select, true
 from sqlalchemy.ext.asyncio import AsyncConnection
+from sqlalchemy.sql.elements import ColumnElement
 from pgvector.sqlalchemy import Vector
 
 from tarnrag.storage.repository.base import DocumentRepository
-from tarnrag.contracts import Candidate, ChunkRecord
+from tarnrag.contracts import Candidate, ChunkFilter, ChunkRecord
 
 
 class PostgresRepository(DocumentRepository):
@@ -32,6 +33,8 @@ class PostgresRepository(DocumentRepository):
     def _decode_vector(self, stored) -> list[float]:
         return list(stored)
 
+    _IVFFLAT_LISTS = 100  # ivfflat partition count; the filtered path sets probes = this for full recall
+
     async def _before_create_schema(self, conn: AsyncConnection) -> None:
         await conn.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS vector")
 
@@ -40,33 +43,103 @@ class PostgresRepository(DocumentRepository):
         # GIN index (matching sparse_search's to_tsvector expression so the planner uses it).
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS idx_embeddings_vector "
-            "ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100)"
+            f"ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = {self._IVFFLAT_LISTS})"
         )
         await conn.exec_driver_sql(
             "CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin (to_tsvector('english', text))"
         )
 
-    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+    async def dense_knn(
+        self, query_vec: list[float], k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """
         §8 dense KNN over the pgvector ``embeddings`` table (cosine distance, nearest first),
-        returned as ranked ``Candidate``s — the SQLite ``vec_chunks`` counterpart.
+        returned as ranked ``Candidate``s — the SQLite ``vec_chunks`` counterpart. With a ``filter`` the
+        result is the ``k`` nearest *permitted* chunks: a filtered ivfflat scan can under-return, so we
+        over-fetch the top window, join ``chunks``, drop disallowed rows, and backfill (``_overfetch``).
         """
         dist = self.embeddings.c.vector.cosine_distance(query_vec)
-        stmt = select(self.embeddings.c.chunk_id, dist.label("distance")).order_by(dist).limit(k)
-        async with self.engine.connect() as conn:
-            rows = (await conn.execute(stmt)).all()
-        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=d) for i, (cid, d) in enumerate(rows)]
+        if filter is None:
+            stmt = select(self.embeddings.c.chunk_id, dist.label("distance")).order_by(dist).limit(k)
+            async with self.engine.connect() as conn:
+                rows = (await conn.execute(stmt)).all()
+            return [Candidate(chunk_id=cid, rank=i + 1, raw_score=d) for i, (cid, d) in enumerate(rows)]
+        cond = self._chunk_filter_condition(filter)
+        async with self.engine.begin() as conn:
+            # ivfflat is approximate: it probes only `ivfflat.probes` lists (default 1), so a filtered
+            # ORDER BY ... LIMIT can return fewer rows than exist regardless of the LIMIT — over-fetch
+            # alone can't backfill what the index never surfaces. Scan all lists for the filtered path so
+            # recall is exact and the over-fetch sees the true nearest set (throughput is de-prioritized —
+            # NFR-2; SET LOCAL is scoped to this transaction).
+            await conn.exec_driver_sql(f"SET LOCAL ivfflat.probes = {self._IVFFLAT_LISTS}")
+            total = (await conn.execute(select(func.count()).select_from(self.embeddings))).scalar_one()
 
-    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+            async def page(window: int) -> list[tuple[str, float]]:
+                inner = (
+                    select(self.embeddings.c.chunk_id, dist.label("distance"))
+                    .order_by(dist)
+                    .limit(window)
+                    .subquery()
+                )
+                stmt = (
+                    select(inner.c.chunk_id, inner.c.distance)
+                    .join(self.chunks, self.chunks.c.chunk_id == inner.c.chunk_id)
+                    .where(cond)
+                    .order_by(inner.c.distance)
+                )
+                return (await conn.execute(stmt)).all()
+
+            return await self._overfetch(k, total, page)
+
+    async def sparse_search(
+        self, query_text: str, k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """§8 sparse retrieval over a ``to_tsvector('english', text)`` GIN index (``ts_rank_cd``, best
-        first). ``plainto_tsquery`` parses the raw text safely; ``raw_score`` is ts_rank (higher better)."""
+        first). ``plainto_tsquery`` parses the raw text safely; ``raw_score`` is ts_rank (higher better).
+        A ``filter`` is applied as in :meth:`dense_knn` (pre-filtered + over-fetched via ``_overfetch``)."""
         tsv = func.to_tsvector("english", self.chunks.c.text)
         tsq = func.plainto_tsquery("english", query_text)
         score = func.ts_rank_cd(tsv, tsq).label("score")
-        stmt = select(self.chunks.c.chunk_id, score).where(tsv.op("@@")(tsq)).order_by(score.desc()).limit(k)
+        base = select(self.chunks.c.chunk_id, score).where(tsv.op("@@")(tsq))
+        if filter is None:
+            async with self.engine.connect() as conn:
+                rows = (await conn.execute(base.order_by(score.desc()).limit(k))).all()
+            return [Candidate(chunk_id=cid, rank=i + 1, raw_score=s) for i, (cid, s) in enumerate(rows)]
+        cond = self._chunk_filter_condition(filter)
         async with self.engine.connect() as conn:
-            rows = (await conn.execute(stmt)).all()
-        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=s) for i, (cid, s) in enumerate(rows)]
+            total = (await conn.execute(select(func.count()).select_from(self.chunks))).scalar_one()
+
+            async def page(window: int) -> list[tuple[str, float]]:
+                stmt = base.where(cond).order_by(score.desc()).limit(window)
+                return (await conn.execute(stmt)).all()
+
+            return await self._overfetch(k, total, page)
+
+    def _chunk_filter_condition(self, filter: ChunkFilter) -> ColumnElement[bool]:
+        """Build the permitted-chunk boolean over ``chunks`` (Core) for ``filter`` — the Postgres
+        counterpart of ``SqliteRepository._chunk_filter_sql``. ``true()`` when nothing is restricted;
+        an empty ``method_scope`` yields ``false()`` (nothing permitted)."""
+        c = self.chunks.c
+        conds: list[ColumnElement[bool]] = []
+        if filter.require_available:
+            conds.append(c.available == 1)
+        if filter.require_grounding:
+            conds.append(c.ai_grounding_allowed == 1)
+        if filter.method_scope is not None:
+            mc = self.method_chunks.c
+            if not filter.method_scope:
+                conds.append(false())
+            else:
+                refs = or_(
+                    *[
+                        mc.method_id == ref.method_id
+                        if ref.method_version is None
+                        else and_(mc.method_id == ref.method_id, mc.method_version == ref.method_version)
+                        for ref in filter.method_scope
+                    ]
+                )
+                conds.append(c.chunk_id.in_(select(mc.chunk_id).where(refs)))
+        return and_(*conds) if conds else true()
 
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
         """

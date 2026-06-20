@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from tarnrag.contracts import Annotation, MethodRef
+from tarnrag.contracts import Annotation, ChunkFilter, MethodRef
 
 
 class Purpose(str, Enum):
@@ -43,3 +43,13 @@ class Query:
     sparse_k: int = 50  # used in Step B (sparse retriever)
     query_type: str = ""  # headline classification label; the router's route key
     annotations: list[Annotation] = field(default_factory=list)  # the classifier's rich findings
+
+    def permitted_filter(self) -> ChunkFilter:
+        """The permitted-chunk filter for this query (ModusQ §5.6) — available-only by default, grounding
+        required for ``GENERATION_GROUNDING``, restricted to ``scope`` unless it is ``ALL``. The retrievers
+        pass it into the store so disallowed chunks are dropped before ``top_k`` (with over-fetch), instead
+        of truncating first and filtering after (which could under-return for a tight scope)."""
+        return ChunkFilter(
+            require_grounding=self.purpose == Purpose.GENERATION_GROUNDING,
+            method_scope=None if self.scope == ALL else tuple(self.scope),
+        )

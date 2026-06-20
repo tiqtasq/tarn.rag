@@ -4,10 +4,11 @@
 `tarnrag/retrieval/components/` (`retriever.py` = `RetrievalContext` + dense/sparse `Retriever`s;
 `fuser.py` = identity/RRF; `merger.py` = `AutoMerger`; `reranker.py` = `CrossEncoderReranker`;
 `classifier.py`), `retrieval/pipeline/` (`searcher.py`, `pipeline.py` = `RetrievalPipeline`, `router.py` =
-`RoutingRetrievalPipeline`), and `tarnrag/eval/`. **Two deviations to know** (see
-`doc/code-review-findings.md`): the RRF fuser does **not** yet apply the mandatory `chunk_id` tie-break, and
-the license/scope filter runs **post-hydrate** — `dense_knn`/`sparse_search` take **no `filter` arg** (the
-§4 "optimization later" is still later), so scoped queries can under-return.
+`RoutingRetrievalPipeline`), and `tarnrag/eval/`. The two earlier deviations are now **fixed** (see
+`doc/code-review-findings.md` 1.1 / 1.2): the RRF/identity fusers apply the mandatory `(score desc,
+chunk_id asc)` tie-break, and the license/scope filter is a **pre-filter inside the retrievers** —
+`dense_knn`/`sparse_search` take a `ChunkFilter` and over-fetch to backfill, so scoped queries no longer
+under-return.
 
 The second original ask: **compare retrieval methods**. Retrieval used to be dense-only (`embed →
 dense_knn → hydrate → assemble`) in one monolithic `RetrievalEngine.search`. This designed the seams so
@@ -112,11 +113,12 @@ The query-time knobs stay on `Query` (`top_k`, `dense_k`, `sparse_k`, `purpose`,
 
 ## 4. License / scope filter
 
-Driven by the **`Query`** (`purpose`, `scope`), not by config, so it's a fixed engine step, not a
-swappable Component. It drops hydrated records by `license_class` / `ai_grounding_allowed` / `available`
-(already columns on `chunks`) and by method `scope` (via `method_chunks`). Applied post-hydrate on the
-over-fetched set. *Optimization (later):* push the predicate into the retriever SQL to avoid fetching
-disallowed chunks at all.
+Driven by the **`Query`** (`purpose`, `scope`), not by config, so it's a fixed step rather than a swappable
+Component. `Query.permitted_filter()` builds a `ChunkFilter` (`available` / `ai_grounding_allowed` columns
+on `chunks` + method `scope` via `method_chunks`) that the retrievers pass into `dense_knn`/`sparse_search`;
+**the predicate is pushed into the retriever SQL** and the search over-fetches to backfill past disallowed
+chunks (the first-draft post-hydrate filter was replaced — finding 1.2). *Deferred:* the per-purpose
+`license_class` policy (finding 1.3).
 
 ## 5. Provenance in the read path (the contract extension)
 
@@ -156,9 +158,10 @@ plain query embedder — the compatibility check protects against mismatched com
    (SQLite FTS5 **and** Postgres tsvector/GIN); `Retriever`(dense/sparse) + `Fuser`(identity/rrf);
    `RetrievalPipeline` composed from `RETRIEVAL_PIPELINE`; the engine delegates to it. Delivers the
    **dense / sparse / hybrid** trio.
-2. ✅ **License/scope filter** on the flow (§4) — `RetrievalPipeline._passes` (post-hydrate; `available`,
+2. ✅ **License/scope filter** on the flow (§4) — a pre-filter **inside the retrievers** (`ChunkFilter` from
+   `Query.permitted_filter()` → `dense_knn`/`sparse_search` + `_overfetch` backfill; `available`,
    `ai_grounding_allowed` for `GENERATION_GROUNDING`, and method scope). *Per-purpose license-class policy
-   (§5.6 of the ModusQ spec) is still deferred — tracked in `code-review-findings.md`.*
+   (§5.6 of the ModusQ spec) is still deferred — tracked in `code-review-findings.md` (1.3).*
 3. ✅ **Auto-merging** `Merger` (`AutoMerger`) — uses slice 1's `parent_chunk_id`.
 4. ✅ **Cross-encoder reranking** `Reranker` (`CrossEncoderReranker`, `OnnxCrossEncoder` resource).
 5. ✅ **Header-path injection** — the Embed-stage variant (`EmbeddingSettings.inject_header_path`); part of

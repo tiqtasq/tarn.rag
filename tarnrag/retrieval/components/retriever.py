@@ -51,7 +51,7 @@ class DenseRetriever(Retriever):
 
     async def retrieve(self, query: Query, ctx: RetrievalContext) -> list[Candidate]:
         vec = await asyncio.to_thread(ctx.embedder.embed_query, query.text)
-        return await ctx.store.dense_knn(vec, query.dense_k)
+        return await ctx.store.dense_knn(vec, query.dense_k, query.permitted_filter())
 
 
 class SparseRetriever(Retriever):
@@ -63,4 +63,4 @@ class SparseRetriever(Retriever):
     config: SparseRetriever.Config
 
     async def retrieve(self, query: Query, ctx: RetrievalContext) -> list[Candidate]:
-        return await ctx.store.sparse_search(query.text, query.sparse_k)
+        return await ctx.store.sparse_search(query.text, query.sparse_k, query.permitted_filter())

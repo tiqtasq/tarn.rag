@@ -13,7 +13,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from tarnrag.contracts.dtos import Chunk, Document, DocumentFacts, Embedding
-from tarnrag.contracts.results import Candidate, ChunkRecord
+from tarnrag.contracts.results import Candidate, ChunkFilter, ChunkRecord
 
 
 class ChunkStore(ABC):
@@ -90,15 +90,21 @@ class RetrievalStore(ABC):
     """
 
     @abstractmethod
-    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+    async def dense_knn(
+        self, query_vec: list[float], k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """§8 dense retrieval: the nearest ``k`` chunks to ``query_vec`` as ranked ``Candidate``s
-        (sqlite-vec on SQLite, pgvector on Postgres)."""
+        (sqlite-vec on SQLite, pgvector on Postgres). With a ``filter`` the result holds the ``k`` nearest
+        *permitted* chunks — disallowed ones are dropped inside the search and over-fetch backfills past
+        them (ModusQ §5.4/§5.6), so a tight scope still yields up to ``k`` hits. ``None`` ⇒ no filter."""
 
     @abstractmethod
-    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+    async def sparse_search(
+        self, query_text: str, k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """§8 sparse retrieval: the top ``k`` chunks for ``query_text`` by lexical relevance, ranked
         best-first (FTS5 BM25 on SQLite, tsvector / ts_rank on Postgres). ``raw_score`` is the
-        dialect-native relevance."""
+        dialect-native relevance. ``filter`` is applied as in :meth:`dense_knn` (pre-filter + over-fetch)."""
 
     @abstractmethod
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy import (
@@ -33,6 +34,7 @@ from tarnrag.core.engine.config import DatabaseSettings
 from tarnrag.core.hashing import compute_content_hash
 from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
+    Candidate,
     Chunk,
     ChunkProvenance,
     ChunkRecord,
@@ -667,6 +669,34 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             await conn.execute(
                 insert(table).values(**{key_column.name: key_value, **values, **(insert_extra or {})})
             )
+
+    # §8 filtered retrieval over-fetch -------------------------------------
+    _OVERFETCH_FACTOR = 4  # ModusQ §5.4: grow the candidate window ×4 until enough permitted hits
+
+    async def _overfetch(
+        self,
+        k: int,
+        total: int,
+        page: Callable[[int], Awaitable[list[tuple[str, float]]]],
+    ) -> list[Candidate]:
+        """Return the top ``k`` permitted candidates for a filtered search, over-fetching to backfill past
+        disallowed chunks (ModusQ §5.4). ``page(window)`` runs the dialect's KNN/BM25 over the top-``window``
+        raw hits with the permitted predicate applied, returning the surviving ``(chunk_id, raw_score)`` rows
+        best-first. The window grows ×4 until it yields ≥ ``k`` or covers the whole index (``total``); the
+        result is re-ranked 1..k. (sqlite-vec KNN picks its k nearest *before* a join can filter, so a
+        post-filter would under-return; over-fetching backfills.) The single home for the loop both dialects
+        share."""
+        if k <= 0:
+            return []
+        window = k * self._OVERFETCH_FACTOR
+        while True:
+            rows = await page(window)
+            if len(rows) >= k or window >= total:
+                return [
+                    Candidate(chunk_id=cid, rank=i + 1, raw_score=score)
+                    for i, (cid, score) in enumerate(rows[:k])
+                ]
+            window *= self._OVERFETCH_FACTOR
 
     async def _upsert_document(self, conn: AsyncConnection, values: dict) -> str:
         """Upsert on the ``document_id`` primary key. Returns the document_id so chunks resolve

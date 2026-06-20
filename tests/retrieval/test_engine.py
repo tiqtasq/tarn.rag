@@ -4,7 +4,8 @@ import pytest
 
 from tarnrag.contracts import IndexMeta
 from tarnrag.contracts import (
-    Candidate, Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
+    Candidate, Chunk, ChunkFilter, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef,
+    RetrievalResult,
 )
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval.components.fuser import IdentityFuser, RRFFuser
@@ -171,15 +172,14 @@ async def test_filter_drops_unavailable_and_respects_grounding(repo):
     assert await engine.search(Query(text="tank", top_k=5, purpose=Purpose.GENERATION_GROUNDING)) == []
 
 
-def test_scope_filter_matches_methods():
-    rec = ChunkRecord(
-        chunk_id="c", text="t", document_id="d", source_kind="document",
-        standard_id=None, locator=None, license_class="public_domain", methods=[("M1", "v2")],
-    )
-    assert RetrievalPipeline._passes(rec, Query(text="x"))  # default scope ALL -> in scope
-    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1")]))  # version-agnostic
-    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1", "v2")]))  # exact version
-    assert not RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M9")]))  # no match -> out
+def test_query_permitted_filter_maps_purpose_and_scope():
+    """The Query builds the permitted-chunk filter the retrievers pass to the store (the filtering moved
+    into the retrievers): available-only by default, grounding-required for GENERATION_GROUNDING, and the
+    method scope carried as a tuple (ALL -> None)."""
+    assert Query(text="x").permitted_filter() == ChunkFilter()  # EXECUTION + ALL -> available-only
+    assert Query(text="x", purpose=Purpose.GENERATION_GROUNDING).permitted_filter().require_grounding
+    assert Query(text="x").permitted_filter().method_scope is None  # ALL -> unrestricted
+    assert Query(text="x", scope=[MethodRef("M1")]).permitted_filter().method_scope == (MethodRef("M1"),)
 
 
 async def _index_tree(repo):

@@ -30,18 +30,24 @@ contract that makes the future C++ port return byte-identical orderings (R1). Tw
 score used to order by dict-insertion, i.e. retriever order — non-deterministic across runs/ports.
 - **Fix applied:** `sorted(hits, key=lambda h: (-h.score, h.chunk_id))` via the shared `_ranked` helper.
 
-### 1.2 [H] License/scope filter is post-hydrate, not a pre-filter — scoped queries can under-return
-`RetrievalPipeline.search` over-fetches `dense_k`/`sparse_k` (default 50), fuses, hydrates, then drops
-disallowed chunks in `_passes` (`retrieval/pipeline/pipeline.py:76`). `dense_knn(query_vec, k)` /
-`sparse_search(query_text, k)` take **no filter argument** anywhere (`contracts/ports.py:93,98`,
-`sqlite.py`, `postgres.py`). ModusQ §5.4 requires the permitted-chunk filter applied *inside* the
-retriever **or** an over-fetch-until-enough fallback (`overfetch_factor`, default 4). Neither exists:
-a query scoped to a narrow method set whose in-scope chunks rank past the top-`k` pool returns fewer than
-`top_k` even when more in-scope chunks exist deeper in the index. Numerically correct for the common
-(mostly-permitted) case; a **recall bug** for tight scopes/licenses.
-- **Fix:** add a `filter`/predicate arg to `dense_knn`/`sparse_search` (pushed into the SQL), or an
-  over-fetch loop. Either way, update the now-false claim in CLAUDE.md and
-  `retrieval-architecture-design.md` §6 that "`dense_knn` already takes a `filter` arg."
+### 1.2 [H] License/scope filter is post-hydrate, not a pre-filter — scoped queries can under-return — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): the permitted-chunk filter moved **into the retrievers**.
+> `Query.permitted_filter()` builds a `ChunkFilter` (available / grounding / method-scope) that the
+> retrievers pass to `dense_knn` / `sparse_search` (now `(…, k, filter=None)`); each dialect applies it as
+> a SQL predicate and **over-fetches** (`DocumentRepository._overfetch`, ×4 window) until ≥ `k` permitted
+> hits or the index is exhausted, so a tight scope no longer under-returns. The post-hydrate `_passes` was
+> removed. On Postgres the filtered dense path also sets `ivfflat.probes = lists` (the ANN otherwise probes
+> one list and under-returns regardless of `LIMIT`). Tested on SQLite (`test_dense_knn_filter_backfills_*`,
+> scope, sparse) **and** live pgvector (`test_filter_drops_disallowed_and_scopes`). Per-purpose
+> `license_class` policy stays deferred → finding 1.3.
+
+`RetrievalPipeline.search` used to over-fetch `dense_k`/`sparse_k`, fuse, hydrate, then drop disallowed
+chunks in `_passes`; `dense_knn` / `sparse_search` took **no filter argument**, so a query scoped to a
+narrow method set whose in-scope chunks ranked past the top-`k` pool returned fewer than `top_k` even when
+more in-scope chunks existed deeper in the index — numerically fine for the common (mostly-permitted) case,
+a **recall bug** for tight scopes/licenses (ModusQ §5.4 mandates the in-retriever pre-filter + over-fetch).
+- **Fix applied:** `ChunkFilter` + `dense_knn`/`sparse_search(…, filter)` + the shared `_overfetch` loop;
+  the false "`dense_knn` already takes a `filter` arg" claim in CLAUDE.md is now actually true.
 
 ### 1.3 [M] Per-purpose license-class policy is not enforced
 `_passes` enforces only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method
@@ -146,7 +152,7 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | # | Sev | Area | One-line |
 |---|-----|------|----------|
 | 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
-| 1.2 | H | retrieval | license/scope filter is post-hydrate with no over-fetch — scoped queries under-return |
+| 1.2 | H | retrieval | ✅ **Resolved** — filter moved into the retrievers (`ChunkFilter` + `dense_knn`/`sparse_search` filter arg + `_overfetch` backfill; PG `ivfflat.probes`) |
 | 1.3 | M | retrieval | per-purpose license-class policy (§5.6) not enforced; `third_party_copyrighted` not excluded |
 | 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
 | 2.1 | M | ingestion | extension→kind parsed in both the engine and `LoadAndParse` |

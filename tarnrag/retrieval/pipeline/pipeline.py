@@ -17,14 +17,14 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tarnrag.contracts import ChunkRecord, RetrievalResult
+from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import ComponentFactory
 from tarnrag.retrieval.components.fuser import Fuser
 from tarnrag.retrieval.components.merger import Merger
 from tarnrag.retrieval.components.reranker import Reranker
 from tarnrag.retrieval.components.retriever import RetrievalContext, Retriever
 from tarnrag.retrieval.pipeline.searcher import Searcher
-from tarnrag.retrieval.types import ALL, Purpose, Query
+from tarnrag.retrieval.types import Query
 
 
 class RetrievalPipeline(Searcher):
@@ -59,38 +59,17 @@ class RetrievalPipeline(Searcher):
         self._ensure_children()
         lists = await asyncio.gather(*(r.retrieve(query, ctx) for r in self._retrievers))
         per_retriever = {r.config.class_name: candidates for r, candidates in zip(self._retrievers, lists)}
-        fused = self._fuser.fuse(per_retriever)  # ranked, over-fetched; filter / merge / rerank, then top_k
+        # Candidates are already license/scope-filtered inside each retriever (over-fetched), so the
+        # fused set is permitted; merge / rerank, then top_k.
+        fused = self._fuser.fuse(per_retriever)
         records = {rec.chunk_id: rec for rec in await ctx.store.hydrate([h.chunk_id for h in fused])}
         results = [
             RetrievalResult.from_record(rec, score=h.score, component_scores=h.component_scores)
             for h in fused
-            if (rec := records.get(h.chunk_id)) is not None and self._passes(rec, query)
+            if (rec := records.get(h.chunk_id)) is not None
         ]
         if self._merger is not None:
             results = await self._merger.merge(results, ctx)
         if self._reranker is not None:
             results = await self._reranker.rerank(query, results, ctx)
         return results[: query.top_k]
-
-    @staticmethod
-    def _passes(record: ChunkRecord, query: Query) -> bool:
-        """The license/scope filter (query-driven): drop unavailable chunks; drop non-grounding chunks
-        for a GENERATION_GROUNDING query; restrict to the query's method scope. (License-class-by-purpose
-        policy is a deferred extension — it needs a purpose → allowed-classes mapping.)"""
-        if not record.available:
-            return False
-        if query.purpose == Purpose.GENERATION_GROUNDING and not record.ai_grounding_allowed:
-            return False
-        return RetrievalPipeline._in_scope(record, query.scope)
-
-    @staticmethod
-    def _in_scope(record: ChunkRecord, scope: object) -> bool:
-        """Whether ``record`` is in the query's method ``scope`` (``ALL`` ⇒ unrestricted). A scoped
-        ``MethodRef`` with no version matches any version of its method id."""
-        if scope == ALL:
-            return True
-        return any(
-            ref.method_id == mid and (ref.method_version is None or ref.method_version == ver)
-            for ref in scope  # type: ignore[union-attr]
-            for mid, ver in record.methods
-        )
