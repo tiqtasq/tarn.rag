@@ -1,8 +1,10 @@
-"""The TarnRag facade — drive its high-level methods directly; plus a smoke check that the rich Console
-renders over it without touching the engines.
+"""The TarnRag facade.
 
-Gated on the ONNX model being fetched (ingest + retrieve need the embedder); the LLM is injected, so no
-API key is needed. Mirrors tests/test_embedder.py's skip pattern.
+Two tiers. The **plumbing** tests — construction, ``open`` / ``close`` / ``retrieval_context``, the
+index-identity stamp+validate, and the report paths — run everywhere: they never embed, so a dummy
+tokenizer file (see ``_plumbing_settings``) is enough and no ONNX model is needed. The **end-to-end**
+tests that actually embed text (ingest → retrieve → ask) are marked ``@requires_model`` and skip when the
+model hasn't been fetched. The LLM is always injected, so no API key is needed.
 """
 
 import json
@@ -11,15 +13,128 @@ from pathlib import Path
 import pytest
 
 from examples.common import MODEL_DIR, corpus
-from tarnrag.core.engine.config import Settings
+from tarnrag.core.engine.config import DatabaseSettings, EmbeddingSettings, Settings
 from tarnrag.core.exceptions import IngestionError
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.report import Severity
 from tarnrag.tarnrag import TarnRag
 
-pytestmark = pytest.mark.skipif(
+requires_model = pytest.mark.skipif(
     not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
 )
+
+
+# ---------------- model-free plumbing (runs in CI) ----------------
+
+
+def _fake_model_dir(tmp_path: Path) -> Path:
+    """A model dir holding only a dummy ``tokenizer.json`` — enough for the embedder's identity /
+    fingerprint (which hashes that file), with no real model. The facade plumbing never embeds, so no
+    ``model.onnx`` / ``onnxruntime`` is needed and these tests run anywhere."""
+    model_dir = tmp_path / "model"
+    model_dir.mkdir(exist_ok=True)
+    (model_dir / "tokenizer.json").write_text("{}")  # any bytes — only its sha256 is read
+    return model_dir
+
+
+def _plumbing_settings(tmp_path: Path, **embedding: object) -> Settings:
+    """Minimal embedded settings over a temp store + the dummy model dir. ``embedding`` overrides feed
+    ``EmbeddingSettings`` (e.g. a different ``query_prefix`` to get a distinct embedding fingerprint)."""
+    return Settings(
+        _env_file=None,
+        MODE="embedded",
+        EMBEDDING_DIMENSION=8,
+        database=DatabaseSettings(document_url=f"sqlite:///{tmp_path}/plumbing.db"),
+        embedding=EmbeddingSettings(model_dir=str(_fake_model_dir(tmp_path)), **embedding),
+    )
+
+
+def test_init_loads_settings_from_a_path(tmp_path):
+    """``__init__`` with a path (str / Path) loads the JSON config into ``settings`` — no engines opened."""
+    cfg = tmp_path / "c.json"
+    cfg.write_text(json.dumps({"EMBEDDING_DIMENSION": 384, "database": {"document_url": "sqlite:///x.db"}}))
+    settings = TarnRag(cfg).settings  # Path
+    assert settings.EMBEDDING_DIMENSION == 384 and "x.db" in settings.database.document_url
+    assert TarnRag(str(cfg)).settings.EMBEDDING_DIMENSION == 384  # str
+
+
+async def test_open_wires_shared_resources_then_close_releases(tmp_path):
+    """The composition root, end to end without a model: ``__init__`` leaves the engines unbuilt; the
+    context manager's ``open`` builds the repository + embedder once and injects the SAME objects into
+    both engines; ``retrieval_context`` exposes that shared ``(store, embedder)``; ``close`` releases it."""
+    tarn = TarnRag(_plumbing_settings(tmp_path))
+    assert tarn._repository is None and tarn._ingestion is None  # __init__: nothing built yet
+
+    async with tarn:  # __aenter__ -> open()
+        # one repository + one embedder, injected into both engines (no duplication, no reach-around)
+        assert tarn._repository is tarn._ingestion.repository is tarn._retrieval.repository
+        assert tarn._embedder is tarn._retrieval.embedder
+        ctx = tarn.retrieval_context()
+        assert ctx.store is tarn._repository and ctx.embedder is tarn._embedder
+    # __aexit__ -> close() disconnected the store
+
+
+async def test_open_refuses_an_index_built_with_a_different_embedder(tmp_path):
+    """P5/P4: the index identity is stamped once and then validated, never re-stamped on open — so opening
+    a store whose index was built with a different embedding config is refused, not silently masked. No
+    model needed: the mismatch is caught at open (before any embedding), and open() cleans up on the way
+    out."""
+    # First open stamps the identity (default config).
+    async with TarnRag(_plumbing_settings(tmp_path)):
+        pass
+    # Reopen the SAME store with a different embedding fingerprint (same dim + tokenizer, new query prefix).
+    with pytest.raises(IngestionError, match="different embedding pipeline"):
+        async with TarnRag(_plumbing_settings(tmp_path, query_prefix="query: ")):
+            pass
+
+
+async def test_ingest_missing_paths_and_empty_store_queries(tmp_path):
+    """The output-free facade methods over an empty store, no embedding: ``ingest`` resolves paths up
+    front and reports each one that matched nothing (never silently skipped); ``docs`` / ``delete`` work
+    on an empty store."""
+    async with TarnRag(_plumbing_settings(tmp_path)) as tarn:
+        outcome = await tarn.ingest(["nope-a.txt", "nope-b.txt"])  # nothing resolves -> no embedding
+        assert outcome.value == []
+        assert {i.subject for i in outcome.report.issues} == {"nope-a.txt", "nope-b.txt"}
+        assert all(i.severity is Severity.WARNING for i in outcome.report.issues)
+
+        assert (await tarn.docs()).value == []
+        assert (await tarn.delete("nope")).value is False
+
+
+def test_expand_resolves_files_dirs_and_reports_missing(tmp_path):
+    """``_expand`` (path resolution only): a file is taken as-is, a directory contributes the files in it
+    (sorted), and a path that matches nothing comes back as missing — never silently dropped."""
+    (tmp_path / "a.txt").write_text("a")
+    sub = tmp_path / "docs"
+    sub.mkdir()
+    (sub / "b.txt").write_text("b")
+    (sub / "c.txt").write_text("c")
+    files, missing = TarnRag._expand([str(tmp_path / "a.txt"), str(sub), "nope.txt"])
+    assert [f.name for f in files] == ["a.txt", "b.txt", "c.txt"]  # file, then dir contents
+    assert missing == ["nope.txt"]
+
+
+async def test_gen_builds_the_generation_engine_over_shared_retrieval(tmp_path):
+    """``_gen`` lazily builds the generation engine once, over the SHARED retrieval engine + the injected
+    LLM (no embedding — the model only runs when you actually ``ask``)."""
+    async with TarnRag(_plumbing_settings(tmp_path), llm=StaticLanguageModel("{}")) as tarn:
+        gen = tarn._gen()
+        assert gen is tarn._gen()                # built once, then cached
+        assert gen.retrieval is tarn._retrieval  # wired over the shared retrieval engine
+        assert gen.llm is tarn._injected_llm     # the injected model
+
+
+async def test_ask_without_an_llm_key_fails_fast(tmp_path, monkeypatch):
+    """``ask`` needs an LLM: with no injected model and no API key, generation is built lazily and fails
+    fast with a clear message — before any retrieval."""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    async with TarnRag(_plumbing_settings(tmp_path)) as tarn:  # no llm, no key
+        with pytest.raises(RuntimeError, match="needs an LLM key"):
+            await tarn.ask("anything")
+
+
+# ---------------- end-to-end (needs the embedding model) ----------------
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -49,6 +164,7 @@ def _canned_llm() -> StaticLanguageModel:
     return StaticLanguageModel(_reply)
 
 
+@requires_model
 async def test_tarnrag_ingest_retrieve_ask_delete(tmp_path):
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
@@ -80,61 +196,22 @@ async def test_tarnrag_ingest_retrieve_ask_delete(tmp_path):
         assert len((await tarn.docs()).value) == 2
 
 
-async def test_ingest_reports_missing_paths_instead_of_skipping(tmp_path):
-    """The core report contract: a path that matches nothing is surfaced in the report, never dropped
-    silently — while the files that do exist still ingest."""
+@requires_model
+async def test_ingest_reports_a_missing_path_alongside_a_real_one(tmp_path):
+    """The mixed case (needs the model to embed the real file): a path that matches nothing is reported,
+    while the file that does exist still ingests."""
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
     real = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))[0]
 
     async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
         outcome = await tarn.ingest(["does/not/exist.txt", real])
-        # the real file ingested...
-        assert len(outcome.value) == 1 and outcome.value[0].status == "complete"
-        # ...and the missing path is reported (warning), not skipped silently
-        assert not outcome.report.ok
-        assert [i.subject for i in outcome.report.issues] == ["does/not/exist.txt"]
+        assert len(outcome.value) == 1 and outcome.value[0].status == "complete"  # the real file ingested
+        assert [i.subject for i in outcome.report.issues] == ["does/not/exist.txt"]  # the missing one reported
         assert outcome.report.issues[0].severity is Severity.WARNING
 
-        # all-missing -> nothing ingested, but the issues are still reported
-        none = await tarn.ingest(["nope-a.txt", "nope-b.txt"])
-        assert none.value == []
-        assert {i.subject for i in none.report.issues} == {"nope-a.txt", "nope-b.txt"}
 
-
-async def test_open_injects_one_shared_repository_and_embedder(tmp_path):
-    """P1 — TarnRag is the composition root: it builds the repository + embedder once and injects the
-    *same* objects into both engines (no duplicate embedder, no reaching into a sub-engine)."""
-    async with TarnRag(_settings(tmp_path)) as tarn:
-        # one repository, built by TarnRag and injected into both engines
-        assert tarn._repository is tarn._ingestion.repository
-        assert tarn._repository is tarn._retrieval.repository
-        # one embedder, injected into retrieval (not rebuilt at the facade level)
-        assert tarn._embedder is tarn._retrieval.embedder
-        # close() releases the store TarnRag owns
-        assert tarn._repository is not None
-
-
-async def test_open_refuses_an_index_built_with_a_different_embedder(tmp_path):
-    """P5/P4: the index identity is stamped once and then validated, not re-stamped on every open — so
-    reopening a store whose index was built with a different embedding config is refused, not silently
-    masked. (A clobbering re-stamp would make this open succeed against a stale index.)"""
-    pytest.importorskip("onnxruntime")
-    pytest.importorskip("tokenizers")
-    doc = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))[0]
-
-    # Build the index with the default embedding config.
-    async with TarnRag(_settings(tmp_path)) as tarn:
-        assert (await tarn.ingest([doc])).value[0].status == "complete"
-
-    # Reopen the SAME store with a different embedding fingerprint (same dim, different query prefix).
-    other = _settings(tmp_path)
-    other.embedding.query_prefix = "query: "
-    with pytest.raises(IngestionError, match="different embedding pipeline"):
-        async with TarnRag(other):
-            pass
-
-
+@requires_model
 async def test_console_renders_over_the_facade(tmp_path):
     """The rich Console is a thin UI over TarnRag: its handlers run end to end (no engine access of their
     own) and stay alive when a command errors."""
@@ -154,11 +231,3 @@ async def test_console_renders_over_the_facade(tmp_path):
         await console._do_ask("What is the capital of France?")  # the abstain branch
         await console._do_delete("quokka")
         await console._do_delete("nope")  # missing id -> handled, not raised
-
-
-def test_tarnrag_loads_settings_from_a_path(tmp_path):
-    """Constructing with a path (str / Path) loads the JSON config into ``settings`` — no engines opened."""
-    cfg = tmp_path / "c.json"
-    cfg.write_text(json.dumps({"EMBEDDING_DIMENSION": 384, "database": {"document_url": "sqlite:///x.db"}}))
-    settings = TarnRag(cfg).settings
-    assert settings.EMBEDDING_DIMENSION == 384 and "x.db" in settings.database.document_url
