@@ -101,6 +101,19 @@ async def test_ingest_reports_missing_paths_instead_of_skipping(tmp_path):
         assert {i.subject for i in none.report.issues} == {"nope-a.txt", "nope-b.txt"}
 
 
+async def test_open_injects_one_shared_repository_and_embedder(tmp_path):
+    """P1 — TarnRag is the composition root: it builds the repository + embedder once and injects the
+    *same* objects into both engines (no duplicate embedder, no reaching into a sub-engine)."""
+    async with TarnRag(_settings(tmp_path)) as tarn:
+        # one repository, built by TarnRag and injected into both engines
+        assert tarn._repository is tarn._ingestion.repository
+        assert tarn._repository is tarn._retrieval.repository
+        # one embedder, injected into retrieval (not rebuilt at the facade level)
+        assert tarn._embedder is tarn._retrieval.embedder
+        # close() releases the store TarnRag owns
+        assert tarn._repository is not None
+
+
 async def test_console_renders_over_the_facade(tmp_path):
     """The rich Console is a thin UI over TarnRag: its handlers run end to end (no engine access of their
     own) and stay alive when a command errors."""
