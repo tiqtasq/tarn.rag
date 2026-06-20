@@ -1,0 +1,14 @@
+{
+  "class_name": "generation_pipeline",
+  "reasoner": {"class_name": "single_hop", "top_k": 4},
+  "assembler": {"class_name": "provenance"},
+  "grounding_checker": {
+    "class_name": "cascading_grounding",
+    "checkers": [
+      {"class_name": "heuristic_grounding"},
+      {"class_name": "llm_grounding"}
+    ]
+  },
+  "min_grounded": 0.5,
+  "abstain": true
+}
