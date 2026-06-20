@@ -18,18 +18,15 @@ the config. Then type commands at the ``tarn>`` prompt::
     help                 show the commands
     quit                 exit
 
-Output is rendered with ``rich`` (install the ``console`` extra: ``pip install '.[console]'``). The command
-methods (``ingest`` / ``retrieve`` / ``ask`` / ``docs`` / ``delete``) return data and are unit-tested
-directly; ``run()`` is the rich parse-and-print REPL on top of them.
+This is purely the **UI**: a rich parse-and-print REPL that owns all output and delegates the work to a
+:class:`tarnrag.facade.TarnRag` through its high-level methods. Rendering needs the ``console`` extra
+(``pip install '.[console]'``).
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
-import os
 import sys
-from pathlib import Path
 
 from rich.console import Console as RichConsole
 from rich.markup import escape
@@ -37,13 +34,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
 
-from tarnrag import DocumentStatus, DocumentSummary, IngestionEngine, RetrievalEngine
-from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import ComponentFactory
-from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings
-from tarnrag.core.resources.embedder import build_embedder
-from tarnrag.core.resources.llm import LanguageModel
-from tarnrag.generation import GenerationEngine, GenerationPipeline, GenerationResult
+from tarnrag.facade import TarnRag, load_settings
 
 _out = RichConsole()
 
@@ -58,89 +49,17 @@ _COMMANDS = [
 ]
 
 
-def load_settings(config_path: str | Path) -> Settings:
-    """Build ``Settings`` from a JSON config file (ambient ``.env`` ignored — the file is authoritative;
-    OS env vars still supplement, e.g. the LLM key)."""
-    config = json.loads(Path(config_path).read_text())
-    return Settings(_env_file=None, **config)
-
-
 class Console:
-    """The tarn.rag session: an ingestion engine + a retrieval engine over one shared repository, and a
-    lazily-built generation engine. Construct with a ``Settings``; ``open()`` before use, ``close()`` after
-    (or use it as an async context manager). ``llm`` may be injected (tests / a custom backend)."""
+    """A rich REPL over a :class:`~tarnrag.facade.TarnRag` session — all output lives here. Construct with
+    an (opened) ``TarnRag`` and call :meth:`run`; the console never touches the engines directly, only the
+    facade's high-level methods (``ingest`` / ``docs`` / ``delete`` / ``retrieve`` / ``ask``)."""
 
-    def __init__(self, settings: Settings, llm: LanguageModel | None = None) -> None:
-        self.settings = settings
-        self._injected_llm = llm
-        self._ingestion: IngestionEngine | None = None
-        self._retrieval: RetrievalEngine | None = None
-        self._generation: GenerationEngine | None = None
-
-    async def open(self) -> Console:
-        """Build the engines. The ingestion engine owns the repository (and stamps the index metadata);
-        the retrieval engine *shares* that repository — one connection, and it sees ingests live."""
-        self._ingestion = await IngestionEngine.create(self.settings)
-        embedder = build_embedder(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
-        self._retrieval = RetrievalEngine(self._ingestion.repository, embedder, self.settings)
-        return self
-
-    async def close(self) -> None:
-        if self._ingestion is not None:
-            await self._ingestion.aclose()  # owns the shared repository; retrieval just borrows it
-
-    async def __aenter__(self) -> Console:
-        return await self.open()
-
-    async def __aexit__(self, *exc: object) -> None:
-        await self.close()
-
-    # ---------------- commands (return data; the REPL renders it) ----------------
-
-    async def ingest(self, paths: list[str]) -> list[DocumentStatus]:
-        """Ingest (or re-ingest) the given files / directories. The document id is each file's stem, so
-        re-ingesting the same file upserts in place (under ``ID_POLICY='caller'``)."""
-        files = _expand(paths)
-        if not files:
-            return []
-        source_ids = [p.stem for p in files] if self.settings.ID_POLICY == "caller" else None
-        doc_ids = await self._ingestion.ingest_paths([str(p) for p in files], source_ids=source_ids)
-        return [s for s in [await self._ingestion.status(d) for d in doc_ids] if s is not None]
-
-    async def docs(self) -> list[DocumentSummary]:
-        return await self._ingestion.list_documents()
-
-    async def delete(self, document_id: str) -> bool:
-        return await self._ingestion.delete_document(document_id)
-
-    async def retrieve(self, query: str, *, top_k: int = 5) -> list[RetrievalResult]:
-        return await self._retrieval.search_text(query, top_k=top_k)
-
-    async def ask(self, query: str) -> GenerationResult:
-        """Retrieval + generation: a grounded answer with a proof tree. Needs an LLM."""
-        return await self._gen().answer_text(query)
-
-    def _gen(self) -> GenerationEngine:
-        """The generation engine, built once over the shared retrieval engine + the configured LLM."""
-        if self._generation is None:
-            llm = self._injected_llm or self._build_llm()
-            spec = self.settings.components.get(GENERATION_PIPELINE) or {"class_name": "generation_pipeline"}
-            pipeline = ComponentFactory.get().create_as(spec, GenerationPipeline)
-            self._generation = GenerationEngine(self._retrieval, llm, pipeline)
-        return self._generation
-
-    def _build_llm(self) -> LanguageModel:
-        if not (self.settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY")):
-            raise RuntimeError(
-                "generation needs an LLM key — set ANTHROPIC_API_KEY (the provider/model are in the config)"
-            )
-        return LanguageModel.create(self.settings.llm)
-
-    # ---------------- the REPL (rich rendering) ----------------
+    def __init__(self, tarn: TarnRag) -> None:
+        self._tarn = tarn
 
     async def run(self) -> None:
         """Read commands at the ``tarn>`` prompt until EOF / quit."""
-        _out.print(f"[bold]tarn.rag console[/]  [dim]{escape(self.settings.database.document_url)}[/]")
+        _out.print(f"[bold]tarn.rag console[/]  [dim]{escape(self._tarn.settings.database.document_url)}[/]")
         _out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.\n")
         handlers = {
             "help": self._do_help,
@@ -184,7 +103,7 @@ class Console:
         if not arg:
             _out.print("usage: ingest <path> ...", style="dim")
             return
-        statuses = await self.ingest(arg.split())
+        statuses = await self._tarn.ingest(arg.split())
         if not statuses:
             _out.print("[yellow]nothing ingested[/]")
             return
@@ -199,7 +118,7 @@ class Console:
         _out.print(table)
 
     async def _do_docs(self, _arg: str) -> None:
-        summaries = await self.docs()
+        summaries = await self._tarn.docs()
         if not summaries:
             _out.print("[yellow]no documents — ingest some first[/]")
             return
@@ -216,7 +135,7 @@ class Console:
         if not arg:
             _out.print("usage: delete <document-id>", style="dim")
             return
-        if await self.delete(arg):
+        if await self._tarn.delete(arg):
             _out.print(f"[green]deleted[/] {escape(arg)}")
         else:
             _out.print(f"[yellow]no such document:[/] {escape(arg)}")
@@ -225,7 +144,7 @@ class Console:
         if not arg:
             _out.print("usage: retrieve <query>", style="dim")
             return
-        results = await self.retrieve(arg)
+        results = await self._tarn.retrieve(arg)
         if not results:
             _out.print("[yellow]no results — ingest some documents first[/]")
             return
@@ -242,7 +161,7 @@ class Console:
         if not arg:
             _out.print("usage: ask <query>", style="dim")
             return
-        result = await self.ask(arg)
+        result = await self._tarn.ask(arg)
         if result.abstained:
             _out.print(Panel(escape(result.answer), title="abstained", border_style="yellow"))
             return
@@ -258,20 +177,6 @@ class Console:
         _out.print(tree)
 
 
-def _expand(paths: list[str]) -> list[Path]:
-    """Resolve each path to file(s): a directory contributes the files it directly contains."""
-    files: list[Path] = []
-    for raw in paths:
-        path = Path(raw).expanduser()
-        if path.is_dir():
-            files.extend(sorted(p for p in path.iterdir() if p.is_file()))
-        elif path.is_file():
-            files.append(path)
-        else:
-            _out.print(f"[yellow]skipping (not found):[/] {escape(raw)}")
-    return files
-
-
 def _snippet(text: str, width: int = 90) -> str:
     text = " ".join(text.split())
     return text if len(text) <= width else text[: width - 1] + "…"
@@ -282,8 +187,8 @@ def _cite(citation) -> str:
 
 
 async def _main(config_path: str) -> None:
-    async with Console(load_settings(config_path)) as console:
-        await console.run()
+    async with TarnRag(load_settings(config_path)) as tarn:
+        await Console(tarn).run()
 
 
 def main(argv: list[str] | None = None) -> None:

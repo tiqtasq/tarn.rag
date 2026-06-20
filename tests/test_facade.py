@@ -1,4 +1,5 @@
-"""The interactive console: drive its command methods directly (the REPL loop is a thin wrapper).
+"""The TarnRag facade — drive its high-level methods directly; plus a smoke check that the rich Console
+renders over it without touching the engines.
 
 Gated on the ONNX model being fetched (ingest + retrieve need the embedder); the LLM is injected, so no
 API key is needed. Mirrors tests/test_embedder.py's skip pattern.
@@ -10,9 +11,9 @@ from pathlib import Path
 import pytest
 
 from examples.common import MODEL_DIR, corpus
-from tarnrag.console import Console, load_settings
 from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.llm import StaticLanguageModel
+from tarnrag.facade import TarnRag, load_settings
 
 pytestmark = pytest.mark.skipif(
     not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
@@ -46,33 +47,52 @@ def _canned_llm() -> StaticLanguageModel:
     return StaticLanguageModel(_reply)
 
 
-async def test_console_ingest_retrieve_ask_delete(tmp_path):
+async def test_tarnrag_ingest_retrieve_ask_delete(tmp_path):
     pytest.importorskip("onnxruntime")
     pytest.importorskip("tokenizers")
     doc_paths = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))
 
-    async with Console(_settings(tmp_path), llm=_canned_llm()) as console:
+    async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
         # ingest — the document id is each file's stem
-        statuses = await console.ingest(doc_paths)
+        statuses = await tarn.ingest(doc_paths)
         assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
         assert {s.document_id for s in statuses} == {"pump-maintenance", "quokka", "tank-inspection"}
-        assert len(await console.docs()) == 3
+        assert len(await tarn.docs()) == 3
 
         # retrieve — the pump question surfaces the pump doc
-        hits = await console.retrieve("how should I service a pump")
+        hits = await tarn.retrieve("how should I service a pump")
         assert hits and any(h.document_id == "pump-maintenance" for h in hits)
 
         # ask — an answerable question is grounded; an off-topic one abstains (the cascade + policy)
-        answered = await console.ask("How should I service a pump before restarting it?")
+        answered = await tarn.ask("How should I service a pump before restarting it?")
         assert not answered.abstained and answered.grounded and answered.answer
-        off_topic = await console.ask("What is the capital of France?")
+        off_topic = await tarn.ask("What is the capital of France?")
         assert off_topic.abstained
 
         # re-ingest one file (same stem -> upsert, still 3 docs) + delete one
-        again = await console.ingest([doc_paths[0]])
-        assert len(again) == 1 and len(await console.docs()) == 3
-        assert await console.delete("quokka") is True
-        assert len(await console.docs()) == 2
+        again = await tarn.ingest([doc_paths[0]])
+        assert len(again) == 1 and len(await tarn.docs()) == 3
+        assert await tarn.delete("quokka") is True
+        assert len(await tarn.docs()) == 2
+
+
+async def test_console_renders_over_the_facade(tmp_path):
+    """The rich Console is a thin UI over TarnRag: its handlers run end to end (no engine access of their
+    own) and stay alive when a command errors."""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("tokenizers")
+    pytest.importorskip("rich")
+    from tarnrag.console import Console
+
+    async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
+        console = Console(tarn)
+        await console._do_ingest(" ".join(str(p) for p in corpus("corpus-1").glob("*.txt")))
+        await console._do_docs("")
+        await console._do_retrieve("how should I service a pump")
+        await console._do_ask("How should I service a pump before restarting it?")
+        await console._do_ask("What is the capital of France?")  # the abstain branch
+        await console._do_delete("quokka")
+        await console._do_delete("nope")  # missing id -> handled, not raised
 
 
 def test_load_settings_reads_json(tmp_path):
