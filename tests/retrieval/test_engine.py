@@ -4,9 +4,10 @@ import pytest
 
 from tarnrag.contracts import IndexMeta
 from tarnrag.contracts import (
-    Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
+    Candidate, Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
 )
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings
+from tarnrag.retrieval.components.fuser import IdentityFuser, RRFFuser
 from tarnrag.retrieval import (
     AutoMerger, CrossEncoderReranker, Query, RetrievalContext, RetrievalEngine, RetrievalError,
     RetrievalPipeline,
@@ -279,6 +280,30 @@ async def test_cross_encoder_reranker_requires_model_in_context():
         await CrossEncoderReranker(CrossEncoderReranker.Config()).rerank(
             Query(text="q"), [_result("a", -1.0)], RetrievalContext(store=None, embedder=None)
         )
+
+
+def test_rrf_fusion_tie_breaks_by_chunk_id():
+    """A fused-score tie must break by ``chunk_id`` ascending (ModusQ §5.5/§9), not by retriever /
+    insertion order — the determinism the future C++ parity contract relies on."""
+    # 'b' and 'a' earn identical RRF scores (each is rank 1 in one retriever, rank 2 in the other), but
+    # 'b' is inserted first (it heads the dense list). The tie-break must still order 'a' before 'b'.
+    per_retriever = {
+        "dense": [Candidate("b", rank=1, raw_score=0.9), Candidate("a", rank=2, raw_score=0.5)],
+        "sparse": [Candidate("a", rank=1, raw_score=8.0), Candidate("b", rank=2, raw_score=7.0)],
+    }
+    hits = RRFFuser(RRFFuser.Config()).fuse(per_retriever)
+    assert hits[0].score == hits[1].score  # genuinely tied -> only the tie-break decides the order
+    assert [h.chunk_id for h in hits] == ["a", "b"]
+
+
+def test_identity_fusion_orders_best_first():
+    """The identity passthrough returns best-first by score (= -rank) with the same deterministic order,
+    independent of the order candidates arrive in."""
+    per_retriever = {
+        "dense": [Candidate("z", rank=2, raw_score=0.1), Candidate("a", rank=1, raw_score=0.9)]
+    }
+    hits = IdentityFuser(IdentityFuser.Config()).fuse(per_retriever)
+    assert [h.chunk_id for h in hits] == ["a", "z"]  # rank 1 ('a') before rank 2 ('z'), not input order
 
 
 async def test_pipeline_reranks_with_cross_encoder(repo):

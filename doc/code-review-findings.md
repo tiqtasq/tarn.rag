@@ -18,14 +18,17 @@ Severity legend: **[H]** worth doing soon · **[M]** worth doing · **[L]** cosm
 
 ## 1. Correctness / spec deviations (the bugs worth fixing)
 
-### 1.1 [H] RRF / identity fusion has no deterministic tie-break
-`RRFFuser.fuse` (`retrieval/components/fuser.py:74`) sorts `sorted(scores, key=lambda cid: scores[cid],
-reverse=True)` — score only. `IdentityFuser` doesn't tie-break either. The ModusQ spec makes a secondary
+### 1.1 [H] RRF / identity fusion has no deterministic tie-break — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): both fusers now route through a shared `_ranked` helper
+> that sorts `(score desc, chunk_id asc)`, so equal-score hits break by id rather than retriever/insertion
+> order. Covered by `test_rrf_fusion_tie_breaks_by_chunk_id` + `test_identity_fusion_orders_best_first`.
+
+`RRFFuser.fuse` (`retrieval/components/fuser.py:74`) sorted `sorted(scores, key=lambda cid: scores[cid],
+reverse=True)` — score only. `IdentityFuser` didn't tie-break either. The ModusQ spec makes a secondary
 `chunk_id asc` tie-break **mandatory** (`ModusQ_RetrievalSubsystemSpec.md` §5.5, §9) because it is the
-contract that makes the future C++ port return byte-identical orderings (R1). Today two chunks with equal
-fused score order by dict-insertion, i.e. retriever order — non-deterministic across runs/ports.
-- **Fix:** `sorted(scores, key=lambda cid: (-scores[cid], cid))`; same idea for the identity passthrough.
-- **No test** asserts ordering on a fused tie — add one.
+contract that makes the future C++ port return byte-identical orderings (R1). Two chunks with equal fused
+score used to order by dict-insertion, i.e. retriever order — non-deterministic across runs/ports.
+- **Fix applied:** `sorted(hits, key=lambda h: (-h.score, h.chunk_id))` via the shared `_ranked` helper.
 
 ### 1.2 [H] License/scope filter is post-hydrate, not a pre-filter — scoped queries can under-return
 `RetrievalPipeline.search` over-fetches `dense_k`/`sparse_k` (default 50), fuses, hydrates, then drops
@@ -142,7 +145,7 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 
 | # | Sev | Area | One-line |
 |---|-----|------|----------|
-| 1.1 | H | retrieval | RRF/identity fusion lacks the mandatory `(score desc, chunk_id asc)` tie-break (C++ parity) |
+| 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
 | 1.2 | H | retrieval | license/scope filter is post-hydrate with no over-fetch — scoped queries under-return |
 | 1.3 | M | retrieval | per-purpose license-class policy (§5.6) not enforced; `third_party_copyrighted` not excluded |
 | 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
