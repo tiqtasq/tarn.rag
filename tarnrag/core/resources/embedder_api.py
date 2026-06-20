@@ -1,7 +1,7 @@
 """HTTP embedding-API backends — OpenAI(-compatible), Voyage, and Gemini.
 
 Each is an ``Embedder`` (a ``Resource``, like ``OnnxEmbedder``) selected via ``EmbeddingSettings.provider``
-and built by ``build_embedder``. They share ``_ApiEmbedder``: batched POST → parse → **L2-normalize** (so
+and built by ``Embedder.create``. They share ``_ApiEmbedder``: batched POST → parse → **L2-normalize** (so
 dense KNN stays cosine-equivalent across backends), plus a provider/model/dim identity that rides the
 index fingerprint. The query/passage distinction is handled the way each API expects — OpenAI doesn't
 distinguish; Voyage uses ``input_type``; Gemini uses ``taskType``.

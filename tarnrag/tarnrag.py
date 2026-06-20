@@ -4,9 +4,10 @@ A small, **output-free** session API over one store: ``ingest`` / ``docs`` / ``d
 ``ask``. Each returns an :class:`~tarnrag.report.Outcome` — the value it produced, plus a
 :class:`~tarnrag.report.Report` of any non-fatal issues encountered (empty when all went well). Nothing is
 printed and nothing is silently skipped: a UI over the facade (the console, the tiqtasq REST API) renders
-the value and surfaces the report. The ingestion engine owns the repository; the retrieval engine *shares*
-it (one connection — it sees ingests live, and works on an empty store); the generation engine is built
-lazily on the first ``ask``. Use it directly::
+the value and surfaces the report. ``TarnRag`` is the composition root: it builds the one store (the
+repository) and the embedder once and injects both into the engines that run over them (one connection —
+retrieval sees ingests live, and works on an empty store); the generation engine is built lazily on the
+first ``ask``. Use it directly::
 
     async with TarnRag("config.json") as tarn:
         ingested = await tarn.ingest(["docs/"])
@@ -27,7 +28,7 @@ from pathlib import Path
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings
-from tarnrag.core.resources.embedder import build_embedder
+from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
@@ -37,6 +38,7 @@ from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.engine.engine import RetrievalEngine
+from tarnrag.storage.repository import DocumentRepository
 
 
 class TarnRag:
@@ -50,21 +52,35 @@ class TarnRag:
             settings = Settings(_env_file=None, **json.loads(Path(settings).read_text()))
         self.settings = settings
         self._injected_llm = llm
+        self._repository: DocumentRepository | None = None
+        self._embedder: Embedder | None = None
         self._ingestion: IngestionEngine | None = None
         self._retrieval: RetrievalEngine | None = None
         self._generation: GenerationEngine | None = None
 
     async def open(self) -> TarnRag:
-        """Build the engines. The ingestion engine owns the repository (and stamps the index metadata);
-        the retrieval engine shares it — one connection, and it sees ingests live."""
-        self._ingestion = await IngestionEngine.create(self.settings)
-        embedder = build_embedder(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
-        self._retrieval = RetrievalEngine(self._ingestion.repository, embedder, self.settings)
+        """Build the shared resources once — the repository (the one store) and the passage/query
+        embedder — and inject both into the engines that run over them. This is the composition root:
+        the engines receive their dependencies rather than each building its own."""
+        self._repository = await DocumentRepository.create(
+            self.settings.database, self.settings.EMBEDDING_DIMENSION
+        )
+        try:
+            self._embedder = Embedder.create(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
+            self._ingestion = await IngestionEngine.create(
+                self.settings, repository=self._repository, embedder=self._embedder
+            )
+            self._retrieval = await RetrievalEngine.create(
+                self.settings, repository=self._repository, embedder=self._embedder
+            )
+        except BaseException:
+            await self.close()  # release the store we opened before re-raising (e.g. an index mismatch)
+            raise
         return self
 
     async def close(self) -> None:
-        if self._ingestion is not None:
-            await self._ingestion.aclose()  # owns the shared repository; retrieval just borrows it
+        if self._repository is not None:
+            await self._repository.disconnect()  # the one store, shared by every engine
 
     async def __aenter__(self) -> TarnRag:
         return await self.open()
@@ -112,7 +128,7 @@ class TarnRag:
     def retrieval_context(self) -> RetrievalContext:
         """The shared ``(store, embedder)`` the retrieval pipelines run against — the seam the eval
         harness's ``sweep`` uses to score *alternative* pipeline specs over this one index."""
-        return RetrievalContext(self._retrieval.repository, self._retrieval.embedder)
+        return RetrievalContext(self._repository, self._embedder)
 
     def _gen(self) -> GenerationEngine:
         """The generation engine, built once over the shared retrieval engine + the configured LLM."""

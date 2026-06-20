@@ -29,7 +29,14 @@ from tarnrag.core.engine.config import INGESTION_PIPELINE, IdPolicy, Settings, g
 from tarnrag.core.hashing import sha256_file, sha256_hex
 from tarnrag.core.engine.observability import NoOpObservability
 from tarnrag.core.engine.engine import Engine
-from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
+from tarnrag.core.exceptions import IngestionError
+from tarnrag.core.resources.embedder import Embedder
+from tarnrag.contracts import (
+    DocumentFactsSource,
+    PipelineItem,
+    build_index_meta,
+    index_meta_conflict,
+)
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -86,17 +93,37 @@ class IngestionEngine(Engine):
     # ----- construction -----
 
     @classmethod
-    async def create(cls, settings: Settings | None = None) -> IngestionEngine:
+    async def create(
+        cls,
+        settings: Settings | None = None,
+        *,
+        repository: DocumentRepository | None = None,
+        embedder: Embedder | None = None,
+    ) -> IngestionEngine:
         """Build a ready-to-use engine from ``Settings`` (mode-driven). The easy entry point; the
         constructor is the lower-level seam for injecting your own wiring. The pipeline composition
-        comes from ``Settings.components`` (see :meth:`build_pipeline`)."""
+        comes from ``Settings.components`` (see :meth:`build_pipeline`).
+
+        A composition root (e.g. ``TarnRag``) may inject a pre-built ``repository`` + ``embedder`` so
+        one store + embedder is shared across the engines instead of each building its own — pass both
+        or neither. The ``embedder`` is used only to stamp the index identity (``write_index_meta``);
+        the Embed stage builds its own from ``Settings``."""
         settings = settings or get_settings()
         obs = NoOpObservability() if settings.observability.enabled else None
-        repository, embedder = await cls._build_repository_and_embedder(settings)
-        # The engine is the index producer: stamp the §8 build/identity record onto the
-        # repository (RetrievalEngine.open validates it). The sinks persist document/chunk/
-        # embedding data into the same repository; job_status lives there too.
-        await repository.write_index_meta(build_index_meta(embedder))
+        if repository is None and embedder is None:
+            repository = await DocumentRepository.create(settings.database, settings.EMBEDDING_DIMENSION)
+            embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
+        elif repository is None or embedder is None:
+            raise ValueError("inject both repository and embedder, or neither")
+        # The engine is the index producer: ESTABLISH the §8 build/identity record on a fresh index, or
+        # CONFIRM it on an existing one — never silently re-stamp (that would write on a read-only open
+        # and mask an embedder mismatch). RetrievalEngine.open validates the same record. The sinks
+        # persist document/chunk/embedding data into the same repository; job_status lives there too.
+        existing = await repository.index_meta()
+        if not existing.get("schema_version"):
+            await repository.write_index_meta(build_index_meta(embedder))
+        elif (conflict := index_meta_conflict(existing, embedder)) is not None:
+            raise IngestionError(f"cannot ingest into this index — {conflict}")
         pipeline = cls.build_pipeline(settings)
 
         if settings.MODE == "distributed":
