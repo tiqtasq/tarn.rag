@@ -16,7 +16,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from tarnrag import DocumentStatus, IngestionEngine
+from tarnrag import DocumentStatus, TarnRag
 from tarnrag.core.engine.config import INGESTION_PIPELINE
 
 from examples.common import base_settings, corpus, example_db, require_model
@@ -33,12 +33,13 @@ async def main() -> list[DocumentStatus]:
     settings = base_settings(db_path, components={INGESTION_PIPELINE: PIPELINE_SPEC})
 
     print(f"Ingesting {len(DOC_PATHS)} documents (pipeline from ingestion.json) into {db_path}\n")
-    async with await IngestionEngine.create(settings) as engine:
-        document_ids = await engine.ingest_paths(
-            [str(p) for p in DOC_PATHS], source_ids=[p.stem for p in DOC_PATHS]
-        )
-        statuses = [await engine.status(doc_id) for doc_id in document_ids]
+    # `ingest` uses each file's stem as its document id (ID_POLICY="caller", the base_settings default).
+    async with TarnRag(settings) as tarn:
+        outcome = await tarn.ingest([str(p) for p in DOC_PATHS])
 
+    statuses = outcome.value
+    for issue in outcome.report.issues:
+        print(f"  ! {issue.severity.value}: {issue.subject} — {issue.message}")
     for s in statuses:
         print(f"  {s.document_id:16}  {s.status:9}  chunks={s.chunk_count}  embeddings={s.embedding_count}")
     print("\nNext:  python -m examples.part_i.example_04.generation")

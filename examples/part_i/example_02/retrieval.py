@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tarnrag import RetrievalEngine, RetrievalResult
+from tarnrag import RetrievalResult, TarnRag
 
 from examples.common import base_settings, example_db, require_model
 
@@ -37,8 +37,8 @@ async def main() -> dict[str, list[RetrievalResult]]:
 
     settings = base_settings(db_path)  # no pipeline JSON needed — retrieval only needs the embedding
 
-    async with await RetrievalEngine.create(settings) as engine:
-        answers = {query: await engine.search_text(query, top_k=3) for query in QUERIES}
+    async with TarnRag(settings) as tarn:
+        answers = {query: (await tarn.retrieve(query, top_k=3)).value for query in QUERIES}
 
     for query, results in answers.items():
         print(f"\nQuery: {query!r}")

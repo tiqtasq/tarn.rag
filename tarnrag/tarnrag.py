@@ -35,6 +35,7 @@ from tarnrag.generation.types import GenerationResult
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
+from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 
 
@@ -107,6 +108,11 @@ class TarnRag:
     async def ask(self, query: str) -> Outcome[GenerationResult]:
         """Retrieval + generation — a grounded answer with a proof tree. Needs an LLM."""
         return Outcome(await self._gen().answer_text(query))
+
+    def retrieval_context(self) -> RetrievalContext:
+        """The shared ``(store, embedder)`` the retrieval pipelines run against — the seam the eval
+        harness's ``sweep`` uses to score *alternative* pipeline specs over this one index."""
+        return RetrievalContext(self._retrieval.repository, self._retrieval.embedder)
 
     def _gen(self) -> GenerationEngine:
         """The generation engine, built once over the shared retrieval engine + the configured LLM."""

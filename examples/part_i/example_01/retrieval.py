@@ -1,8 +1,9 @@
 """Example 01 — Retrieval (embedded mode, SQLite).
 
-Query the store that ``ingestion.py`` built. ``RetrievalEngine`` embeds the query with the SAME
-pipeline ingestion used (the config is shared via ``examples/common.py``), runs a dense k-NN
-search over the SQLite vector index, and returns ranked, provenance-bearing hits.
+Query the store that ``ingestion.py`` built. The same ``TarnRag`` facade opens that store and embeds
+each query with the SAME embedding identity ingestion used (the config is shared via
+``examples/common.py``), runs a dense k-NN search over the SQLite vector index, and returns ranked,
+provenance-bearing hits.
 
 Run it after the ingestion example has populated the store (same one-time setup — see
 ``ingestion.py``):
@@ -14,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tarnrag import RetrievalEngine, RetrievalResult
+from tarnrag import RetrievalResult, TarnRag
 
 from examples.common import base_settings, example_db, require_model
 
@@ -36,11 +37,11 @@ async def main() -> dict[str, list[RetrievalResult]]:
 
     settings = base_settings(db_path)
 
-    # `create` connects the SQLite store and validates compatibility (schema + embedding
-    # fingerprint); it raises RetrievalError if the index was built with a different pipeline.
-    async with await RetrievalEngine.create(settings) as engine:
-        # search_text embeds the query and returns up to `top_k` hits, best first.
-        answers = {query: await engine.search_text(query, top_k=3) for query in QUERIES}
+    # `async with TarnRag(...)` opens the same SQLite store (sharing the embedding identity from the
+    # shared config). `retrieve` embeds the query and returns up to `top_k` hits, best first, wrapped
+    # in an `Outcome` (`.value` is the hits; `.report` would carry any issues — none for a plain query).
+    async with TarnRag(settings) as tarn:
+        answers = {query: (await tarn.retrieve(query, top_k=3)).value for query in QUERIES}
 
     for query, results in answers.items():
         print(f"\nQuery: {query!r}")

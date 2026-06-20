@@ -34,9 +34,9 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from tarnrag import RetrievalEngine
+from tarnrag import TarnRag
 from tarnrag.eval import EvalReport, EvalSet, format_reports, format_segmented, sweep
-from tarnrag.retrieval import Query, RetrievalContext, StructuralQueryClassifier
+from tarnrag.retrieval import Query, StructuralQueryClassifier
 
 from examples.common import base_settings, example_db, require_model
 
@@ -81,10 +81,11 @@ async def main() -> dict[str, EvalReport]:
     settings = base_settings(db_path)
     evalset = EvalSet.from_json(EVALSET)
 
-    # RetrievalEngine.create opens the index (validating the embedding fingerprint); the sweep needs
-    # only its store + embedder as the shared context the pipeline specs all run against.
-    async with await RetrievalEngine.create(settings) as engine:
-        ctx = RetrievalContext(engine.repository, engine.embedder)
+    # `TarnRag` opens the store; `retrieval_context()` hands back the shared (store + embedder) the
+    # pipeline specs all run against — so the sweep can score *alternative* pipelines (not just the
+    # one configured) over this single index.
+    async with TarnRag(settings) as tarn:
+        ctx = tarn.retrieval_context()
         reports = await sweep({**PIPELINES, "routed (by type)": ROUTED}, ctx, evalset, k=3)
 
     print(
