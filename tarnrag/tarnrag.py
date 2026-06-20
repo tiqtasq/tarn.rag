@@ -69,7 +69,9 @@ class TarnRag:
         self._ingestion = await IngestionEngine.create(
             self.settings, repository=self._repository, embedder=self._embedder
         )
-        self._retrieval = RetrievalEngine(self._repository, self._embedder, self.settings)
+        self._retrieval = await RetrievalEngine.create(
+            self.settings, repository=self._repository, embedder=self._embedder
+        )
         return self
 
     async def close(self) -> None:
