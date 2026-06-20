@@ -14,6 +14,7 @@ from examples.common import MODEL_DIR, corpus
 from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.facade import TarnRag, load_settings
+from tarnrag.report import Severity
 
 pytestmark = pytest.mark.skipif(
     not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
@@ -53,27 +54,51 @@ async def test_tarnrag_ingest_retrieve_ask_delete(tmp_path):
     doc_paths = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))
 
     async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
-        # ingest — the document id is each file's stem
-        statuses = await tarn.ingest(doc_paths)
+        # ingest — the document id is each file's stem; a clean run reports no issues
+        ingested = await tarn.ingest(doc_paths)
+        assert ingested.report.ok
+        statuses = ingested.value
         assert len(statuses) == 3 and all(s.status == "complete" for s in statuses)
         assert {s.document_id for s in statuses} == {"pump-maintenance", "quokka", "tank-inspection"}
-        assert len(await tarn.docs()) == 3
+        assert len((await tarn.docs()).value) == 3
 
         # retrieve — the pump question surfaces the pump doc
-        hits = await tarn.retrieve("how should I service a pump")
+        hits = (await tarn.retrieve("how should I service a pump")).value
         assert hits and any(h.document_id == "pump-maintenance" for h in hits)
 
         # ask — an answerable question is grounded; an off-topic one abstains (the cascade + policy)
-        answered = await tarn.ask("How should I service a pump before restarting it?")
+        answered = (await tarn.ask("How should I service a pump before restarting it?")).value
         assert not answered.abstained and answered.grounded and answered.answer
-        off_topic = await tarn.ask("What is the capital of France?")
+        off_topic = (await tarn.ask("What is the capital of France?")).value
         assert off_topic.abstained
 
         # re-ingest one file (same stem -> upsert, still 3 docs) + delete one
         again = await tarn.ingest([doc_paths[0]])
-        assert len(again) == 1 and len(await tarn.docs()) == 3
-        assert await tarn.delete("quokka") is True
-        assert len(await tarn.docs()) == 2
+        assert len(again.value) == 1 and len((await tarn.docs()).value) == 3
+        assert (await tarn.delete("quokka")).value is True
+        assert len((await tarn.docs()).value) == 2
+
+
+async def test_ingest_reports_missing_paths_instead_of_skipping(tmp_path):
+    """The core report contract: a path that matches nothing is surfaced in the report, never dropped
+    silently — while the files that do exist still ingest."""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("tokenizers")
+    real = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))[0]
+
+    async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
+        outcome = await tarn.ingest(["does/not/exist.txt", real])
+        # the real file ingested...
+        assert len(outcome.value) == 1 and outcome.value[0].status == "complete"
+        # ...and the missing path is reported (warning), not skipped silently
+        assert not outcome.report.ok
+        assert [i.subject for i in outcome.report.issues] == ["does/not/exist.txt"]
+        assert outcome.report.issues[0].severity is Severity.WARNING
+
+        # all-missing -> nothing ingested, but the issues are still reported
+        none = await tarn.ingest(["nope-a.txt", "nope-b.txt"])
+        assert none.value == []
+        assert {i.subject for i in none.report.issues} == {"nope-a.txt", "nope-b.txt"}
 
 
 async def test_console_renders_over_the_facade(tmp_path):
@@ -86,7 +111,9 @@ async def test_console_renders_over_the_facade(tmp_path):
 
     async with TarnRag(_settings(tmp_path), llm=_canned_llm()) as tarn:
         console = Console(tarn)
-        await console._do_ingest(" ".join(str(p) for p in corpus("corpus-1").glob("*.txt")))
+        # a missing path mixed in -> the report-rendering path runs too
+        files = " ".join(str(p) for p in corpus("corpus-1").glob("*.txt"))
+        await console._do_ingest(f"does/not/exist.txt {files}")
         await console._do_docs("")
         await console._do_retrieve("how should I service a pump")
         await console._do_ask("How should I service a pump before restarting it?")

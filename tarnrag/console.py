@@ -35,6 +35,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from tarnrag.facade import TarnRag, load_settings
+from tarnrag.report import Report, Severity
 
 _out = RichConsole()
 
@@ -103,78 +104,97 @@ class Console:
         if not arg:
             _out.print("usage: ingest <path> ...", style="dim")
             return
-        statuses = await self._tarn.ingest(arg.split())
-        if not statuses:
+        outcome = await self._tarn.ingest(arg.split())
+        if outcome.value:
+            table = Table(show_edge=False, header_style="bold")
+            table.add_column("document", style="cyan")
+            table.add_column("status")
+            table.add_column("chunks", justify="right")
+            table.add_column("embeddings", justify="right")
+            for s in outcome.value:
+                color = {"complete": "green", "failed": "red"}.get(s.status, "yellow")
+                table.add_row(
+                    s.document_id, f"[{color}]{s.status}[/]", str(s.chunk_count), str(s.embedding_count)
+                )
+            _out.print(table)
+        else:
             _out.print("[yellow]nothing ingested[/]")
-            return
-        table = Table(show_edge=False, header_style="bold")
-        table.add_column("document", style="cyan")
-        table.add_column("status")
-        table.add_column("chunks", justify="right")
-        table.add_column("embeddings", justify="right")
-        for s in statuses:
-            color = {"complete": "green", "failed": "red"}.get(s.status, "yellow")
-            table.add_row(s.document_id, f"[{color}]{s.status}[/]", str(s.chunk_count), str(s.embedding_count))
-        _out.print(table)
+        _render_report(outcome.report)
 
     async def _do_docs(self, _arg: str) -> None:
-        summaries = await self._tarn.docs()
-        if not summaries:
+        outcome = await self._tarn.docs()
+        if not outcome.value:
             _out.print("[yellow]no documents — ingest some first[/]")
-            return
-        table = Table(show_edge=False, header_style="bold")
-        table.add_column("document", style="cyan")
-        table.add_column("chunks", justify="right")
-        table.add_column("embeddings", justify="right")
-        for d in summaries:
-            table.add_row(d.document_id, str(d.chunk_count), str(d.embedding_count))
-        _out.print(table)
-        _out.print(f"[dim]{len(summaries)} document(s)[/]")
+        else:
+            table = Table(show_edge=False, header_style="bold")
+            table.add_column("document", style="cyan")
+            table.add_column("chunks", justify="right")
+            table.add_column("embeddings", justify="right")
+            for d in outcome.value:
+                table.add_row(d.document_id, str(d.chunk_count), str(d.embedding_count))
+            _out.print(table)
+            _out.print(f"[dim]{len(outcome.value)} document(s)[/]")
+        _render_report(outcome.report)
 
     async def _do_delete(self, arg: str) -> None:
         if not arg:
             _out.print("usage: delete <document-id>", style="dim")
             return
-        if await self._tarn.delete(arg):
+        outcome = await self._tarn.delete(arg)
+        if outcome.value:
             _out.print(f"[green]deleted[/] {escape(arg)}")
         else:
             _out.print(f"[yellow]no such document:[/] {escape(arg)}")
+        _render_report(outcome.report)
 
     async def _do_retrieve(self, arg: str) -> None:
         if not arg:
             _out.print("usage: retrieve <query>", style="dim")
             return
-        results = await self._tarn.retrieve(arg)
-        if not results:
+        outcome = await self._tarn.retrieve(arg)
+        if not outcome.value:
             _out.print("[yellow]no results — ingest some documents first[/]")
-            return
-        table = Table(show_edge=False, header_style="bold")
-        table.add_column("#", justify="right", style="dim")
-        table.add_column("score", justify="right")
-        table.add_column("document", style="cyan")
-        table.add_column("passage")
-        for rank, r in enumerate(results, 1):
-            table.add_row(str(rank), f"{r.score:.3f}", r.document_id, escape(_snippet(r.text)))
-        _out.print(table)
+        else:
+            table = Table(show_edge=False, header_style="bold")
+            table.add_column("#", justify="right", style="dim")
+            table.add_column("score", justify="right")
+            table.add_column("document", style="cyan")
+            table.add_column("passage")
+            for rank, r in enumerate(outcome.value, 1):
+                table.add_row(str(rank), f"{r.score:.3f}", r.document_id, escape(_snippet(r.text)))
+            _out.print(table)
+        _render_report(outcome.report)
 
     async def _do_ask(self, arg: str) -> None:
         if not arg:
             _out.print("usage: ask <query>", style="dim")
             return
-        result = await self._tarn.ask(arg)
+        outcome = await self._tarn.ask(arg)
+        result = outcome.value
         if result.abstained:
             _out.print(Panel(escape(result.answer), title="abstained", border_style="yellow"))
-            return
-        border = "green" if result.grounded else "yellow"
-        label = "grounded" if result.grounded else "not fully grounded"
-        _out.print(Panel(escape(result.answer), title=f"answer  ([{border}]{label}[/])", border_style=border))
-        tree = Tree("[bold]proof[/]")
-        for step in result.proof:
-            mark = "[green]✓[/]" if step.grounded else "[red]✗[/]"
-            node = tree.add(f"{mark} {escape(step.claim)}")
-            for c in step.citations:
-                node.add(f"[dim]cite[/] {escape(_cite(c))}")
-        _out.print(tree)
+        else:
+            border = "green" if result.grounded else "yellow"
+            label = "grounded" if result.grounded else "not fully grounded"
+            _out.print(
+                Panel(escape(result.answer), title=f"answer  ([{border}]{label}[/])", border_style=border)
+            )
+            tree = Tree("[bold]proof[/]")
+            for step in result.proof:
+                mark = "[green]✓[/]" if step.grounded else "[red]✗[/]"
+                node = tree.add(f"{mark} {escape(step.claim)}")
+                for c in step.citations:
+                    node.add(f"[dim]cite[/] {escape(_cite(c))}")
+            _out.print(tree)
+        _render_report(outcome.report)
+
+
+def _render_report(report: Report) -> None:
+    """Show the issues a facade call reported — nothing when the report is empty (all went well)."""
+    for issue in report.issues:
+        color = "red" if issue.severity is Severity.ERROR else "yellow"
+        subject = f"{escape(issue.subject)}: " if issue.subject else ""
+        _out.print(f"[{color}]{issue.severity.value}:[/] {subject}{escape(issue.message)}")
 
 
 def _snippet(text: str, width: int = 90) -> str:

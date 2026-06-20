@@ -1,16 +1,21 @@
 """TarnRag — the high-level facade over tarn.rag's ingestion + retrieval + generation engines.
 
 A small, **output-free** session API over one store: ``ingest`` / ``docs`` / ``delete`` / ``retrieve`` /
-``ask``. The ingestion engine owns the repository; the retrieval engine *shares* it (one connection — it
-sees ingests live, and works on an empty store); the generation engine is built lazily on the first
-``ask``. Use it directly::
+``ask``. Each returns an :class:`~tarnrag.report.Outcome` — the value it produced, plus a
+:class:`~tarnrag.report.Report` of any non-fatal issues encountered (empty when all went well). Nothing is
+printed and nothing is silently skipped: a UI over the facade (the console, the tiqtasq REST API) renders
+the value and surfaces the report. The ingestion engine owns the repository; the retrieval engine *shares*
+it (one connection — it sees ingests live, and works on an empty store); the generation engine is built
+lazily on the first ``ask``. Use it directly::
 
     async with TarnRag(load_settings("config.json")) as tarn:
-        await tarn.ingest(["docs/"])
-        result = await tarn.ask("…")
+        ingested = await tarn.ingest(["docs/"])
+        for issue in ingested.report.issues:
+            ...  # e.g. a path that wasn't found
+        answer = await tarn.ask("…")
+        print(answer.value.answer)
 
-…or behind a UI — the interactive console (``tarnrag.console``) is one such UI, owning all rendering and
-delegating the work here. ``llm`` may be injected (tests / a custom backend).
+…or behind a UI. ``llm`` may be injected (tests / a custom backend).
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from tarnrag.generation.pipeline.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
+from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 
 
@@ -67,34 +73,42 @@ class TarnRag:
     async def __aexit__(self, *exc: object) -> None:
         await self.close()
 
-    # ---------------- high-level API ----------------
+    # ---------------- high-level API (each returns an Outcome[value] + Report) ----------------
 
-    async def ingest(self, paths: list[str]) -> list[DocumentStatus]:
-        """Ingest (or re-ingest) the given files / directories — a directory contributes the files in it,
-        missing paths are skipped. The document id is each file's stem, so re-ingesting a file upserts in
-        place (under ``ID_POLICY='caller'``). Returns the resulting per-document statuses."""
-        files = _expand(paths)
+    async def ingest(self, paths: list[str]) -> Outcome[list[DocumentStatus]]:
+        """Ingest (or re-ingest) the given files / directories — a directory contributes the files in it.
+        The document id is each file's stem, so re-ingesting a file upserts in place (under
+        ``ID_POLICY='caller'``). The value is the resulting per-document statuses; the report flags paths
+        that matched nothing and documents that failed to ingest — neither is dropped silently."""
+        files, missing = _expand(paths)
+        issues = [Issue("not found", Severity.WARNING, subject=raw) for raw in missing]
         if not files:
-            return []
+            return Outcome([], Report(tuple(issues)))
         source_ids = [p.stem for p in files] if self.settings.ID_POLICY == "caller" else None
         doc_ids = await self._ingestion.ingest_paths([str(p) for p in files], source_ids=source_ids)
-        return [s for s in [await self._ingestion.status(d) for d in doc_ids] if s is not None]
+        statuses = [s for s in [await self._ingestion.status(d) for d in doc_ids] if s is not None]
+        issues += [
+            Issue("ingestion failed", Severity.ERROR, subject=s.document_id)
+            for s in statuses
+            if s.status == "failed"
+        ]
+        return Outcome(statuses, Report(tuple(issues)))
 
-    async def docs(self) -> list[DocumentSummary]:
+    async def docs(self) -> Outcome[list[DocumentSummary]]:
         """Every ingested document (id + chunk / embedding counts)."""
-        return await self._ingestion.list_documents()
+        return Outcome(await self._ingestion.list_documents())
 
-    async def delete(self, document_id: str) -> bool:
-        """Delete a document and everything derived from it; False if it wasn't known."""
-        return await self._ingestion.delete_document(document_id)
+    async def delete(self, document_id: str) -> Outcome[bool]:
+        """Delete a document and everything derived from it. The value is False if it wasn't known."""
+        return Outcome(await self._ingestion.delete_document(document_id))
 
-    async def retrieve(self, query: str, *, top_k: int = 5) -> list[RetrievalResult]:
+    async def retrieve(self, query: str, *, top_k: int = 5) -> Outcome[list[RetrievalResult]]:
         """Retrieval only — the ranked, provenance-bearing passages."""
-        return await self._retrieval.search_text(query, top_k=top_k)
+        return Outcome(await self._retrieval.search_text(query, top_k=top_k))
 
-    async def ask(self, query: str) -> GenerationResult:
+    async def ask(self, query: str) -> Outcome[GenerationResult]:
         """Retrieval + generation — a grounded answer with a proof tree. Needs an LLM."""
-        return await self._gen().answer_text(query)
+        return Outcome(await self._gen().answer_text(query))
 
     def _gen(self) -> GenerationEngine:
         """The generation engine, built once over the shared retrieval engine + the configured LLM."""
@@ -113,14 +127,17 @@ class TarnRag:
         return LanguageModel.create(self.settings.llm)
 
 
-def _expand(paths: list[str]) -> list[Path]:
-    """Resolve each path to file(s): a directory contributes the files it directly contains; a missing
-    path is skipped."""
+def _expand(paths: list[str]) -> tuple[list[Path], list[str]]:
+    """Resolve each path to file(s): a directory contributes the files it directly contains. Returns the
+    resolved files and the raw paths that matched nothing (reported, not skipped silently)."""
     files: list[Path] = []
+    missing: list[str] = []
     for raw in paths:
         path = Path(raw).expanduser()
         if path.is_dir():
             files.extend(sorted(p for p in path.iterdir() if p.is_file()))
         elif path.is_file():
             files.append(path)
-    return files
+        else:
+            missing.append(raw)
+    return files, missing

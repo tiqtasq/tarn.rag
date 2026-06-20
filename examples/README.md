@@ -45,14 +45,18 @@ Then `ingest <path>` (or a directory; re-ingesting a file replaces it), `docs`, 
 the retrieval/generation pipeline specs under `components`.
 
 The console is just a UI; the work lives in `tarnrag.TarnRag`, a facade over the three engines that you
-can drive directly in your own code:
+can drive directly in your own code. Each call returns an `Outcome` — its `value` plus a `report` of any
+non-fatal issues (empty when all went well), so nothing is printed or silently skipped:
 
 ```python
 from tarnrag import TarnRag, load_settings
 
 async with TarnRag(load_settings("examples/console.config.json")) as tarn:
-    await tarn.ingest(["examples/docs/corpus-1"])
-    result = await tarn.ask("How should I service a pump before restarting it?")
+    ingested = await tarn.ingest(["examples/docs/corpus-1", "typo.txt"])
+    for issue in ingested.report.issues:
+        print(f"{issue.severity.value}: {issue.subject}: {issue.message}")  # warning: typo.txt: not found
+    answer = await tarn.ask("How should I service a pump before restarting it?")
+    print(answer.value.answer)
 ```
 
 ## Layout
