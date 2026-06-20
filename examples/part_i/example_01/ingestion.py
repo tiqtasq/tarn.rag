@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 
-from tarnrag import DocumentStatus, IngestionEngine
+from tarnrag import DocumentStatus, TarnRag
 
 from examples.common import base_settings, corpus, example_db, require_model
 
@@ -39,20 +39,19 @@ async def main() -> list[DocumentStatus]:
     db_path = example_db(__file__)  # next to this script (or under $EXAMPLES_DATA_DIR)
     settings = base_settings(db_path)
 
-    # Under ID_POLICY="caller" (the base_settings default) each document needs a stable id; we use
-    # the filename stem (e.g. "tank-inspection"). Re-running upserts in place — idempotent per id.
-    source_ids = [path.stem for path in DOC_PATHS]
     print(f"Ingesting {len(DOC_PATHS)} documents from {CORPUS} into {db_path}\n")
 
-    # `create` builds the embedded engine (SQLite repository + in-process worker) and stamps the
-    # index's build/identity record. `async with` disposes the DB connection pool on exit.
-    async with await IngestionEngine.create(settings) as engine:
-        document_ids = await engine.ingest_paths(
-            [str(path) for path in DOC_PATHS], source_ids=source_ids
-        )
-        # Embedded mode completes the whole pipeline before returning, so status is terminal here.
-        statuses = [await engine.status(doc_id) for doc_id in document_ids]
+    # `TarnRag` is the facade over the three engines; `async with` builds them (the embedded SQLite
+    # store + in-process worker) and disposes the connection pool on exit. `ingest` takes file/dir
+    # paths and, under ID_POLICY="caller" (the base_settings default), uses each file's stem as its
+    # stable document id (e.g. "tank-inspection") — so re-running upserts in place, idempotent per id.
+    async with TarnRag(settings) as tarn:
+        # Embedded mode completes the whole pipeline before returning, so each status is terminal.
+        outcome = await tarn.ingest([str(path) for path in DOC_PATHS])
 
+    statuses = outcome.value
+    for issue in outcome.report.issues:  # e.g. a path that didn't resolve, or a doc that failed
+        print(f"  ! {issue.severity.value}: {issue.subject} — {issue.message}")
     for status in statuses:
         print(
             f"  {status.document_id:16}  {status.status:9}  "

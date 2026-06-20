@@ -1,7 +1,7 @@
 """Example 04 — End-to-end generation (config-driven): question -> grounded answer + proof tree.
 
 The whole Goal-3 stack, assembled from JSON. Three files next to this script define the composition; the
-Python just loads them, wires the engine, and prints results:
+Python just loads them, hands them to ``TarnRag``, and prints results:
 
   retrieval.json    a hybrid retrieval pipeline (dense + sparse, fused by RRF) — what fetches the passages.
   generation.json   the generation pipeline: a single-hop reasoner, a CASCADING grounding checker (a cheap
@@ -30,11 +30,10 @@ import json
 import os
 from pathlib import Path
 
-from tarnrag import RetrievalEngine
-from tarnrag.core.components import ComponentFactory
+from tarnrag import TarnRag
 from tarnrag.core.engine.config import GENERATION_PIPELINE, RETRIEVAL_PIPELINE
 from tarnrag.core.resources.llm import LanguageModel
-from tarnrag.generation import GenerationEngine, GenerationPipeline, GenerationResult
+from tarnrag.generation import GenerationResult
 
 from examples.common import base_settings, example_db, require_model
 
@@ -57,21 +56,18 @@ async def main(llm: LanguageModel | None = None) -> list[GenerationResult]:
         db_path, components={RETRIEVAL_PIPELINE: RETRIEVAL_SPEC, GENERATION_PIPELINE: GENERATION_SPEC}
     )
 
-    # Wire the engine explicitly — what ``GenerationEngine.create()`` does under the hood, spelled out:
-    # the retrieval engine (consumed through the ``RetrievalEngineProtocol`` port) + the LLM + the pipeline.
-    retrieval = await RetrievalEngine.create(settings)
-    pipeline = ComponentFactory.get().create_as(settings.components[GENERATION_PIPELINE], GenerationPipeline)
+    # `TarnRag` wires retrieval + generation from that config; `ask` runs the whole stack (retrieve ->
+    # reason -> ground -> abstain). The smoke test injects a canned ``llm``; otherwise TarnRag builds the
+    # real one from ``Settings.llm`` on the first `ask` (needs a key). With neither, we preview retrieval.
     has_key = bool(settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY"))
-    model = llm if llm is not None else (LanguageModel.create(settings.llm) if has_key else None)
 
-    async with retrieval:  # closes the store on exit
-        if model is None:
-            await _preview_without_a_key(retrieval)
+    async with TarnRag(settings, llm=llm) as tarn:
+        if llm is None and not has_key:
+            await _preview_without_a_key(tarn)
             return []
-        engine = GenerationEngine(retrieval, model, pipeline)
         results: list[GenerationResult] = []
         for question in QUESTIONS:
-            result = await engine.answer_text(question)
+            result = (await tarn.ask(question)).value
             _print(question, result)
             results.append(result)
         return results
@@ -93,14 +89,14 @@ def _print(question: str, result: GenerationResult) -> None:
     print()
 
 
-async def _preview_without_a_key(retrieval: RetrievalEngine) -> None:
+async def _preview_without_a_key(tarn: TarnRag) -> None:
     """No key: show the generation config + the passages retrieval would feed the model for one question."""
     print("ANTHROPIC_API_KEY not set — ingestion + retrieval only (no generation).\n")
     print("The generation pipeline that WOULD run (generation.json):")
     print(json.dumps(GENERATION_SPEC, indent=2), "\n")
     question = QUESTIONS[0]
     print(f"Passages retrieval would feed the model for:  {question}")
-    for i, r in enumerate(await retrieval.search_text(question, top_k=4), 1):
+    for i, r in enumerate((await tarn.retrieve(question, top_k=4)).value, 1):
         head = " > ".join(r.provenance.header_path) if r.provenance and r.provenance.header_path else (
             r.locator or r.document_id
         )

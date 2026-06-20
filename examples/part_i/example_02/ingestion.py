@@ -25,7 +25,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from tarnrag import DocumentStatus, IngestionEngine
+from tarnrag import DocumentStatus, TarnRag
 from tarnrag.core.engine.config import INGESTION_PIPELINE
 
 from examples.common import base_settings, corpus, example_db, require_model
@@ -44,15 +44,15 @@ async def main() -> list[DocumentStatus]:
     # The one interesting line: the spec from pipeline.json drives the pipeline's composition + params.
     settings = base_settings(db_path, components={INGESTION_PIPELINE: PIPELINE_SPEC})
 
-    source_ids = [path.stem for path in DOC_PATHS]
     print(f"Ingesting {len(DOC_PATHS)} documents with the pipeline from pipeline.json into {db_path}\n")
 
-    async with await IngestionEngine.create(settings) as engine:
-        document_ids = await engine.ingest_paths(
-            [str(path) for path in DOC_PATHS], source_ids=source_ids
-        )
-        statuses = [await engine.status(doc_id) for doc_id in document_ids]
+    # `ingest` uses each file's stem as its document id (ID_POLICY="caller", the base_settings default).
+    async with TarnRag(settings) as tarn:
+        outcome = await tarn.ingest([str(path) for path in DOC_PATHS])
 
+    statuses = outcome.value
+    for issue in outcome.report.issues:
+        print(f"  ! {issue.severity.value}: {issue.subject} — {issue.message}")
     for status in statuses:
         print(
             f"  {status.document_id:16}  {status.status:9}  "
