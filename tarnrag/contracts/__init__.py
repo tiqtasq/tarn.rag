@@ -13,13 +13,7 @@ from tarnrag.contracts.dtos import (
     MethodRef,
     PipelineItem,
 )
-from tarnrag.contracts.index_meta import (
-    FTS_TOKENIZER,
-    INGESTION_VERSION,
-    SCHEMA_VERSION,
-    build_index_meta,
-    index_meta_conflict,
-)
+from tarnrag.contracts.index_meta import IndexMeta
 from tarnrag.contracts.ports import ChunkStore, DocumentFactsSource, JobStatusSource, RetrievalStore
 from tarnrag.contracts.results import Candidate, ChunkRecord, RetrievalResult
 from tarnrag.contracts.structure import (
@@ -64,9 +58,5 @@ __all__ = [
     "ChunkRecord",
     "RetrievalResult",
     # index_meta
-    "SCHEMA_VERSION",
-    "index_meta_conflict",
-    "INGESTION_VERSION",
-    "FTS_TOKENIZER",
-    "build_index_meta",
+    "IndexMeta",
 ]

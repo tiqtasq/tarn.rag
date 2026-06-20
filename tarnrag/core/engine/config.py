@@ -207,6 +207,9 @@ class Settings(BaseSettings):
                 "fuser": {"class_name": "identity"},
             },
         )
+        # The generation composition: single-hop reason + grounding + provenance assembler by default
+        # (the component owns the detailed defaults). Present so consumers read it directly, like the others.
+        self.components.setdefault(GENERATION_PIPELINE, {"class_name": "generation_pipeline"})
         return self
 
     @model_validator(mode="after")

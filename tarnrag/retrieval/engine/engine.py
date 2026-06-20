@@ -17,7 +17,7 @@ from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
-from tarnrag.contracts import RetrievalResult, index_meta_conflict
+from tarnrag.contracts import IndexMeta, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.pipeline.searcher import Searcher
@@ -65,7 +65,7 @@ class RetrievalEngine(Engine):
         meta = await repository.index_meta()
         if not meta.get("schema_version"):
             raise RetrievalError("retrieval index has not been built yet (no index_meta)")
-        conflict = index_meta_conflict(meta, embedder)
+        conflict = IndexMeta.conflict(meta, embedder)
         if conflict:
             raise RetrievalError(conflict)
         # The cross-encoder's model loads lazily, so building it here is cheap; it stays unused unless the
