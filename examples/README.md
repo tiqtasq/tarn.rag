@@ -37,6 +37,34 @@ it still ingests + retrieves and previews what it would send the model.
 Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
 no `PYTHONPATH` or `sys.path` tweaks. (Directory names use underscores because they are module names.)
 
+## Interactive console
+
+For an interactive session instead of scripts, start the REPL with one JSON config:
+
+```bash
+python -m tarnrag.console examples/console.config.json
+```
+
+Then `ingest <path>` (or a directory; re-ingesting a file replaces it), `docs`, `delete <id>`,
+`retrieve <query>` (passages only), and `ask <query>` (retrieval + generation — answer + proof tree; needs
+`ANTHROPIC_API_KEY`). The config is a `Settings` document: the database, embedding, and llm settings plus
+the retrieval/generation pipeline specs under `components`.
+
+The console is just a UI; the work lives in `tarnrag.TarnRag`, a facade over the three engines that you
+can drive directly in your own code. Each call returns an `Outcome` — its `value` plus a `report` of any
+non-fatal issues (empty when all went well), so nothing is printed or silently skipped:
+
+```python
+from tarnrag import TarnRag
+
+async with TarnRag("examples/console.config.json") as tarn:
+    ingested = await tarn.ingest(["examples/docs/corpus-1", "typo.txt"])
+    for issue in ingested.report.issues:
+        print(f"{issue.severity.value}: {issue.subject}: {issue.message}")  # warning: typo.txt: not found
+    answer = await tarn.ask("How should I service a pump before restarting it?")
+    print(answer.value.answer)
+```
+
 ## Layout
 
 ```
