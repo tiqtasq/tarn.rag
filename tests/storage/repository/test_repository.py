@@ -385,6 +385,23 @@ async def test_dense_knn_filter_restricts_to_method_scope(repo):
     assert await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=())) == []
 
 
+async def test_dense_knn_filter_by_license_class(repo):
+    """The permitted-chunk filter restricts by license_class (the ModusQ §5.6 policy axis)."""
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("open", 0, 2, license_class="public_domain"),
+         _chunk("copyrighted", 1, 2, license_class="third_party_copyrighted")],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+    ])
+    hits = await repo.dense_knn(
+        [1.0, 0.0, 0.0], k=5, filter=ChunkFilter(license_classes=("public_domain", "customer_licensed"))
+    )
+    assert [c.chunk_id for c in hits] == [a]  # the copyrighted chunk is filtered out
+
+
 async def test_sparse_search_filter_drops_unavailable(repo):
     """The permitted-chunk filter applies to sparse retrieval too."""
     _, (c1, c2) = await repo.store_document_with_chunks(

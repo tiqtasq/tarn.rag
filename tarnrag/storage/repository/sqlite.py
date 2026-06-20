@@ -233,6 +233,13 @@ class SqliteRepository(DocumentRepository):
             clauses.append(f"{alias}.available = 1")
         if filter.require_grounding:
             clauses.append(f"{alias}.ai_grounding_allowed = 1")
+        if filter.license_classes is not None:
+            if not filter.license_classes:
+                clauses.append("0")  # empty permitted set -> nothing permitted
+            else:
+                placeholders = ", ".join("?" * len(filter.license_classes))
+                clauses.append(f"{alias}.license_class IN ({placeholders})")
+                params.extend(filter.license_classes)
         if filter.method_scope is not None:
             if not filter.method_scope:
                 clauses.append("0")  # empty scope -> nothing permitted

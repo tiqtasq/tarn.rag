@@ -125,6 +125,8 @@ class PostgresRepository(DocumentRepository):
             conds.append(c.available == 1)
         if filter.require_grounding:
             conds.append(c.ai_grounding_allowed == 1)
+        if filter.license_classes is not None:
+            conds.append(c.license_class.in_(filter.license_classes) if filter.license_classes else false())
         if filter.method_scope is not None:
             mc = self.method_chunks.c
             if not filter.method_scope:

@@ -10,8 +10,8 @@ from tarnrag.contracts import (
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings
 from tarnrag.retrieval.components.fuser import IdentityFuser, RRFFuser
 from tarnrag.retrieval import (
-    AutoMerger, CrossEncoderReranker, Query, RetrievalContext, RetrievalEngine, RetrievalError,
-    RetrievalPipeline,
+    AutoMerger, CrossEncoderReranker, DefaultLicensePolicy, Query, RetrievalContext, RetrievalEngine,
+    RetrievalError, RetrievalPipeline,
 )
 from tarnrag.retrieval.types import Purpose
 
@@ -180,6 +180,39 @@ def test_query_permitted_filter_maps_purpose_and_scope():
     assert Query(text="x", purpose=Purpose.GENERATION_GROUNDING).permitted_filter().require_grounding
     assert Query(text="x").permitted_filter().method_scope is None  # ALL -> unrestricted
     assert Query(text="x", scope=[MethodRef("M1")]).permitted_filter().method_scope == (MethodRef("M1"),)
+    assert Query(text="x").permitted_filter().license_classes is None  # the baseline applies no class filter
+
+
+def test_default_license_policy_maps_purpose_to_classes():
+    """The DefaultLicensePolicy maps purpose -> permitted license classes (ModusQ §5.6 default), never
+    permitting third_party_copyrighted, and folds in the query's grounding/scope via permitted_filter."""
+    pol = DefaultLicensePolicy(DefaultLicensePolicy.Config())
+    f = pol.filter_for(Query(text="x"))
+    assert "third_party_copyrighted" not in f.license_classes  # the safety net
+    assert "public_domain" in f.license_classes and "customer_licensed" in f.license_classes
+    assert pol.filter_for(Query(text="x", purpose=Purpose.GENERATION_GROUNDING)).require_grounding
+
+
+async def test_default_license_policy_excludes_third_party_copyrighted(repo):
+    """End-to-end: with the default policy (engine built from Settings), a third_party_copyrighted chunk is
+    never returned, while a shippable-class chunk is."""
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(parent_doc_id="s1", content="open content", chunk_index=0, total_chunks=2,
+                  metadata={"license_class": "public_domain"}),
+            Chunk(parent_doc_id="s1", content="copyrighted content", chunk_index=1, total_chunks=2,
+                  metadata={"license_class": "third_party_copyrighted"}),
+        ],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+    ])
+    settings = Settings(_env_file=None)  # default components -> the default_license policy applies
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)), settings=settings)
+    assert [r.chunk_id for r in await engine.search(Query(text="content", top_k=5))] == [a]
 
 
 async def _index_tree(repo):

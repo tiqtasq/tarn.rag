@@ -117,8 +117,9 @@ Driven by the **`Query`** (`purpose`, `scope`), not by config, so it's a fixed s
 Component. `Query.permitted_filter()` builds a `ChunkFilter` (`available` / `ai_grounding_allowed` columns
 on `chunks` + method `scope` via `method_chunks`) that the retrievers pass into `dense_knn`/`sparse_search`;
 **the predicate is pushed into the retriever SQL** and the search over-fetches to backfill past disallowed
-chunks (the first-draft post-hydrate filter was replaced — finding 1.2). *Deferred:* the per-purpose
-`license_class` policy (finding 1.3).
+chunks (the first-draft post-hydrate filter was replaced — finding 1.2). The per-purpose `license_class`
+mapping is a config-driven **`LicensePolicy`** (finding 1.3) — `DefaultLicensePolicy` ships the §5.6 table
+(`third_party_copyrighted` never permitted), injected via the `RetrievalContext` and tunable per deployment.
 
 ## 5. Provenance in the read path (the contract extension)
 
@@ -160,8 +161,8 @@ plain query embedder — the compatibility check protects against mismatched com
    **dense / sparse / hybrid** trio.
 2. ✅ **License/scope filter** on the flow (§4) — a pre-filter **inside the retrievers** (`ChunkFilter` from
    `Query.permitted_filter()` → `dense_knn`/`sparse_search` + `_overfetch` backfill; `available`,
-   `ai_grounding_allowed` for `GENERATION_GROUNDING`, and method scope). *Per-purpose license-class policy
-   (§5.6 of the ModusQ spec) is still deferred — tracked in `code-review-findings.md` (1.3).*
+   `ai_grounding_allowed` for `GENERATION_GROUNDING`, and method scope). The per-purpose license-class
+   policy (§5.6) is the config-driven `LicensePolicy` seam (finding 1.3) — `default_license` by default.
 3. ✅ **Auto-merging** `Merger` (`AutoMerger`) — uses slice 1's `parent_chunk_id`.
 4. ✅ **Cross-encoder reranking** `Reranker` (`CrossEncoderReranker`, `OnnxCrossEncoder` resource).
 5. ✅ **Header-path injection** — the Embed-stage variant (`EmbeddingSettings.inject_header_path`); part of

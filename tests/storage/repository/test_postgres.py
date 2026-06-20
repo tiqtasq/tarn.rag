@@ -95,6 +95,8 @@ async def test_filter_drops_disallowed_and_scopes(pg_repo):
     assert [c.chunk_id for c in await pg_repo.dense_knn([1.0, 0.0, 0.0], 5, only_a)] == [a]
     assert [c.chunk_id for c in await pg_repo.sparse_search("tank", 5, only_a)] == [a]  # a in scope
     assert await pg_repo.sparse_search("quokka", 5, only_a) == []  # b matches but is out of scope
+    # license-class axis: neither chunk is customer_licensed (both default public_domain) -> nothing permitted.
+    assert await pg_repo.dense_knn([1.0, 0.0, 0.0], 5, ChunkFilter(license_classes=("customer_licensed",))) == []
 
 
 async def test_delete_cascades(pg_repo):

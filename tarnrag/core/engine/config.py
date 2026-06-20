@@ -30,6 +30,9 @@ IdPolicy = Literal["caller", "uuid"]
 # Key under ``Settings.components`` holding the ingestion pipeline spec (a Pipeline-component spec).
 INGESTION_PIPELINE = "ingestion_pipeline"
 RETRIEVAL_PIPELINE = "retrieval_pipeline"
+# The retrieval license policy (purpose → permitted license_class set; ModusQ §5.6). Built by the engine
+# and injected via the RetrievalContext so retrievers pre-filter by it.
+LICENSE_POLICY = "license_policy"
 # The generation composition (Goal 3). Unlike the two above it is NOT auto-filled — generation is an
 # opt-in layer, so retrieval-only Settings carry no generation spec; ``GenerationEngine`` falls back to a
 # default when the key is absent (the same posture ``RetrievalEngine`` takes for its own default).
@@ -210,6 +213,9 @@ class Settings(BaseSettings):
         # The generation composition: single-hop reason + grounding + provenance assembler by default
         # (the component owns the detailed defaults). Present so consumers read it directly, like the others.
         self.components.setdefault(GENERATION_PIPELINE, {"class_name": "generation_pipeline"})
+        # The retrieval license policy (ModusQ §5.6 default): purpose → permitted license classes, with
+        # third_party_copyrighted never permitted. Override the spec to tune the per-purpose map.
+        self.components.setdefault(LICENSE_POLICY, {"class_name": "default_license"})
         return self
 
     @model_validator(mode="after")

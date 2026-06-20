@@ -49,12 +49,20 @@ a **recall bug** for tight scopes/licenses (ModusQ §5.4 mandates the in-retriev
 - **Fix applied:** `ChunkFilter` + `dense_knn`/`sparse_search(…, filter)` + the shared `_overfetch` loop;
   the false "`dense_knn` already takes a `filter` arg" claim in CLAUDE.md is now actually true.
 
-### 1.3 [M] Per-purpose license-class policy is not enforced
-`_passes` enforces only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method
-scope. ModusQ §5.6 specifies a purpose → permitted-`license_class` map and that `third_party_copyrighted`
-is **never** returned by any purpose. As written, `EXECUTION`/`AUTHORING` apply no license-class filter and
-`third_party_copyrighted` is not categorically excluded. The docstring admits it's deferred — fine to
-defer, but it is a stated safety requirement; track it explicitly (a `LicensePolicy` seam).
+### 1.3 [M] Per-purpose license-class policy is not enforced — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): added a config-driven **`LicensePolicy`** seam
+> (`retrieval/components/license_policy.py`). `DefaultLicensePolicy` ships the ModusQ §5.6 map — every
+> purpose may see the four shippable classes and **`third_party_copyrighted` is never listed**, so it can
+> never be returned. The engine builds it from the `LICENSE_POLICY` spec in `Settings.components` (default
+> filled) and injects it via `RetrievalContext.filter_for`, which adds `license_classes` to the
+> `ChunkFilter`; both dialects filter `license_class IN (…)`. Deployments tune the per-purpose map (or swap
+> the policy) without touching the retrievers. Covered by a policy unit test, a store license-class test,
+> an engine end-to-end test (copyrighted chunk never returned), and the gated PG test.
+
+The old `_passes` enforced only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method
+scope — `EXECUTION`/`AUTHORING` applied no license-class filter and `third_party_copyrighted` was not
+categorically excluded, despite ModusQ §5.6 requiring a purpose → permitted-`license_class` map with
+`third_party_copyrighted` never permitted. Now enforced via the `LicensePolicy` seam.
 
 ### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide
 `per_retriever = {r.config.class_name: candidates ...}` (`pipeline.py:61`). Two retrievers of the same
@@ -153,7 +161,7 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 |---|-----|------|----------|
 | 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
 | 1.2 | H | retrieval | ✅ **Resolved** — filter moved into the retrievers (`ChunkFilter` + `dense_knn`/`sparse_search` filter arg + `_overfetch` backfill; PG `ivfflat.probes`) |
-| 1.3 | M | retrieval | per-purpose license-class policy (§5.6) not enforced; `third_party_copyrighted` not excluded |
+| 1.3 | M | retrieval | ✅ **Resolved** — `LicensePolicy` seam (§5.6 default map; `third_party_copyrighted` never permitted) → `ChunkFilter.license_classes` |
 | 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
 | 2.1 | M | ingestion | extension→kind parsed in both the engine and `LoadAndParse` |
 | 2.2 | L | generation | evidence-accumulation dedup duplicated across two reasoners |
