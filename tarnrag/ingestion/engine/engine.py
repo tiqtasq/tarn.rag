@@ -105,7 +105,8 @@ class IngestionEngine(Engine):
         settings = settings or get_settings()
         obs = NoOpObservability() if settings.observability.enabled else None
         if repository is None and embedder is None:
-            repository, embedder = await cls._build_repository_and_embedder(settings)
+            repository = await DocumentRepository.create(settings.database, settings.EMBEDDING_DIMENSION)
+            embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         elif repository is None or embedder is None:
             raise ValueError("inject both repository and embedder, or neither")
         # The engine is the index producer: stamp the §8 build/identity record onto the

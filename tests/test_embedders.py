@@ -14,7 +14,7 @@ import pytest
 
 from tarnrag.core.components import Component
 from tarnrag.core.engine.config import EmbeddingSettings
-from tarnrag.core.resources.embedder import Embedder, OnnxEmbedder, build_embedder
+from tarnrag.core.resources.embedder import Embedder, OnnxEmbedder
 from tarnrag.core.resources.embedder_api import GeminiEmbedder, OpenAIEmbedder, VoyageEmbedder
 from tarnrag.core.resources.resource import Resource
 
@@ -47,11 +47,11 @@ def test_normalize_modes():
 
 # ---------------- the provider selector ----------------
 
-def test_build_embedder_dispatch():
-    assert isinstance(build_embedder(EmbeddingSettings(), 384), OnnxEmbedder)  # local default
+def test_embedder_create_dispatch():
+    assert isinstance(Embedder.create(EmbeddingSettings(), 384), OnnxEmbedder)  # local default
     cases = [("openai", OpenAIEmbedder, 1536), ("voyage", VoyageEmbedder, 1024), ("gemini", GeminiEmbedder, 3072)]
     for provider, cls, dim in cases:
-        e = build_embedder(EmbeddingSettings(provider=provider, model="m"), dim)
+        e = Embedder.create(EmbeddingSettings(provider=provider, model="m"), dim)
         assert isinstance(e, cls) and e.dim() == dim
 
 
@@ -61,8 +61,8 @@ def test_api_embedders_are_resources_not_components():
 
 
 def test_provider_is_part_of_the_fingerprint():
-    a = build_embedder(EmbeddingSettings(provider="openai", model="x"), 1536)
-    b = build_embedder(EmbeddingSettings(provider="voyage", model="x"), 1536)
+    a = Embedder.create(EmbeddingSettings(provider="openai", model="x"), 1536)
+    b = Embedder.create(EmbeddingSettings(provider="voyage", model="x"), 1536)
     assert a.config_fingerprint() != b.config_fingerprint()  # same model, different backend -> different index
     assert a.embed_meta()["embedding_provider"] == "openai"
     assert a.embed_meta()["embedding_config_fingerprint"] == a.config_fingerprint()

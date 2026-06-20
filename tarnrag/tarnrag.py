@@ -28,7 +28,7 @@ from pathlib import Path
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings
-from tarnrag.core.resources.embedder import Embedder, build_embedder
+from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
@@ -65,7 +65,7 @@ class TarnRag:
         self._repository = await DocumentRepository.create(
             self.settings.database, self.settings.EMBEDDING_DIMENSION
         )
-        self._embedder = build_embedder(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
+        self._embedder = Embedder.create(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
         self._ingestion = await IngestionEngine.create(
             self.settings, repository=self._repository, embedder=self._embedder
         )

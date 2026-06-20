@@ -73,7 +73,8 @@ class RetrievalEngine(Engine):
         """Open a query-ready engine straight from ``Settings`` — connects the repository (the same
         store ingestion writes) and the shared embedder, then validates compatibility via ``open``."""
         settings = settings or get_settings()
-        repository, embedder = await cls._build_repository_and_embedder(settings)
+        repository = await DocumentRepository.create(settings.database, settings.EMBEDDING_DIMENSION)
+        embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         return await cls.open(repository, embedder, settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:

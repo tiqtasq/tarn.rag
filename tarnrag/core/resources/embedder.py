@@ -3,7 +3,7 @@
 Writing it once is what guarantees the §5.3 requirement that retrieval replays *exactly* the
 pipeline ingestion used. The backend is **pluggable** behind the ``Embedder`` port (a ``Resource``):
 ``OnnxEmbedder`` (local ONNX, the default — prefix → tokenize → ONNX → pool → normalize) and the HTTP
-API embedders (OpenAI / Voyage / Gemini, in ``embedder_api``). ``build_embedder`` selects one from
+API embedders (OpenAI / Voyage / Gemini, in ``embedder_api``). ``Embedder.create`` selects one from
 ``EmbeddingSettings.provider``; the embedder's identity (provider/model/dim/… for an API backend;
 model/tokenizer/pooling/… for ONNX) is summarized by ``config_fingerprint()`` and recorded in
 ``index_meta``, so retrieval refuses to ``open()`` an index built by a different embedder.
@@ -30,6 +30,28 @@ class Embedder(Resource):
     Port for the shared embedding pipeline — the seam that lets ingestion and retrieval use one
     model (and lets tests swap in a fake). A ``Resource`` (an injected model, not a ``Component``).
     """
+
+    @staticmethod
+    def create(embedding: EmbeddingSettings, embedding_dimension: int) -> Embedder:
+        """Build the configured embedder from the embedding settings slice + the cross-cutting
+        ``embedding_dimension`` — the provider-dispatching factory (the embedder analog of
+        ``LanguageModel.create``). Local ``OnnxEmbedder`` by default; the HTTP API providers (``openai``
+        / ``voyage`` / ``gemini``) are lazily imported (the ``embeddings-api`` extra). Every construction
+        site — the engines, the facade, and the Embed stage — goes through here, so a pipeline spec and
+        the retrieval side can't disagree on the backend. (Each provider class keeps its own concrete
+        ``create``; this dispatches to it.)"""
+        if embedding.provider == "onnx":
+            return OnnxEmbedder.create(embedding, embedding_dimension)
+        from tarnrag.core.resources.embedder_api import EMBEDDER_PROVIDERS
+
+        try:
+            impl = EMBEDDER_PROVIDERS[embedding.provider]
+        except KeyError:
+            raise ValueError(
+                f"unknown embedding provider {embedding.provider!r}; "
+                f"choose 'onnx' or one of {sorted(EMBEDDER_PROVIDERS)}"
+            ) from None
+        return impl.create(embedding, embedding_dimension)
 
     @abstractmethod
     def embed_passages(self, texts: list[str]) -> list[list[float]]:
@@ -244,23 +266,3 @@ class OnnxEmbedder(Embedder):
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed([text], self.query_prefix)[0]
-
-
-def build_embedder(embedding: EmbeddingSettings, embedding_dimension: int) -> Embedder:
-    """Build the configured embedder (a ``Resource``) from the embedding settings slice + the
-    cross-cutting ``embedding_dimension``. Local ``OnnxEmbedder`` by default; the HTTP API providers
-    (``openai`` / ``voyage`` / ``gemini``) are lazily imported (the ``embeddings-api`` extra). The two
-    construction sites — the engine and the Embed stage — both go through here, so a pipeline spec and
-    the retrieval side can't disagree on the backend."""
-    if embedding.provider == "onnx":
-        return OnnxEmbedder.create(embedding, embedding_dimension)
-    from tarnrag.core.resources.embedder_api import EMBEDDER_PROVIDERS
-
-    try:
-        impl = EMBEDDER_PROVIDERS[embedding.provider]
-    except KeyError:
-        raise ValueError(
-            f"unknown embedding provider {embedding.provider!r}; "
-            f"choose 'onnx' or one of {sorted(EMBEDDER_PROVIDERS)}"
-        ) from None
-    return impl.create(embedding, embedding_dimension)
