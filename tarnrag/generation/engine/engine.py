@@ -10,7 +10,7 @@ here is the allowed direction (``generation → retrieval``); the pipeline + sea
 
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Self
 
 from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings, get_settings
@@ -21,8 +21,6 @@ from tarnrag.generation.types import GenerationResult
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 from tarnrag.retrieval.engine.retrieval_engine_protocol import RetrievalEngineProtocol
 from tarnrag.retrieval.types import Query
-
-_DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "generation_pipeline"}  # single-hop + provenance assembler
 
 
 class GenerationEngine:
@@ -40,14 +38,26 @@ class GenerationEngine:
         self._pipeline = pipeline
 
     @classmethod
+    def assemble(
+        cls, retrieval: RetrievalEngineProtocol, llm: LanguageModel, settings: Settings
+    ) -> GenerationEngine:
+        """Build the engine over a pre-built retrieval port + LLM, with the ``GenerationPipeline`` from
+        ``Settings`` (``Settings`` guarantees the spec is present). The shared wiring used by both
+        ``create`` (full standalone) and a composition root (``TarnRag``) that injects an already-open
+        retrieval engine."""
+        pipeline = ComponentFactory.get().create_as(
+            settings.components[GENERATION_PIPELINE], GenerationPipeline
+        )
+        return cls(retrieval, llm, pipeline)
+
+    @classmethod
     async def create(cls, settings: Settings | None = None) -> GenerationEngine:
-        """Wire the composition: the retrieval engine (as the port), the LLM, and the pipeline spec."""
+        """Wire the composition standalone: build the retrieval engine (as the port) + the LLM, then
+        :meth:`assemble`."""
         settings = settings or get_settings()
         retrieval = await RetrievalEngine.create(settings)
         llm = LanguageModel.create(settings.llm)
-        spec = settings.components.get(GENERATION_PIPELINE) or _DEFAULT_PIPELINE
-        pipeline = ComponentFactory.get().create_as(spec, GenerationPipeline)
-        return cls(retrieval, llm, pipeline)
+        return cls.assemble(retrieval, llm, settings)
 
     async def answer(self, query: Query) -> GenerationResult:
         """Answer a question: retrieve, read, and return the answer + proof tree + evidence."""

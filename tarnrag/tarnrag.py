@@ -26,12 +26,10 @@ import os
 from pathlib import Path
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import ComponentFactory
-from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings
+from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.engine.engine import GenerationEngine
-from tarnrag.generation.pipeline.pipeline import GenerationPipeline
 from tarnrag.generation.types import GenerationResult
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
@@ -144,12 +142,11 @@ class TarnRag:
         return self._ingestion
 
     def _gen(self) -> GenerationEngine:
-        """The generation engine, built once over the shared retrieval engine + the configured LLM."""
+        """The generation engine, built once over the shared retrieval engine + the configured LLM
+        (the pipeline comes from ``Settings`` via ``GenerationEngine.assemble``)."""
         if self._generation is None:
             llm = self._injected_llm or self._build_llm()
-            spec = self.settings.components.get(GENERATION_PIPELINE) or {"class_name": "generation_pipeline"}
-            pipeline = ComponentFactory.get().create_as(spec, GenerationPipeline)
-            self._generation = GenerationEngine(self._retrieval, llm, pipeline)
+            self._generation = GenerationEngine.assemble(self._retrieval, llm, self.settings)
         return self._generation
 
     def _build_llm(self) -> LanguageModel:
