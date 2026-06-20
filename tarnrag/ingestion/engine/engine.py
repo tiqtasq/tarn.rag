@@ -31,12 +31,7 @@ from tarnrag.core.engine.observability import NoOpObservability
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import IngestionError
 from tarnrag.core.resources.embedder import Embedder
-from tarnrag.contracts import (
-    DocumentFactsSource,
-    PipelineItem,
-    build_index_meta,
-    index_meta_conflict,
-)
+from tarnrag.contracts import DocumentFactsSource, IndexMeta, PipelineItem
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -149,8 +144,8 @@ class IngestionEngine(Engine):
         ``RetrievalEngine.open`` validates the same record."""
         existing = await repository.index_meta()
         if not existing.get("schema_version"):
-            await repository.write_index_meta(build_index_meta(embedder))
-        elif (conflict := index_meta_conflict(existing, embedder)) is not None:
+            await repository.write_index_meta(IndexMeta.build(embedder))
+        elif (conflict := IndexMeta.conflict(existing, embedder)) is not None:
             raise IngestionError(conflict)
 
     @staticmethod

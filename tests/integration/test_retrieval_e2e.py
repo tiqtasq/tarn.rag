@@ -4,7 +4,7 @@ Proves the unification — ingestion writes the §8 index and retrieval reads it
 store (no separate index file). InMemoryJobQueue + SQLite repo + a fake 3-d embedder.
 """
 
-from tarnrag.contracts import build_index_meta
+from tarnrag.contracts import IndexMeta
 from tarnrag.contracts import PipelineItem
 from tarnrag.retrieval import Query, RetrievalEngine
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -55,7 +55,7 @@ async def test_ingest_then_retrieve_on_one_repo(repo):
     queue = InMemoryJobQueue()
     orch = PipelineOrchestrator(PipelineDAG(_stages()), queue, repo, create_sink_registry())
     queue.set_handler(IngestionWorker(orch).handle_batch)
-    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))  # producer stamps the build record
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))  # producer stamps the build record
 
     await orch.ingest_documents(
         [PipelineItem(content="Hello world. " * 10, metadata={"source_id": "s1"})]

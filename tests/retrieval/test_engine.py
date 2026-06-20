@@ -2,7 +2,7 @@
 
 import pytest
 
-from tarnrag.contracts import build_index_meta
+from tarnrag.contracts import IndexMeta
 from tarnrag.contracts import (
     Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
 )
@@ -48,7 +48,7 @@ class _FakeCrossEncoder:
 
 async def _index(repo):
     """Stamp index_meta and ingest two chunks (+ embeddings) into the repo; return the chunk ids."""
-    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))
     _, cids = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1", "title": "T"}),
         [
@@ -98,7 +98,7 @@ async def test_top_k_truncates(repo):
 
 
 async def test_empty_index_returns_empty(repo):
-    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))  # built, but no chunks
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))  # built, but no chunks
     engine = await RetrievalEngine.open(repo, _FakeEmbedder())
     assert await engine.search(Query(text="x")) == []
 
@@ -149,7 +149,7 @@ async def test_engine_uses_configured_pipeline_spec(repo):
 
 
 async def test_filter_drops_unavailable_and_respects_grounding(repo):
-    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))
     _, (a, b) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
         [
@@ -184,7 +184,7 @@ def test_scope_filter_matches_methods():
 async def _index_tree(repo):
     """Index a 1-level auto-merging tree: a section parent (ordinal 0, NOT embedded) + two leaf children
     (ordinals 1/2, ``parent_ordinal=0``, embedded). Returns ``(parent_id, leaf1_id, leaf2_id)``."""
-    await repo.write_index_meta(build_index_meta(_FakeEmbedder()))
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))
     _, (parent, leaf1, leaf2) = await repo.store_document_with_chunks(
         Document(content="d", metadata={"source_id": "s1"}),
         [
