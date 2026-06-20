@@ -12,6 +12,7 @@ import pytest
 
 from examples.common import MODEL_DIR, corpus
 from tarnrag.core.engine.config import Settings
+from tarnrag.core.exceptions import IngestionError
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.report import Severity
 from tarnrag.tarnrag import TarnRag
@@ -112,6 +113,26 @@ async def test_open_injects_one_shared_repository_and_embedder(tmp_path):
         assert tarn._embedder is tarn._retrieval.embedder
         # close() releases the store TarnRag owns
         assert tarn._repository is not None
+
+
+async def test_open_refuses_an_index_built_with_a_different_embedder(tmp_path):
+    """P5/P4: the index identity is stamped once and then validated, not re-stamped on every open — so
+    reopening a store whose index was built with a different embedding config is refused, not silently
+    masked. (A clobbering re-stamp would make this open succeed against a stale index.)"""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("tokenizers")
+    doc = sorted(str(p) for p in corpus("corpus-1").glob("*.txt"))[0]
+
+    # Build the index with the default embedding config.
+    async with TarnRag(_settings(tmp_path)) as tarn:
+        assert (await tarn.ingest([doc])).value[0].status == "complete"
+
+    # Reopen the SAME store with a different embedding fingerprint (same dim, different query prefix).
+    other = _settings(tmp_path)
+    other.embedding.query_prefix = "query: "
+    with pytest.raises(IngestionError, match="different embedding pipeline"):
+        async with TarnRag(other):
+            pass
 
 
 async def test_console_renders_over_the_facade(tmp_path):

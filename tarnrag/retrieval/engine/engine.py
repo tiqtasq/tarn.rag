@@ -17,7 +17,7 @@ from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
-from tarnrag.contracts import SCHEMA_VERSION, RetrievalResult
+from tarnrag.contracts import RetrievalResult, index_meta_conflict
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.pipeline.searcher import Searcher
@@ -65,18 +65,9 @@ class RetrievalEngine(Engine):
         meta = await repository.index_meta()
         if not meta.get("schema_version"):
             raise RetrievalError("retrieval index has not been built yet (no index_meta)")
-        if meta.get("schema_version") != SCHEMA_VERSION:
-            raise RetrievalError(
-                f"schema_version mismatch: index {meta.get('schema_version')!r} "
-                f"!= engine {SCHEMA_VERSION!r}"
-            )
-        index_fp = meta.get("embedding_config_fingerprint")
-        engine_fp = embedder.config_fingerprint()
-        if index_fp != engine_fp:
-            raise RetrievalError(
-                "embedding_config_fingerprint mismatch — the index was built with a different "
-                f"embedding pipeline (index {index_fp!r} != engine {engine_fp!r})"
-            )
+        conflict = index_meta_conflict(meta, embedder)
+        if conflict:
+            raise RetrievalError(conflict)
         # The cross-encoder's model loads lazily, so building it here is cheap; it stays unused unless the
         # configured pipeline has a reranker (a settings-less ``open`` has none).
         cross_encoder = OnnxCrossEncoder.create(settings.rerank) if settings is not None else None

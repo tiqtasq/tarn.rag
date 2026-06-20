@@ -34,3 +34,20 @@ def build_index_meta(embedder: Any, extra: dict[str, str] | None = None) -> dict
         **(extra or {}),
     }
     return {k: str(v) for k, v in meta.items()}
+
+
+def index_meta_conflict(meta: dict[str, str], embedder: Any) -> str | None:
+    """Why an existing index's ``meta`` is incompatible with ``embedder`` — a human-readable reason, or
+    ``None`` if they agree. Both sides of the §8 handshake use it: the ingestion producer (to refuse
+    re-stamping an index built with a different embedder) and ``RetrievalEngine.open`` (to refuse serving
+    one). Assumes ``meta`` is non-empty — the caller decides what an absent (never-built) index means."""
+    if meta.get("schema_version") != SCHEMA_VERSION:
+        return f"schema_version mismatch: index {meta.get('schema_version')!r} != engine {SCHEMA_VERSION!r}"
+    index_fp = meta.get("embedding_config_fingerprint")
+    engine_fp = embedder.config_fingerprint()
+    if index_fp != engine_fp:
+        return (
+            "embedding_config_fingerprint mismatch — the index was built with a different "
+            f"embedding pipeline (index {index_fp!r} != engine {engine_fp!r})"
+        )
+    return None

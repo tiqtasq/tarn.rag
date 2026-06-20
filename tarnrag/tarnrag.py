@@ -65,13 +65,17 @@ class TarnRag:
         self._repository = await DocumentRepository.create(
             self.settings.database, self.settings.EMBEDDING_DIMENSION
         )
-        self._embedder = Embedder.create(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
-        self._ingestion = await IngestionEngine.create(
-            self.settings, repository=self._repository, embedder=self._embedder
-        )
-        self._retrieval = await RetrievalEngine.create(
-            self.settings, repository=self._repository, embedder=self._embedder
-        )
+        try:
+            self._embedder = Embedder.create(self.settings.embedding, self.settings.EMBEDDING_DIMENSION)
+            self._ingestion = await IngestionEngine.create(
+                self.settings, repository=self._repository, embedder=self._embedder
+            )
+            self._retrieval = await RetrievalEngine.create(
+                self.settings, repository=self._repository, embedder=self._embedder
+            )
+        except BaseException:
+            await self.close()  # release the store we opened before re-raising (e.g. an index mismatch)
+            raise
         return self
 
     async def close(self) -> None:

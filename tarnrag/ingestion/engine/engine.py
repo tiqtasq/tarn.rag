@@ -29,8 +29,14 @@ from tarnrag.core.engine.config import INGESTION_PIPELINE, IdPolicy, Settings, g
 from tarnrag.core.hashing import sha256_file, sha256_hex
 from tarnrag.core.engine.observability import NoOpObservability
 from tarnrag.core.engine.engine import Engine
+from tarnrag.core.exceptions import IngestionError
 from tarnrag.core.resources.embedder import Embedder
-from tarnrag.contracts import DocumentFactsSource, PipelineItem, build_index_meta
+from tarnrag.contracts import (
+    DocumentFactsSource,
+    PipelineItem,
+    build_index_meta,
+    index_meta_conflict,
+)
 from tarnrag.storage.repository import DocumentRepository
 from tarnrag.storage.status import DocumentStatusReader
 from tarnrag.ingestion.engine.orchestrator import PipelineDAG, PipelineOrchestrator
@@ -109,10 +115,15 @@ class IngestionEngine(Engine):
             embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         elif repository is None or embedder is None:
             raise ValueError("inject both repository and embedder, or neither")
-        # The engine is the index producer: stamp the §8 build/identity record onto the
-        # repository (RetrievalEngine.open validates it). The sinks persist document/chunk/
-        # embedding data into the same repository; job_status lives there too.
-        await repository.write_index_meta(build_index_meta(embedder))
+        # The engine is the index producer: ESTABLISH the §8 build/identity record on a fresh index, or
+        # CONFIRM it on an existing one — never silently re-stamp (that would write on a read-only open
+        # and mask an embedder mismatch). RetrievalEngine.open validates the same record. The sinks
+        # persist document/chunk/embedding data into the same repository; job_status lives there too.
+        existing = await repository.index_meta()
+        if not existing.get("schema_version"):
+            await repository.write_index_meta(build_index_meta(embedder))
+        elif (conflict := index_meta_conflict(existing, embedder)) is not None:
+            raise IngestionError(f"cannot ingest into this index — {conflict}")
         pipeline = cls.build_pipeline(settings)
 
         if settings.MODE == "distributed":
