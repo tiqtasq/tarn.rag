@@ -1,5 +1,18 @@
 # RAG Ingestion & Retrieval — Software Specification
 
+> **Status note (2026-06-20):** this spec is the original **ingestion** design and its core architecture
+> (the D1–D6 decisions, the queue / worker / orchestrator / ResultSink split, observability) is still
+> accurate. Three areas were **rewritten to match the code**: the *Project Structure* (the package was
+> reorganized into `core/{components,engine,resources}`, `ingestion/{components,engine,pipeline}`,
+> `retrieval/{components,engine,pipeline}`, plus new `generation/` and `eval/` packages), the *Database
+> Schema* (now the **§8 typed-column** schema from the ModusQ retrieval spec — `document_id`/`chunk_id`
+> keys, denormalized license columns, layout-aware provenance columns, and the `table_cells` /
+> `chunk_annotations` / `method_chunks` / `index_meta` tables — **not** the old metadata-bag schema), and
+> the *Concrete stages* (LoadAndParse is now structured extraction; Enrich runs doc-phase enrichers; Chunk
+> defaults to the structure-aware chunker). The system now spans **ingestion + retrieval + generation**;
+> see `doc/ModusQ_RetrievalSubsystemSpec.md`, `doc/retrieval-architecture-design.md`, and
+> `doc/generation-architecture-design.md` for the latter two.
+
 ---
 
 ## Table of Contents
@@ -157,58 +170,75 @@ read-model, not a queue).
 tarn.rag/
 │
 ├── tarnrag/
-│   ├── __init__.py                              # public API re-exports (IngestionEngine, RetrievalEngine, …)
+│   ├── __init__.py            # public API re-exports (TarnRag, IngestionEngine, RetrievalEngine, Query, …)
+│   ├── tarnrag.py             # TarnRag — high-level facade over all three engines (composition root)
+│   ├── report.py              # Outcome / Report / Issue / Severity (what every facade call returns)
+│   ├── console.py             # interactive rich-terminal UI over the facade (optional `console` extra)
 │   │
 │   ├── core/                                    # infra only
-│   │   ├── config.py                            # Settings (nested sub-models, GROUP__FIELD env)
-│   │   ├── embedder.py                          # Embedder ABC + OnnxEmbedder (shared pipeline)
-│   │   ├── engine.py                            # Engine base (shared store+embedder construction + lifecycle)
+│   │   ├── components/                          # the Component framework: Component, ComponentFactory, Registry
+│   │   ├── engine/                              # config.py (Settings), engine.py (Engine base), observability.py
+│   │   ├── resources/                           # engine-built injected models: Embedder (+API), CrossEncoder,
+│   │   │                                        #   LanguageModel (+API), Resource base
 │   │   ├── exceptions.py
-│   │   └── observability.py                     # Observability ABC + NoOpObservability
+│   │   └── hashing.py                           # sha256_hex / sha256_file / compute_content_hash
 │   │
 │   ├── contracts/                               # cross-boundary shared kernel (leaf package)
-│   │   ├── dtos.py                              # Document, Chunk, Embedding, PipelineItem, DocumentFacts, MethodRef
-│   │   ├── ports.py                             # ChunkStore, DocumentFactsSource, JobStatusSource
+│   │   ├── dtos.py                              # Document, Chunk, Embedding, PipelineItem (+document/provenance), MethodRef
+│   │   ├── ports.py                             # ChunkStore, RetrievalStore, DocumentFactsSource, JobStatusSource
 │   │   ├── results.py                           # Candidate, ChunkRecord, RetrievalResult
+│   │   ├── structure.py                         # StructuredDocument / Element / Table / Annotation / ChunkProvenance / Span
 │   │   └── index_meta.py                        # §8 build/identity record (schema + fingerprint)
 │   │
 │   ├── storage/                                 # persistence layer
 │   │   ├── status.py                            # DocumentStatusReader (composes the status ports)
 │   │   └── repository/
 │   │       ├── base.py                          # DocumentRepository (SQLAlchemy Core, async; §8 index)
-│   │       ├── postgres.py                      # PostgreSQL (pgvector) dialect
+│   │       ├── chunk_provenance.py              # ChunkProvenance <-> columns/table_cells/chunk_annotations codec
+│   │       ├── postgres.py                      # PostgreSQL (pgvector + tsvector) dialect
 │   │       └── sqlite.py                        # SQLite (sqlite-vec/FTS5) dialect
 │   │
 │   ├── ingestion/
-│   │   ├── engine.py                            # IngestionEngine facade + run_worker()
-│   │   ├── worker.py                            # IngestionWorker (pure compute handler)
-│   │   ├── orchestrator.py                      # PipelineOrchestrator (BatchCoordinator), PipelineDAG
-│   │   ├── pipeline.py                          # PipelineStage classes, Pipeline
-│   │   ├── queue.py                             # JobEnqueuer/JobConsumer ports + PgQueuer/InMemory
-│   │   ├── batch.py                             # BatchContext + BatchCoordinator (worker↔orch handshake)
-│   │   ├── result_sink.py                       # ResultSink + per-stage sinks
-│   │   ├── jobs.py                              # IngestionJob + Batch (homogeneous dispatch unit)
-│   │   ├── types.py                             # DocumentStatus (public result type)
-│   │   └── stages/                              # load_parse, parsers, clean_normalize, chunk, enrich, embed (self-register via __init__)
+│   │   ├── engine/                              # engine.py (IngestionEngine + run_worker), worker, orchestrator,
+│   │   │                                        #   queue, batch, result_sink, jobs, types
+│   │   ├── pipeline/                            # pipeline.py (PipelineStage/Pipeline), clean_normalize, embed
+│   │   └── components/                          # extraction/ (Extractor + plain_text/markdown/html/pdf/docling),
+│   │                                            #   chunking/ (Chunker + recursive/structure_aware), enrichment/
 │   │
-│   └── retrieval/
-│       ├── engine.py                            # RetrievalEngine facade
-│       └── types.py                             # Query, Purpose, ALL (result types live in contracts/)
+│   ├── retrieval/
+│   │   ├── engine/                              # engine.py (RetrievalEngine), retrieval_engine_protocol.py
+│   │   ├── pipeline/                            # searcher.py, pipeline.py (RetrievalPipeline), router.py
+│   │   └── components/                          # retriever (dense/sparse), fuser (identity/rrf), merger,
+│   │                                            #   reranker (cross_encoder), classifier
+│   │   └── types.py                             # Query, Purpose, ALL (result types live in contracts/)
+│   │
+│   ├── generation/                              # the Goal-3 answer layer (generation → retrieval, one-way)
+│   │   ├── engine/                              # GenerationEngine facade
+│   │   ├── pipeline/                            # GenerationPipeline (reason → ground → assemble → policy)
+│   │   ├── components/                          # reasoner (single_hop/iterative/decomposition), grounding, assembler
+│   │   ├── context.py  types.py                 # GenerationContext; GenerationResult / ProofStep / Citation
+│   │
+│   └── eval/                                    # harness.py (retrieval sweep), generation.py, dataset, metrics
 │
-├── tests/                                       # mirrors the package; SQLite + InMemory queue
-├── scripts/fetch_model.py                       # fetch the ONNX model + tokenizer into the model dir
-├── run_worker.py                                # distributed consumer entry: asyncio.run(run_worker())
-├── .env.example  pyproject.toml  requirements.txt  README.md
-└── doc/                                         # FUNCTIONAL_REQUIREMENTS.md, ModusQ_RetrievalSubsystemSpec.md
+├── tests/                    # mirrors the package; SQLite + InMemory queue (Postgres/docling tests gated)
+├── examples/                 # runnable teaching examples (python -m examples.part_i.…)
+├── scripts/fetch_model.py    # fetch the ONNX model + tokenizer into the model dir
+├── run_worker.py             # distributed consumer entry: asyncio.run(run_worker())
+├── .env.example  pyproject.toml  requirements.txt  README.md  CLAUDE.md
+└── doc/                      # this spec, ModusQ_RetrievalSubsystemSpec.md, the design docs, main.pdf
 ```
 
 ### Folder Rationale
 
-- **`tarnrag/core/`** — Infrastructure: config, the shared ONNX embedding pipeline (`embedder.py`), the `Engine` base (shared store+embedder construction + lifecycle), exceptions, observability. No business logic.
-- **`tarnrag/storage/`** — Persistence: data models, the chunk/index stores, the status read model, and `repository/` (Postgres/SQLite dialects).
-- **`tarnrag/ingestion/`** — Ingestion: stages, pipeline, orchestrator, worker, queue, and the `IngestionEngine` facade.
-- **`tarnrag/retrieval/`** — Retrieval: the `RetrievalEngine` facade + its types.
-- **`tests/`** — Mirrors the package; runs on SQLite + InMemory queue.
+- **`tarnrag/core/`** — Infrastructure: the `components/` framework (config-driven Component + factory), `engine/` (Settings, the `Engine` base, observability), `resources/` (engine-built injected models — `Embedder`, `CrossEncoder`, `LanguageModel`), hashing, exceptions. No business logic.
+- **`tarnrag/contracts/`** — The dependency-free shared kernel: DTOs, ports, retrieval results, the `StructuredDocument` model, and the index-meta record.
+- **`tarnrag/storage/`** — Persistence: the `DocumentRepository` (§8 index + status read model) and its Postgres/SQLite dialects.
+- **`tarnrag/ingestion/`** — Ingestion: `components/` (extractors, chunkers, enrichers), `pipeline/` (stage bases + clean/embed), `engine/` (orchestrator, worker, queue, sinks, `IngestionEngine`).
+- **`tarnrag/retrieval/`** — Retrieval: `components/` (retriever/fuser/merger/reranker/classifier), `pipeline/` (`RetrievalPipeline` + router), the `RetrievalEngine` facade + `Query`.
+- **`tarnrag/generation/`** — The answer layer: reasoners, grounding, proof-tree assembler, and the `GenerationEngine` facade. Depends on retrieval one-way; never the reverse.
+- **`tarnrag/eval/`** — Retrieval + generation eval harnesses (IR metrics, sweeps, segmentation).
+- **`TarnRag` (`tarnrag.py`)** — the composition root + high-level facade over all three engines (`ingest`/`retrieve`/`ask`), each returning an `Outcome` + `Report`.
+- **`tests/`** — Mirrors the package; runs on SQLite + InMemory queue (Postgres + docling tests skip unless their backend is present).
 
 ---
 
@@ -245,9 +275,12 @@ inheritance.
 Pydantic v2 (`arbitrary_types_allowed=True`). → `tarnrag/contracts/dtos.py`,
 `tarnrag/ingestion/engine/jobs.py`.
 
-- **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`.
+- **`PipelineItem`** (transport): `id: str | None`, `content: str`, `metadata: dict[str, Any]`, plus the
+  two phase-specific layout fields `document: StructuredDocument | None` (document phase) and
+  `provenance: ChunkProvenance | None` (chunk phase); `derive()` carries them forward across 1→1 stages.
 - **`Document`**: `id`, `content`, `metadata` (carries `source_id`, the idempotency key).
-- **`Chunk`**: `id`, `parent_doc_id` (→ Document), `content`, `chunk_index`, `total_chunks`, `metadata`.
+- **`Chunk`**: `id`, `parent_doc_id` (→ Document), `content`, `chunk_index`, `total_chunks`,
+  `provenance: ChunkProvenance | None` (the layout-aware trace the sink maps to chunk columns), `metadata`.
 - **`Embedding`**: `id`, `chunk_id` (→ Chunk), `vector: list[float]`, `model`, `dimension`, `metadata`.
 - **`IngestionJob`** (internal queue payload, never exposed to clients): `job_id`,
   `document_id` (== `source_id`), `item: PipelineItem` (inline, D1), `stage_name`,
@@ -273,142 +306,132 @@ produced/persisted → the worker propagates so the queue requeues, D5), with su
 The repository abstracts the database for both ingestion and retrieval. **SQLAlchemy 2.0
 Core (async).** A base `DocumentRepository` holds the shared table definitions and all
 dialect-agnostic logic; `PostgresRepository`/`SqliteRepository` override only dialect
-hooks. → `repository.py`, `postgres_repository.py`, `sqlite_repository.py`.
+hooks. → `storage/repository/base.py`, `postgres.py`, `sqlite.py` (+ `chunk_provenance.py`, the
+`ChunkProvenance` ⇄ columns/`table_cells`/`chunk_annotations` codec).
 
-**Base (`DocumentRepository`):** owns the `MetaData`/`Table`s (`documents`, `chunks`,
-`embeddings`, `job_status`; `metadata` is JSON with a JSONB variant on Postgres) and the
-CRUD: `store_document` (upsert on `source_id`, then delete the doc's chunks → idempotent
-re-ingest), `store_document_with_chunks`, `store_chunks`, `store_embeddings`,
-`update_chunk_metadata`, `delete_document` (drops the doc + chunks → embeddings cascade),
-reads (`get_document` / `get_chunk` / `get_chunks_by_document` / `query_chunks`),
-`list_documents` (inventory + counts), `documents_by_content_hash`, the §8 retrieval reads
-(abstract `dense_knn` / `hydrate`), and the document-status projection
-(`record_job`, `document_jobs`, `delete_document_jobs`, `document_status`).
+**Base (`DocumentRepository`):** implements four narrow ports — `ChunkStore`, `RetrievalStore`,
+`JobStatusSource`, `DocumentFactsSource` — and owns the `MetaData`/`Table`s (`documents`, `chunks`,
+`table_cells`, `chunk_annotations`, `method_chunks`, `embeddings`, `job_status`, `index_meta`; the schema
+is the **§8 typed-column** model, **no JSON metadata bag** on documents/chunks — layout-aware provenance
+lives in dedicated columns + child tables). The CRUD: `store_document` / `store_document_with_chunks`
+(upsert on the `document_id` PK, then replace the doc's chunks → idempotent re-ingest), `store_chunks`,
+`store_embeddings`, `delete_document` / `delete_document_and_jobs` (cascade), reads (`get_document` /
+`get_chunk` / `get_chunks_by_document`), `list_documents` (inventory + counts), `documents_by_content_hash`,
+the §8 retrieval reads (abstract `dense_knn` / `sparse_search` / `hydrate`), the index identity
+(`write_index_meta` / `index_meta`), and the document-status projection (`record_job` / `document_jobs` /
+`delete_document_jobs` / `document_status`). (`query_chunks`, `health_check`, and `update_chunk_metadata`
+exist but are currently unused / no-ops — see `code-review-findings.md`.)
 
-**Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic);
-documents are keyed by `metadata['source_id']` (UNIQUE, **stable**), so re-ingest upserts the doc
-and replaces its chunks/embeddings (cascade) — never duplicates. Each document also stores a
-`content_hash` column (sha256 of submitted content); `documents_by_content_hash` looks it up for
-content dedup, independent of the source_id identity.
+**Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic); documents are keyed by
+`document_id` (== `source_id`, the PK, **stable**), so re-ingest upserts the doc and replaces its
+chunks/embeddings (cascade) — never duplicates. Each document also stores a `content_hash` column (sha256
+of submitted content); `documents_by_content_hash` looks it up for content dedup, independent of identity.
 
-**Dialect hooks (adapters):** `_driver_url`, `_vector_type`, `_encode_vector` /
-`_decode_vector`, `dense_knn` / `hydrate`, and `_before_/_after_create_schema`.
-- **Postgres** — asyncpg driver + `pgvector` (`<=>` cosine for `dense_knn`); creates the
-  `vector` extension before tables and the ivfflat index after.
-- **SQLite** — aiosqlite driver; dense vectors in `vec_chunks` (sqlite-vec) + sparse text in
-  `fts_chunks` (FTS5), the extension loaded per connection; enables `PRAGMA foreign_keys=ON`
-  per connection (for cascade).
+**Dialect hooks (adapters):** `_driver_url`, `_vector_type`, `_encode_vector` / `_decode_vector`,
+`dense_knn` / `sparse_search` / `hydrate`, and `_before_/_after_create_schema`.
+- **Postgres** — asyncpg driver + `pgvector` (`<=>` cosine for `dense_knn`) + `to_tsvector`/`ts_rank_cd`
+  for `sparse_search`; creates the `vector` extension before tables, and the ivfflat + FTS GIN indexes after.
+- **SQLite** — aiosqlite driver; dense vectors in `vec_chunks` (sqlite-vec) + sparse text in `fts_chunks`
+  (FTS5), the extension loaded per connection; enables `PRAGMA foreign_keys=ON` per connection (cascade).
 
-### Database Schema
+### Database Schema (current — the §8 typed-column model)
 
-The document/chunk/embedding tables are created from the SQLAlchemy `MetaData` in
-the repository base (`metadata.create_all`), and the dialect-only objects (pgvector
-extension and the `vector_cosine_ops` ivfflat index on Postgres; the `vec_chunks` /
-`fts_chunks` virtual tables on SQLite) by each adapter. The DDL below is the
-**equivalent reference** (also handy for `scripts/init_db*.sql`). The `job_status`
-table is the API's read-model; pgQueuer owns the real queue tables (its own migrations).
+All tables are created from the SQLAlchemy `MetaData` in `storage/repository/base.py`
+(`metadata.create_all`); the dialect-only objects are created by each adapter — on **Postgres** the
+`vector` extension + the `ivfflat` ANN index on `embeddings.vector` + the FTS **GIN** index on
+`to_tsvector('english', chunks.text)`; on **SQLite** the `vec_chunks` (sqlite-vec) and `fts_chunks`
+(FTS5) **virtual tables**. The reference DDL below is dialect-agnostic (SQLite stores `vector` as JSON
+text and keeps the `embeddings` table empty — dense vectors live in `vec_chunks` — while Postgres uses a
+real `vector(dim)` column). `license_class` is a closed enum: `customer_licensed`, `public_domain`,
+`modusq_authored`, `third_party_copyrighted`, `third_party_licensed`. `job_status` is the API's read-model;
+pgQueuer owns the real queue tables (its own migrations).
 
-**PostgreSQL** (`scripts/init_db.sql`)
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE documents (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    content TEXT NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    content_hash TEXT,                  -- sha256 of submitted content (content dedup, not identity)
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- UNIQUE on source_id makes re-ingestion idempotent (upsert via ON CONFLICT)
-CREATE UNIQUE INDEX idx_documents_source_id ON documents ((metadata->>'source_id'));
-CREATE INDEX idx_documents_content_hash ON documents(content_hash);
-
-CREATE TABLE chunks (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    parent_doc_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    content TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    total_chunks INTEGER NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_chunks_parent ON chunks(parent_doc_id);
-CREATE INDEX idx_chunks_source ON chunks USING GIN ((metadata->'source_id'));
-
-CREATE TABLE embeddings (
-    id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
-    vector vector(384),  -- dimension MUST equal settings.EMBEDDING_DIMENSION (templated by _init_schema)
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX idx_embeddings_chunk ON embeddings(chunk_id);
-CREATE INDEX idx_embeddings_vector ON embeddings USING ivfflat (vector vector_cosine_ops) WITH (lists = 100);
-
--- Document-status PROJECTION for the API. pgQueuer owns the real queue tables
--- (installed via pgQueuer's own migrations); this is NOT the queue.
-CREATE TABLE job_status (
-    job_id      TEXT PRIMARY KEY,
-    document_id TEXT NOT NULL,                    -- source_id; the public document handle
-    stage_name  TEXT NOT NULL,
-    status      TEXT NOT NULL DEFAULT 'queued',   -- queued | processing | completed | failed
-    error       TEXT,
-    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX idx_job_status_document ON job_status (document_id);
-```
-
-**SQLite** (`scripts/init_db_sqlite.sql`)
+> **What changed from the original design:** the document/chunk identity is now `document_id` / `chunk_id`
+> (== `source_id` for documents), **not** a uuid `id` + a `source_id` JSON key; there is **no JSON
+> `metadata` bag** on documents or chunks — provenance is typed columns (`license_class`,
+> `ai_grounding_allowed`, `available`, `locator`, `header_path`, `level`, `parent_chunk_id`, `geometry`)
+> plus the `table_cells` / `chunk_annotations` / `method_chunks` child tables; `chunks` stores `ordinal`
+> (position), not `chunk_index`/`total_chunks`.
 
 ```sql
 CREATE TABLE documents (
-    id TEXT PRIMARY KEY,
-    content TEXT NOT NULL,
-    metadata TEXT DEFAULT '{}',
-    content_hash TEXT,                  -- sha256 of submitted content (content dedup, not identity)
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    document_id   TEXT PRIMARY KEY,        -- == source_id (the public, stable handle)
+    content       TEXT NOT NULL,           -- full doc text (Python-side; not part of the §8 contract)
+    title         TEXT,
+    source_kind   TEXT NOT NULL DEFAULT 'document',   -- 'standard' | 'sop' | 'method' | 'document' | …
+    standard_id   TEXT,
+    doc_version   TEXT,
+    license_class TEXT NOT NULL DEFAULT 'public_domain',   -- CHECK: closed enum
+    content_hash  TEXT                      -- sha256 of submitted content (content dedup, not identity)
 );
-
-CREATE INDEX idx_documents_created ON documents(created_at);
 CREATE INDEX idx_documents_content_hash ON documents(content_hash);
--- UNIQUE on source_id makes re-ingestion idempotent (upsert / INSERT OR REPLACE)
-CREATE UNIQUE INDEX idx_documents_source_id ON documents (json_extract(metadata, '$.source_id'));
 
 CREATE TABLE chunks (
-    id TEXT PRIMARY KEY,
-    parent_doc_id TEXT NOT NULL REFERENCES documents(id),
-    content TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL,
-    total_chunks INTEGER NOT NULL,
-    metadata TEXT DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    chunk_id             TEXT PRIMARY KEY,
+    document_id          TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+    ordinal              INTEGER NOT NULL,   -- position within the document
+    text                 TEXT NOT NULL,      -- canonical chunk text (returned verbatim)
+    locator              TEXT,               -- citable locator, e.g. '§6.4.2'
+    license_class        TEXT NOT NULL DEFAULT 'public_domain',   -- CHECK enum; denormalized for filtering
+    ai_grounding_allowed INTEGER NOT NULL DEFAULT 1,   -- CHECK (0,1)
+    available            INTEGER NOT NULL DEFAULT 1,   -- CHECK (0,1)
+    content_hash         TEXT NOT NULL,      -- sha256 of the chunk text
+    -- layout-aware provenance:
+    header_path     TEXT,                    -- JSON list[str] (the section breadcrumb)
+    level           INTEGER NOT NULL DEFAULT 0,   -- auto-merge tree: 0 = leaf, >0 = section parent
+    parent_chunk_id TEXT,                    -- section parent's chunk_id (soft self-ref, no FK)
+    geometry        TEXT                     -- JSON Geometry (char spans + optional PDF page boxes)
+);
+CREATE INDEX idx_chunks_document ON chunks(document_id);
+CREATE INDEX idx_chunks_license  ON chunks(license_class, available);
+CREATE INDEX idx_chunks_parent   ON chunks(parent_chunk_id);
+
+-- Cell-level table structure for table chunks (cite/highlight a cell; address by row/col header id).
+CREATE TABLE table_cells (
+    chunk_id  TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    cell_id   TEXT NOT NULL,
+    row INTEGER NOT NULL, col INTEGER NOT NULL,
+    row_span INTEGER NOT NULL DEFAULT 1, col_span INTEGER NOT NULL DEFAULT 1,
+    is_column_header INTEGER NOT NULL DEFAULT 0, is_row_header INTEGER NOT NULL DEFAULT 0,
+    text TEXT NOT NULL DEFAULT '', geometry TEXT,   -- JSON Geometry for the cell
+    PRIMARY KEY (chunk_id, cell_id)
 );
 
-CREATE INDEX idx_chunks_parent ON chunks(parent_doc_id);
-
-CREATE TABLE embeddings (
-    id TEXT PRIMARY KEY,
-    chunk_id TEXT NOT NULL REFERENCES chunks(id),
-    vector TEXT NOT NULL,  -- JSON-encoded list
-    model TEXT NOT NULL,
-    dimension INTEGER NOT NULL,
-    metadata TEXT DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+-- Enricher annotations on a chunk (NER / topic / classification …).
+CREATE TABLE chunk_annotations (
+    chunk_id      TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    ordinal       INTEGER NOT NULL,
+    producer      TEXT NOT NULL, type TEXT NOT NULL,
+    value         TEXT NOT NULL DEFAULT '{}',   -- JSON payload
+    span          TEXT,                          -- JSON Geometry sub-span; null = whole chunk
+    deterministic INTEGER NOT NULL DEFAULT 1,    -- FR-5.3 anti-hallucination flag
+    PRIMARY KEY (chunk_id, ordinal)
 );
+CREATE INDEX idx_chunk_annotations_type ON chunk_annotations(type);
 
+-- Resolved reference bundles: which method versions reach which chunks (scope + provenance).
+CREATE TABLE method_chunks (
+    method_id TEXT NOT NULL, method_version TEXT NOT NULL,
+    chunk_id  TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    PRIMARY KEY (method_id, method_version, chunk_id)
+);
+CREATE INDEX idx_method_chunks_chunk ON method_chunks(chunk_id);
+
+CREATE TABLE embeddings (   -- Postgres: dense ANN here; SQLite: stays empty (vectors live in vec_chunks)
+    id        TEXT PRIMARY KEY,
+    chunk_id  TEXT NOT NULL REFERENCES chunks(chunk_id) ON DELETE CASCADE,
+    vector    vector(384),   -- pgvector; dim MUST equal settings.EMBEDDING_DIMENSION. (SQLite: JSON text)
+    model     TEXT NOT NULL, dimension INTEGER NOT NULL
+);
 CREATE INDEX idx_embeddings_chunk ON embeddings(chunk_id);
+
+-- §8 build/compatibility metadata (incl. the embedding fingerprint validated at retrieval open()).
+CREATE TABLE index_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL );
 
 -- Document-status PROJECTION for the API (pgQueuer owns the real queue).
 CREATE TABLE job_status (
     job_id      TEXT PRIMARY KEY,
-    document_id TEXT NOT NULL,                    -- source_id; the public document handle
+    document_id TEXT NOT NULL,                    -- == document_id; the public handle
     stage_name  TEXT NOT NULL,
     status      TEXT NOT NULL DEFAULT 'queued',   -- queued | processing | completed | failed
     error       TEXT,
@@ -416,6 +439,10 @@ CREATE TABLE job_status (
     updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX idx_job_status_document ON job_status (document_id);
+
+-- SQLite only — the §8 search indexes as extension virtual tables:
+--   CREATE VIRTUAL TABLE vec_chunks USING vec0(chunk_id TEXT PRIMARY KEY, embedding float[<dim>]);
+--   CREATE VIRTUAL TABLE fts_chunks USING fts5(chunk_id UNINDEXED, text, tokenize='unicode61');
 ```
 
 ---
@@ -441,31 +468,39 @@ through stages in-process for local testing; the distributed engine runs stages 
 `Pipeline.from_stages([...])` builds one from pre-made stages (tests/advanced wiring). Stages stay
 pure — no DB/queue access (D6). The spec's `BatchingWrapper` is superseded (D4 → ResultSink).
 
-### Concrete stages (`tarnrag/ingestion/stages/`)
+### Concrete stages (`tarnrag/ingestion/components/` + `tarnrag/ingestion/pipeline/`)
 
-Names below are each stage's `class_name` tag (its default `stage.name`, and the sink-registry key):
+Names below are each stage's `class_name` tag (its default `stage.name`, and the sink-registry key). The
+default pipeline order is **LoadAndParse → Enrich → CleanAndNormalize → Chunk → Embed**.
 
-- **LoadAndParse** (`MapperStage`) — loads `metadata['source_path']` (txt; html via
-  BeautifulSoup; pdf via a **pluggable backend registry**) or uses the given content; assigns a
-  provisional `doc_id`. The loaders are a module-level registry in `stages/parsers.py`
-  (`DEFAULT_PDF_PARSERS`: `pypdf` default, `pdfplumber`, `load_html` (bs4); all permissive, lazily
-  imported). The Config's `default_pdf_parser` (validated against that registry) is the default; a
-  request overrides it per call via `metadata['parser']` (**item data**, flows inline). The API
-  validates `parser` against the registry (422).
-- **CleanAndNormalize** (`MapperStage`) — strips control chars, collapses whitespace.
-- **Chunk** (`ChunkerStage`) — recursive character splitting on coarse→fine separators,
-  packed into `chunk_size` windows with `overlap`.
-- **EnrichMetadata** (`MapperStage`) — adds `char_count`/`word_count` (NLP is future).
-- **Embed** (`PipelineStage`, terminal) — vectorizes chunks → `Embedding`s; `process_batch`
-  groups items into `embedding.batch_size` model calls; `chunk_id` from `metadata['chunk_id']`.
-  Its Config holds the `embedding` (`EmbeddingSettings`) identity, kept in sync with the
-  retrieval-side embedder; the ONNX embedder lazy-loads (tests inject a fake via `stage._embedder`).
+- **LoadAndParse** (`ingestion/components/extraction/load_parse.py`) — the **structured-extraction** stage
+  (replaced the old text-only parser). It infers `source_kind` from the path/`metadata['source_type']`,
+  routes to the configured `Extractor` (a child Component; `Config.routes` maps `source_kind → extractor
+  spec`, default `pdf → pdf_text`, with `markdown`/`html`/`plain_text`; a per-document
+  `metadata['extractor']` override wins — e.g. `"docling"` for high-fidelity PDF), calls `extract(source)`
+  → `StructuredDocument`, and sets `item.document` + `item.content = document.text`.
+- **Enrich** (`ingestion/components/enrichment/enrich.py`) — the **doc-phase enrichment** driver: runs a
+  configured, ordered list of `Enricher` Components over `item.document`, each appending typed
+  `Annotation`s (NER / topic / classification …). Default is **none** (passthrough); a stub `acronyms`
+  enricher ships. Annotations flow into chunks via the chunker (`ChunkProvenance.annotations`).
+- **CleanAndNormalize** (`ingestion/pipeline/clean_normalize.py`) — strips control chars, collapses
+  whitespace (operates on the text view).
+- **Chunk** (`ingestion/components/chunking/`) — a `ChunkerStage` that delegates to a configured `Chunker`
+  child; the default is **`structure_aware`** (splits on the document's heading structure into a multi-level
+  leaf + section-parent auto-merge tree, tables atomic, header-path + geometry + element ids on each
+  chunk's `ChunkProvenance`). `recursive` (character-window splitting) is the simpler alternative.
+- **Embed** (`ingestion/pipeline/embed.py`, terminal) — vectorizes chunks → `Embedding`s; `process_batch`
+  groups items into `embedding.batch_size` model calls; `chunk_id` from `metadata['chunk_id']`. Its Config
+  holds the `embedding` (`EmbeddingSettings`) identity (kept in sync with the retrieval-side embedder); the
+  embedder lazy-loads via `Embedder.create` (local ONNX or an API backend), tests inject a fake via
+  `stage._embedder`. With `embedding.inject_header_path` set, each chunk's header path is prepended before
+  embedding (an embed-time index variant that rides the fingerprint).
 ## Result Sinks
 
 Output-side sinks (D4). A worker `submit()`s produced results and `close()`s — both
 **synchronous, buffer-only** — and the orchestrator later `await`s `finalize()` to
-persist. One sink per stage; `PipelineOrchestrator.make_sink(stage_name)` builds them
-from a registry.
+persist. One sink per stage; the orchestrator's `begin_batch` looks the sink up from
+`create_sink_registry()` keyed by the stage `.tag`.
 
 **ID threading.** Storage ids are threaded forward via **metadata**, which stages
 propagate (they merge metadata): `DocumentResultSink` writes `metadata['doc_id']`,
@@ -482,13 +517,13 @@ buffer via `_persist()` and catches failures into the outcome. Per-stage sinks (
 by stage name):
 
 - **DocumentResultSink** (LoadAndParse) — `store_document` (upsert); threads `metadata['doc_id']`.
-- **PassthroughSink** (CleanAndNormalize) — persists nothing.
-- **ChunkResultSink** (Chunk) — `store_chunks`; threads `metadata['chunk_id']`.
-- **ChunkMetadataResultSink** (EnrichMetadata) — `update_chunk_metadata`.
+- **PassthroughSink** (Enrich, CleanAndNormalize) — persists nothing (enrichment annotates
+  `item.document`, which rides into chunks via the chunker; clean/normalize only edits the text view).
+- **ChunkResultSink** (Chunk) — `store_chunks` (persists chunk rows + `table_cells` + `chunk_annotations`);
+  threads `metadata['chunk_id']`.
 - **EmbeddingResultSink** (Embed) — bulk `store_embeddings` in persistence-batch-sized writes.
 
-`create_sink_registry()` maps the five stage names → sink classes (lives in `result_sink.py`;
-re-exported from `tarnrag/ingestion/factories.py`).
+`create_sink_registry()` maps the five stage tags → sink classes (lives in `result_sink.py`).
 
 ---
 
@@ -602,15 +637,15 @@ never leak into the contract.
 assigned) stay top-level/flat; `EMBEDDING_DIMENSION` must match
 the model (and sets the pgvector column width). A `model_validator` pins the backend to the mode:
 `distributed` requires a Postgres `DATABASE__DOCUMENT_URL` + `DATABASE__QUEUE_URL`; `embedded`
-requires SQLite. **`components`** (`dict[str, Any]`) holds named component specs that build
-pluggable parts of the system — the ingestion pipeline under `"ingestion_pipeline"` — each a raw
-spec validated when built via `ComponentFactory`; a `model_validator` fills the ingestion-pipeline
-default so a Settings is self-complete (consumers read it directly). Pipeline **composition** is
-`IngestionEngine.build_pipeline(settings)` (static) — it reads `Settings.components[INGESTION_PIPELINE]`
-(a Pipeline spec, always present) and injects the Embed stage's embedding identity from `Settings`.
-The built-in stages **self-register** on import of `tarnrag.ingestion` (via the stages package);
-`create_sink_registry` (output-side wiring) lives in `result_sink.py`. See **`.env.example`** for the
-environment template.
+requires SQLite. **`components`** (`dict[str, Any]`) holds named component specs that build pluggable parts
+of the system — the **ingestion pipeline** (`"ingestion_pipeline"`), the **retrieval pipeline**
+(`"retrieval_pipeline"`), and the **generation pipeline** (`"generation_pipeline"`) — each a raw spec
+validated when built via `ComponentFactory`. A `model_validator` fills all three defaults so a Settings is
+self-complete (consumers read them directly). Pipeline **composition** is `IngestionEngine.build_pipeline`
+(reads `INGESTION_PIPELINE`, injects the Embed stage's embedding identity), `RetrievalEngine.build_searcher`
+(reads `RETRIEVAL_PIPELINE` → a `Searcher`), and `GenerationEngine.assemble` (reads `GENERATION_PIPELINE`).
+The built-in stages/components **self-register** on import; `create_sink_registry` (output-side wiring)
+lives in `result_sink.py`. See **`.env.example`** for the environment template.
 
 ---
 

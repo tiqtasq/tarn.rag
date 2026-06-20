@@ -4,8 +4,16 @@
 a verdict on whether the requirement is **compatible with the current code (extend through an
 existing seam)** or **requires redesign (an existing base class / contract must change shape)**.
 
-**Date:** 2026-06-16. Grounded against the contracts as they exist today (see the *Appendix* for
-the exact files/classes checked), not against memory.
+**Date:** 2026-06-16, **assessment unchanged**. **Update (2026-06-20): the predictions held and much is now
+built.** Delivered since this was written: **redesign #1 (structured/layout-aware parsing)** — the gateway
+— plus structure-aware chunking, header-path provenance, and auto-merge (parent expansion); the full
+Table-4 retrieval line **hybrid BM25+dense → RRF → cross-encoder rerank** behind real `Retriever`/`Fuser`/
+`Reranker`/`Merger` Components; the **eval harness** (retrieval + generation); query-type routing; and an
+**answer/generation layer** (`tarnrag/generation/` — reasoners, grounding, proof trees) that the
+guard/eval blocks below assumed didn't exist yet. The redesign shortlist's #2–#5 (late chunking, learned
+sparse, visual retrieval, non-SQL store) remain **not built**. Per-block deltas are noted inline as
+*(now built)* / *(still future)*. The original verdicts are grounded against the contracts as they existed
+at assessment time (see the *Appendix*).
 
 ## Legend (mapped to the question: "extend vs redesign")
 
@@ -65,7 +73,7 @@ modify an existing contract.
 
 | Block | Verdict | Touches / why |
 |---|---|---|
-| Approach (SetFit / GLiNER / ModernBERT) | 🆕 New module (or ✅ stage) | A classifier subsystem. If run **at ingest** it's a ✅ new `EnrichMetadata`-style stage. Predicted labels → provenance/metadata (✅). |
+| Approach (SetFit / GLiNER / ModernBERT) | 🆕 New module (or ✅ stage) | A classifier subsystem. If run **at ingest** it's a ✅ new `Enrich`-style stage (the `Enricher` seam now exists). Predicted labels → annotations/provenance (✅). *(Still future — not built.)* |
 | Multi-label / hierarchy mapping | ✅ Extend | Thresholds + map to taxonomy nodes; labels as metadata columns. |
 | LLM classification (fallback) | 🆕 New module | New local-LLM + guided-decoding (outlines/xgrammar) dep; output → label metadata. |
 
@@ -106,28 +114,33 @@ column + filter **now**, exactly as the doc argues. Embedding model + reranker a
 
 ## The redesign shortlist (the only items that touch base classes / contracts)
 
-1. **Structured / layout-aware parsing** → the `Callable[[str], str]` parser seam + `LoadAndParse` /
-   `Chunk`. *Gateway:* unlocks structure-aware chunking, header-path provenance, and full
-   parent-expansion.
-2. **Late chunking** → `Embedder.embed_passages` + the chunk→embed ordering.
-3. **Learned sparse from the embedder (BGE-M3)** → the `Embedder` port. **Avoidable** if sparse comes
-   from BM25/FTS instead.
-4. **Visual retrieval (ColPali)** → `Embedder` + the `Embedding` DTO + `dense_knn` (a parallel modality).
-5. **Non-SQL vector store (Qdrant/Milvus)** → the SQLAlchemy-Core repository base.
+1. ✅ **Structured / layout-aware parsing** — **DONE.** The `Callable[[str], str]` parser seam was replaced
+   by the `Extractor` → `StructuredDocument` contract; `LoadAndParse`/`Chunk` consume it. This gateway
+   unlocked structure-aware chunking, header-path provenance, and parent-expansion (auto-merge), all now
+   built.
+2. ❌ **Late chunking** → `Embedder.embed_passages` + the chunk→embed ordering. **Still future.**
+3. ❌ **Learned sparse from the embedder (BGE-M3)** → the `Embedder` port. **Still future** (and still
+   **avoidable** — sparse comes from FTS5/tsvector BM25 today, which is built).
+4. ❌ **Visual retrieval (ColPali)** → `Embedder` + the `Embedding` DTO + `dense_knn` (a parallel modality).
+   **Still future.**
+5. ❌ **Non-SQL vector store (Qdrant/Milvus)** → the SQLAlchemy-Core repository base. **Still future**
+   (SQLite + Postgres are the two dialects today).
 
 Everything else is an extension through an existing seam or a net-new module bolted alongside.
 
 ---
 
-## Strategic reads
+## Strategic reads (retrospective)
 
-- **Cheapest high-value path (all ✅):** hybrid (BM25 + dense) → RRF → cross-encoder rerank, behind
-  new `Retriever` / `Fuser` seams. The result/candidate/query contracts already anticipate it, and it
-  *is* the "compare retrieval methods" need — pair it with a small qrels + IR-metrics harness.
-- **The one big fork:** "adopt structured parsing (Docling)?" Redesign #1 is the gateway for several
-  downstream blocks; treat it as a deliberate decision, not an incremental extension.
-- **The durable asset** (per the doc's own caveat) is the **evaluation harness** — wire it first so
-  every model/method choice above is swappable behind a measured number.
+- **Cheapest high-value path — DONE.** Hybrid (BM25 + dense) → RRF → cross-encoder rerank now lives behind
+  the `Retriever` / `Fuser` / `Reranker` seams, with the qrels + IR-metrics harness alongside. This was the
+  first thing built and it played out as predicted.
+- **The one big fork — DECIDED & built.** Structured parsing was adopted (the Docling extractor ships as the
+  high-fidelity tier behind the `Extractor` seam, opt-in; `pdf_text` is the fast default). Redesign #1 was
+  the gateway, exactly as called.
+- **The durable asset — built.** The **evaluation harness** (retrieval + generation) exists, so model/method
+  choices are swappable behind a measured number. The remaining lever is **running it on real benchmark
+  sets** (see `generation-architecture-design.md` §6.2).
 
 ---
 

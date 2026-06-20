@@ -1,12 +1,25 @@
 # StructuredDocument & PipelineItem Extension — Design
 
-**Status:** Draft v0.1 (for review) · **Date:** 2026-06-16 · **No code changes yet.**
+**Status:** ✅ **Implemented** (2026-06-20). Drafted 2026-06-16; built since.
 **Implements (from):** [`layout-aware-extraction-requirements.md`](./layout-aware-extraction-requirements.md).
 **Scope:** the two gating contracts only — the `StructuredDocument`/table model and the `PipelineItem`
-extension. The enricher *stage* contract (FR-5), the chunking *algorithm* (FR-7), and the *schema/storage*
-of geometry are named as consumers and deferred to their own docs.
+extension.
 
-Code blocks are **illustrative pydantic sketches**, not final code.
+**Where the code lives now:** the model is in `tarnrag/contracts/structure.py` (`PageBox`, `Span`,
+`Geometry`, `ElementKind`, `Annotation`, `TableCell`, `Table`, `Element`, `StructuredDocument`,
+`ChunkProvenance`); the `PipelineItem` extension (`document` / `provenance` + `derive()`) is in
+`tarnrag/contracts/dtos.py`. The consumers this doc named as deferred are also built: the enricher stage
+(`ingestion/components/enrichment/`), the structure-aware chunker (`ingestion/components/chunking/
+structure_aware.py`), and the geometry/table/annotation **schema** (chunk columns `header_path` / `level` /
+`parent_chunk_id` / `geometry` + the `table_cells` and `chunk_annotations` tables in
+`storage/repository/base.py`).
+
+**Deltas from this draft** (the model as built): `Element` gained a `sentences: list[Span] | None` field
+(FR-7.4) and a `subspan()` helper; `ChunkProvenance` gained `level` + `parent_chunk_id` (the auto-merging
+tree) and `table` (so a table chunk carries its cells). The sketches below are otherwise accurate.
+
+Code blocks below are the original **illustrative pydantic sketches** — see `contracts/structure.py` for
+the final shapes.
 
 ## Design decisions (quick scan)
 
@@ -208,15 +221,13 @@ making it *queryable by header* is the retrieval follow-on.
 
 ---
 
-## 8. Open forks (confirm before we build)
+## 8. Open forks (resolved as built)
 
-1. **Geometry persistence** — store the span list (offsets + boxes) as a JSON column (simple,
-   cross-dialect) now, and normalise later only if retrieval needs to filter on it. (Recommend JSON now.)
-2. **`atomic` default** — I defaulted `Element.atomic = True` (paragraphs/tables/list-items indivisible)
-   and let the chunker split *within* a text element. Alternative: chunker decides atomicity from `kind`.
-   (Recommend the explicit `atomic` flag.)
-3. **Sentence boundaries (FR-7.4)** — carry them as sub-spans on text `Element`s, or recompute in the
-   chunker? (Recommend: carry when the extractor provides them, else the chunker recomputes — best-effort.)
-4. **`content` in the document phase** — set it to `document.text()` (so legacy text stages work), or
-   leave it empty and make those stages structure-aware? (Recommend `document.text()` now; reshape the
-   middle stages later.)
+1. **Geometry persistence** — ✅ stored as a **JSON column** (`chunks.geometry`, `table_cells.geometry`,
+   `chunk_annotations.span`), cross-dialect; not yet normalised (no retrieval filter needs it).
+2. **`atomic` default** — ✅ `Element.atomic = True`; the chunker splits *within* an oversize text element
+   (`StructureAwareChunker._oversize`) and keeps tables/list-items whole.
+3. **Sentence boundaries (FR-7.4)** — ✅ carried as `Element.sentences: list[Span] | None` when the
+   extractor provides them (`None` ⇒ not provided); the chunker's text packing is element-level today.
+4. **`content` in the document phase** — ✅ `LoadAndParseStage` sets `item.content = document.text`, so the
+   text-only middle stages (clean/normalize, embed) keep working unchanged.

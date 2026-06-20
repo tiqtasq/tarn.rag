@@ -2,6 +2,18 @@
 
 **Scope:** Single company, ~100,000 documents. Ingestion and retrieval engines only (no API/serving layer). Built single-tenant now, designed to convert to multi-tenant via the bridge pattern (namespace per tenant) later. All choices favor open-source, self-hosted (offline-capable), and the prevention of hallucinations.
 
+> **This is a SOTA-options menu, not a status report** — it deliberately surveys the landscape so choices
+> stay swappable behind the eval harness. **What tarnrag has adopted so far (2026-06-20):** structure-aware
+> layout extraction (pdfplumber fast tier + Docling high-fidelity tier behind the `Extractor` seam),
+> deterministic structure-aware chunking with header-path injection and full provenance; an ONNX embedder
+> (default `gte-small`, with OpenAI/Voyage/Gemini API backends); one store (SQLite + sqlite-vec/FTS5, or
+> Postgres + pgvector); hybrid BM25+dense → RRF → cross-encoder rerank → auto-merge; a generation layer with
+> grounding + proof trees; and retrieval + generation eval harnesses. **Not yet adopted** (still menu items):
+> dedup (MinHash/LSH), late chunking, learned-sparse / Matryoshka / visual (ColPali) embedding, the organize
+> layer (BERTopic / knowledge graph / classification), and answer-boundary groundedness scorers (HHEM/Lynx).
+> See [`rag-design-building-blocks-fit.md`](./rag-design-building-blocks-fit.md) for the per-block
+> extend-vs-redesign verdicts and their current build status.
+
 ## Design principles (the through-line)
 
 The anti-hallucination strategy is not one component, it is a bias applied across every block:

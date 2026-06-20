@@ -1,11 +1,15 @@
 # Extraction Seam — Design
 
-**Status:** Draft v0.1 · **Date:** 2026-06-16 · **Branch:** `feature/ingestion-redesign-layout-aware-extraction`.
+**Status:** ✅ **Implemented** (2026-06-20). Drafted 2026-06-16.
 **Implements (from):** [`layout-aware-extraction-requirements.md`](./layout-aware-extraction-requirements.md)
 (FR-1) and [`structured-document-design.md`](./structured-document-design.md) (the model it produces).
 
-How a `Source` becomes a `StructuredDocument` — the contract that replaces the `Callable[[str], str]`
-parser registry.
+How a `Source` becomes a `StructuredDocument` — the contract that **replaced** the `Callable[[str], str]`
+parser registry. Code: `tarnrag/ingestion/components/extraction/` (`extractor.py` = `Source` + `Extractor`
++ `_create_document`/`_read_text`; `plain_text.py`, `markdown.py`, `html.py`, `pdf.py` (`pdf_text`),
+`docling_pdf.py`; `load_parse.py` = the `LoadAndParseStage` router). The routing lives on
+`LoadAndParseStage.Config.routes` (a `source_kind → extractor spec` map) + `default_extractor`, not a
+standalone `extract()` function.
 
 ## Decisions
 
@@ -55,13 +59,17 @@ def extract(source: Source) -> StructuredDocument:   # the router
   `metadata['extractor'] = "docling"`. *(pymupdf4llm intentionally skipped: its Markdown output loses
   highlight-grade bbox geometry, and it is AGPL.)*
 
-## Deferred (next slices on this branch)
+## Status of the follow-ons
 
-- **Tiered routing config** — today `pdf → pdf_text` (fast) with `docling` opt-in per document; a
-  per-format `{fast, high}` map (chosen via Settings/config) is the small remaining piece. Markdown
-  lists/pipe-tables are the other extractor follow-on (the `Table` model is already in place).
-- **`LoadAndParse` rewiring** — `LoadAndParseStage` becomes the structured-extraction stage: detect
-  `source_kind`, call `extract(source)`, set `item.document` + `item.content = document.text`. Done as
-  its own slice because it changes the live pipeline (the old string `content` path stays working —
-  `content` is still the text view).
-- **Enricher stage contract (FR-5)** and the **structure-aware chunker (FR-7)**.
+- **`LoadAndParse` rewiring** — ✅ done. `LoadAndParseStage` is the structured-extraction stage: it infers
+  `source_kind`, selects the routed extractor (per-document `metadata['extractor']` override wins), calls
+  `extract(source)`, and sets `item.document` + `item.content = document.text`. The old string-`content`
+  path still works (`content` is the text view).
+- **Enricher stage contract (FR-5)** — ✅ done (`ingestion/components/enrichment/` — `EnrichStage` runs a
+  configured list of `Enricher`s over `item.document`; default is none).
+- **Structure-aware chunker (FR-7)** — ✅ done (`StructureAwareChunker`, the default chunker).
+- **Tiered routing config** — ◑ partial. The route map *is* config (`routes` keys `pdf → pdf_text` by
+  default; point a kind at `{"class_name": "docling"}` for high-fidelity, or use the per-document
+  `metadata['extractor']` override). A first-class per-format `{fast, high}` selector is the small piece
+  still open. Markdown lists/pipe-tables are the remaining markdown-extractor follow-on (the `Table` model
+  is in place and persisted).

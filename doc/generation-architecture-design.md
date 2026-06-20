@@ -218,42 +218,98 @@ resource, and the pipeline from the spec, then delegates `answer` to it. tiqtasq
 ## 6. MOTHRAG-parity is additive (framework intact)
 
 Lean ships one component per seam; MOTHRAG-parity = **add components + a richer `GENERATION_PIPELINE`
-spec**, no framework change:
+spec**, no framework change. The plan held: slices 1–5 are now built (§7), and the remaining MOTHRAG
+deltas are exactly the *additive* components named below — no base-class edits were needed to get here, and
+none are needed to finish.
 
-| MOTHRAG feature | Added later as |
-|---|---|
-| direct / decomposition / iterative **arms** | extra `Reasoner` components |
-| **PDD + deterministic arbitration** ensemble | an `Ensemble` container `Reasoner` (runs several, votes) |
-| **γ grounding verifier** + retry loop | a richer `GroundingChecker` behind the same seam |
-| **bridge substrate / multi-query fusion** | retrieval-layer `Fuser` / `Retriever` components |
-| **ChainFilter** (OpenIE chain density) | a retrieval-layer `Reranker`/filter component |
-| **query-type gating** | the `Router` (slice 1) |
+### 6.1 Current state vs MOTHRAG (re-reviewed against `doc/main.pdf`, 2026-06-20)
 
-The two retrieval-layer items (multi-query, chain-density) are **optional components outside the lean
-default core** — they bring extra dependencies (an LLM call for query expansion; an OpenIE model for chain
-density). A deployment opts into them on the same seams, in *either* language (the C++ port can make those
-calls too); the default lean retrieval core omits them, and chain-extraction may instead move into
-ingestion. The invariant is "lean + self-contained *by default*," not "no external calls ever."
+Status against the MOTHRAG method (§3 of the paper). **✅ built · ◑ partial · ❌ missing.**
+
+| MOTHRAG feature (paper §) | tarnrag today | Status |
+|---|---|---|
+| Reasoning **arms**: direct / decomposition / iterative (§3.1) | `SingleHopReasoner` / `DecompositionReasoner` / `IterativeReasoner` exist as **swappable** reasoners | ◑ the three voices exist, but as *alternatives* (pick one via spec), **not** run together |
+| **Four-arm ensemble pool**, fixed N=4 (§3.1) | — no ensemble; one reasoner runs per request | ❌ |
+| **PDD** (Pool-Duplicate Dispatch — double-weight the γ-checked iterative voice) (§3.1) | — | ❌ (needs the ensemble first) |
+| **Deterministic arbitration** over candidates: γ (1.0) + cross-arm agreement (0.5) + faithfulness (0.3) (§3.5) | — no arbitrator; no agreement/faithfulness signals | ❌ |
+| **Bridge retrieval substrate**: multi-query ANN fusion + a tripartite **LLM relevance judge** conditioned on bridge evidence, reshaping every retrieval round (§3.2) | RRF fusion *across configured retrievers* + a **cross-encoder** reranker; no multi-query expansion, no LLM judge, no bridge conditioning | ◑ fusion/rerank seams exist; the bridge *mechanism* is missing |
+| **ChainFilter**: chain-density rerank over OpenIE triples (§3.3) | — no OpenIE extraction, no chain-density filter | ❌ |
+| **γ grounding verifier** + proof tree (§3.4) | `GroundingChecker` (heuristic / LLM / cascading), 3-valued `Verdict`, proof tree | ✅ — and our proof tree is **richer** (§4: char spans + PDF page boxes + header paths + table cells) |
+| **γ-failure → iterative re-retrieval** loop (§3.4) | `IterativeReasoner` loops on the *model's own* "done" judgment; the γ checker runs **after** reasoning and does not feed back into retrieval | ◑ the loop exists, but it isn't γ-driven |
+| **γ-cap fallback** (return best-grounded within budget) (§3.4) | abstention policy: `min_grounded`, best-grounded flag, optional refusal | ✅ (analog) |
+| **Query-type gating** (input-feature classifier; never dataset identity) (§3.2, §3.6) | `RoutingRetrievalPipeline` + `Structural`/`Generic` `QueryClassifier` — **retrieval-layer routing** | ◑ routing is built, but it isn't yet used to *gate arms / filters* (no ensemble/ChainFilter to gate) |
+| **Abstention pathway** (present, disabled in the F1 config) (§5) | abstention policy with `abstain` flag (off by default) | ✅ |
+| **Eval harness** (paper-grade F1/EM over the benchmark triple) | retrieval harness (`hit@k`/MRR/nDCG, segmented) + generation harness (token-F1/EM, grounded rate, abstention accuracy, citation coverage) | ✅ harness exists; **not yet run on HotpotQA / 2Wiki / MuSiQue** |
+| Provider mix: Llama-3.3-70B reader, Gemini embedder, Claude/Gemini judges (§3.6) | embedder: onnx/openai/voyage/gemini; LLM: **anthropic-only** (`LLMSettings.provider = Literal["anthropic"]`) | ◑ multi-provider embedder; single-provider reader/judge |
+
+### 6.2 What we'd need to add / improve for MOTHRAG parity (priority order)
+
+1. **`EnsembleReasoner` + deterministic arbitration (the headline gap).** A container `Reasoner` that runs
+   the existing arms in parallel and an `Arbitrator` that picks the winner by fixed weights — γ (1.0) +
+   cross-arm **agreement** (0.5) + **faithfulness** (0.3). This is the single biggest delta: today the arms
+   are alternatives, not an ensemble. It pulls in two new signals (agreement needs ≥2 candidates;
+   faithfulness is a new scorer distinct from grounding) and **PDD** (register the γ-checked iterative
+   candidate twice). All on the existing Component seam — no framework change.
+2. **γ-driven re-retrieval.** Couple the `GroundingChecker` back into the loop so a failed step *triggers*
+   re-retrieval (MOTHRAG §3.4), rather than the `IterativeReasoner` looping only on the model's self-report.
+   Likely a new reasoner (or a pipeline that interleaves reason ↔ ground ↔ retrieve) — the proof tree +
+   `Verdict` plumbing it needs already exists.
+3. **Bridge retrieval substrate.** (a) A **multi-query** retriever/fuser (expand one query into several ANN
+   queries, fuse) and (b) an **LLM relevance judge** reranker that scores candidate utility conditioned on
+   the query + retrieved bridge evidence (premium/economy tiers = swap the LLM spec). Both are retrieval-
+   layer `Retriever`/`Fuser`/`Reranker` components; the `RetrievalContext` already injects the resources.
+   Optional (extra LLM cost) — outside the lean self-contained default.
+4. **ChainFilter + an OpenIE substrate.** Chain-density reranking needs OpenIE triples; extraction belongs
+   at **ingestion** (a graph/triples enricher → a new store or annotation), then a retrieval-layer
+   `Reranker` scores chain density. The heaviest item (a new extraction model + a graph substrate; see
+   `rag-design-building-blocks.md` Table 2). Optional.
+5. **Arm/filter gating by `query_type`.** Once the ensemble + ChainFilter exist, reuse the existing
+   `QueryClassifier` to gate which arms/filters apply per query class (MOTHRAG excludes the iterative arms
+   from bridge reshaping on one class). The classifier seam is built; only the gating wiring is new.
+6. **Run the benchmark eval + broaden providers (validation, not architecture).** Wire HotpotQA / 2Wiki /
+   MuSiQue into the generation harness to *measure* the gap, and add a second reader/judge provider behind
+   `LanguageModel.create` (Gemini/an OpenAI-style chat API) to match MOTHRAG's model-agnostic posture.
+
+Items 3 and 4 are **optional components outside the lean default core** — they bring extra dependencies (an
+LLM call for query expansion / the judge; an OpenIE model for chain density). A deployment opts into them on
+the same seams, in *either* language (the C++ port can make those calls too); the default lean retrieval
+core omits them, and chain-extraction may instead move into ingestion. The invariant is "lean +
+self-contained *by default*," not "no external calls ever."
+
+### 6.3 Where tarnrag already exceeds MOTHRAG
+
+Not everything is catch-up. tarnrag's **layout-grade provenance** (char spans + PDF page boxes + header
+paths + table-cell geometry) makes its proof trees strictly richer than MOTHRAG's passage-span citations
+(§4), and its **retrieval core is offline / self-hosted / C++-portable** (local ONNX embedder + sqlite-vec)
+where MOTHRAG is API-only by design. tarnrag also carries **license/scope filtering** (the ModusQ
+requirement) that MOTHRAG has no analog for. Parity work should not regress these differentiators.
 
 ## 7. Build slices
 
-1. **Query-type routing (retrieval layer, no LLM).** `Query` gains `query_type` + `annotations`; a
+**Status (2026-06-20): slices 1–5 are all implemented.** The remaining MOTHRAG-parity work is the §6.2
+additive components. One naming delta vs. the plan below: the default classifier shipped as
+`GenericQueryClassifier` (not `NoOpQueryClassifier`) — it tags every query with one constant `query_type`
+so a router still guarantees a classification annotation while falling through to its `default` route.
+
+1. **Query-type routing (retrieval layer, no LLM).** ✅ `Query` gains `query_type` + `annotations`; a
    `Searcher` seam (engine builds a plain pipeline *or* a router from `RETRIEVAL_PIPELINE`); a
-   `QueryClassifier` seam (`NoOpQueryClassifier` default + a domain-independent `StructuralQueryClassifier`);
+   `QueryClassifier` seam (`GenericQueryClassifier` default + a domain-independent `StructuralQueryClassifier`);
    and a `RoutingRetrievalPipeline` that classifies → dispatches to the per-type-best sub-pipeline.
    Portable; benefits retrieval-only; validated by the segmented eval harness. *(The only slice touching
    retrieval — nothing lands in `generation/` yet.)*
-2. **Generation MVP.** The LLM `Resource` seam + `GenerationPipeline` + a single-hop `Reasoner` + the
+2. **Generation MVP.** ✅ The LLM `Resource` seam + `GenerationPipeline` + a single-hop `Reasoner` + the
    `EvidenceAssembler` (proof tree from provenance) + the `GenerationEngine` facade + the
-   `RetrievalEngineProtocol` port. End-to-end: question → answer + evidence. No multi-hop yet.
-3. **Grounding + abstention.** A `GroundingChecker` that verifies the proof tree against the evidence,
-   with a best-grounded fallback (γ-cap analog) and an optional refusal path.
-4. **Multi-hop.** An iterative `Reasoner` (retrieve ↔ read loop, budgeted) + question decomposition into
-   sub-queries — the actual multi-hop capability, over our retrieval substrate.
-5. **Generation eval harness.** Answer-quality + grounding/citation metrics over a labeled set — the
-   analog of the retrieval eval harness, to compare generation pipeline specs.
+   `RetrievalEngineProtocol` port. End-to-end: question → answer + evidence.
+3. **Grounding + abstention.** ✅ A `GroundingChecker` (heuristic / LLM / cascading) that verifies the proof
+   tree against the evidence, with a best-grounded fallback (γ-cap analog) and an optional refusal path.
+4. **Multi-hop.** ✅ An iterative `Reasoner` (retrieve ↔ read loop, budgeted) + a decomposition `Reasoner`
+   (split into sub-queries) — the multi-hop capability, over our retrieval substrate. *(Caveat: the loop is
+   model-driven, not yet γ-driven — see §6.2 item 2.)*
+5. **Generation eval harness.** ✅ Answer-quality (token-F1 / EM / content-hit) + grounded-rate + abstention
+   accuracy + citation coverage over a labeled set (`eval/generation.py`) — the analog of the retrieval
+   harness, to compare generation pipeline specs.
 
-(Post-5, MOTHRAG-parity is the §6 additive components, measured against the slice-5 harness.)
+(Post-5, MOTHRAG-parity is the §6.2 additive components, measured against the slice-5 harness.)
 
 ## 8. Open decisions
 

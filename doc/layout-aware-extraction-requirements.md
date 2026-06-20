@@ -1,11 +1,20 @@
 # Layout-Aware Extraction — Requirements
 
-**Status:** Draft v0.2 (incorporates kickoff round-2 feedback) · **Date:** 2026-06-16 · **No code changes yet.**
+**Status:** ✅ **Substantially delivered** (2026-06-20). Drafted 2026-06-16 (v0.2); built since.
 **Relates to:** [`rag-design-building-blocks.md`](./rag-design-building-blocks.md) (Table 1 "Layout-aware
 extraction") and [`rag-design-building-blocks-fit.md`](./rag-design-building-blocks-fit.md) (redesign #1, the gateway).
+Designed in [`structured-document-design.md`](./structured-document-design.md) and
+[`extraction-seam-design.md`](./extraction-seam-design.md), both now implemented.
 
 This document specifies **what** the layout-aware extraction layer must do and **which contracts must
 change**. It deliberately stops short of the design (class shapes, algorithms).
+
+**Implementation status (per FR group):** FR-1 routing ✅ (config `routes` map; tiered fast/high is the
+docling route, opt-in — the only ◑); FR-2 `StructuredDocument` ✅ (`contracts/structure.py`); FR-3 tables ✅
+model + `table_cells` persistence (markdown pipe-table *extraction* is ◑ — the `Table` model and storage are
+done); FR-4 highlight-grade provenance ✅ (char offsets always; PDF page boxes via pdfplumber/docling);
+FR-5 enrichers ✅ (`EnrichStage` + `Enricher`s; a stub `acronyms` enricher ships); FR-6 `PipelineItem`
+extension ✅ (`document`/`provenance`/`derive`); FR-7 chunker forward-compat ✅ (`StructureAwareChunker`).
 
 ## Decisions captured
 
@@ -35,9 +44,11 @@ and **late chunking** (the *other* Table-1 redesign) — though this doc anticip
 
 ## 1. Context & problem
 
-Today extraction is a single `MapperStage` over plain strings:
+*(Historical — this section describes the pre-redesign state that motivated the work; it has since been
+built. See the status banner above.)* Before this redesign, extraction was a single `MapperStage` over
+plain strings:
 
-- `LoadAndParseStage.map(text, metadata) -> (content: str, updates)` (`ingestion/stages/load_parse.py`).
+- `LoadAndParseStage.map(text, metadata) -> (content: str, updates)` (then in `ingestion/stages/load_parse.py`).
 - PDF backends are a `name -> Callable[[str], str]` registry (`stages/parsers.py`: `pypdf`, `pdfplumber`); `.md`/`.txt` are read as **raw text**, `.html` via BeautifulSoup.
 - Output is a `str` placed in `PipelineItem.content`; the `Chunk` stage splits that string.
 
@@ -198,11 +209,12 @@ The chunking algorithm is a separate doc, but the `StructuredDocument` contract 
 
 ---
 
-## 7. Deferred to the design phase
+## 7. Deferred items — status
 
-- Exact shape of the `PipelineItem` extension (typed field vs typed object in the bag; how chunk-stage
-  items relate to the document-level structure).
-- Sentence-boundary granularity (FR-7.4) is best-effort and depends on the chosen extractor's output.
-- The cell-addressing **query surface** (FR-3.3) — how callers query by row/column header downstream —
-  is a retrieval/chunker concern detailed in those follow-on docs; here we only require the structure
-  be captured and addressable.
+- Exact shape of the `PipelineItem` extension — ✅ resolved: two optional typed fields (`document`,
+  `provenance`) + `derive()` (see `structured-document-design.md`).
+- Sentence-boundary granularity (FR-7.4) — ✅ contract present (`Element.sentences`), populated
+  best-effort by the extractor; the chunker packs at element granularity today.
+- The cell-addressing **query surface** (FR-3.3) — ◑ still deferred: cells are *captured and addressable*
+  in-memory (`Table.cell_at` / `column_headers_for` / `row_headers_for`) and *persisted* (`table_cells`),
+  but querying chunks **by** row/column header at retrieval time is not yet wired (a retrieval follow-on).

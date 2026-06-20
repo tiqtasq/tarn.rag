@@ -1,10 +1,19 @@
 # Retrieval architecture — comparing methods (design)
 
-The second original ask: **compare retrieval methods**. Today retrieval is dense-only (`embed →
-dense_knn → hydrate → assemble`) in one monolithic `RetrievalEngine.search`. This designs the seams so
-methods become **config-driven, swappable Components** (mirroring the ingestion pipeline), threads the
-persisted layout-aware provenance into the read path, and lays out the build order. The evaluation
-harness (which *measures* the comparison) is the follow-on once ≥2 methods exist.
+**Status:** ✅ **Implemented** (2026-06-20) — slices 1–6 below are all built. Code:
+`tarnrag/retrieval/components/` (`retriever.py` = `RetrievalContext` + dense/sparse `Retriever`s;
+`fuser.py` = identity/RRF; `merger.py` = `AutoMerger`; `reranker.py` = `CrossEncoderReranker`;
+`classifier.py`), `retrieval/pipeline/` (`searcher.py`, `pipeline.py` = `RetrievalPipeline`, `router.py` =
+`RoutingRetrievalPipeline`), and `tarnrag/eval/`. **Two deviations to know** (see
+`doc/code-review-findings.md`): the RRF fuser does **not** yet apply the mandatory `chunk_id` tie-break, and
+the license/scope filter runs **post-hydrate** — `dense_knn`/`sparse_search` take **no `filter` arg** (the
+§4 "optimization later" is still later), so scoped queries can under-return.
+
+The second original ask: **compare retrieval methods**. Retrieval used to be dense-only (`embed →
+dense_knn → hydrate → assemble`) in one monolithic `RetrievalEngine.search`. This designed the seams so
+methods became **config-driven, swappable Components** (mirroring the ingestion pipeline), threaded the
+persisted layout-aware provenance into the read path, and laid out the build order. The evaluation
+harness (which *measures* the comparison) followed once ≥2 methods existed.
 
 **Locked decisions (this design):** (1) retrievers / fusers / rerankers / mergers are **Components**,
 composed by spec; (2) the read path carries the **full `ChunkProvenance`** (geometry / header_path /
@@ -140,19 +149,22 @@ plain one. It is *not* a retriever you flip per query. The design note: keep inj
 embedding identity (it already participates in the fingerprint), so an injected index won't `open` for a
 plain query embedder — the compatibility check protects against mismatched comparison.
 
-## 8. Build slices
+## 8. Build slices (all delivered)
 
-1. **Read-path provenance + `RetrievalStore` port + `RetrievalPipeline` + Retriever/Fuser + sparse + RRF.**
-   The keystone: `ChunkRecord`/`RetrievalResult` += `provenance`; `hydrate` fills it; `sparse_search`
+1. ✅ **Read-path provenance + `RetrievalStore` port + `RetrievalPipeline` + Retriever/Fuser + sparse + RRF.**
+   `ChunkRecord`/`RetrievalResult` += `provenance`; `hydrate` fills it; `sparse_search`
    (SQLite FTS5 **and** Postgres tsvector/GIN); `Retriever`(dense/sparse) + `Fuser`(identity/rrf);
    `RetrievalPipeline` composed from `RETRIEVAL_PIPELINE`; the engine delegates to it. Delivers the
-   **dense / sparse / hybrid** trio — the first real comparison.
-2. **License/scope filter** wired onto the flow (§4).
-3. **Auto-merging** `Merger` (§2) — depends on slice 1's `parent_chunk_id` in the read path.
-4. **Cross-encoder reranking** `Reranker` — adds the model dependency behind the optional seam.
-5. **Header-path injection** — the Embed-stage + query-embedder variant (§7) for an injected index.
-6. **Evaluation harness** — runs the engine across `RETRIEVAL_PIPELINE` specs over a query set with
-   metrics (recall@k / MRR / nDCG); this is where the *comparison* becomes quantitative.
+   **dense / sparse / hybrid** trio.
+2. ✅ **License/scope filter** on the flow (§4) — `RetrievalPipeline._passes` (post-hydrate; `available`,
+   `ai_grounding_allowed` for `GENERATION_GROUNDING`, and method scope). *Per-purpose license-class policy
+   (§5.6 of the ModusQ spec) is still deferred — tracked in `code-review-findings.md`.*
+3. ✅ **Auto-merging** `Merger` (`AutoMerger`) — uses slice 1's `parent_chunk_id`.
+4. ✅ **Cross-encoder reranking** `Reranker` (`CrossEncoderReranker`, `OnnxCrossEncoder` resource).
+5. ✅ **Header-path injection** — the Embed-stage variant (`EmbeddingSettings.inject_header_path`); part of
+   the embedding fingerprint, so an injected index won't `open()` with a non-injecting embedder.
+6. ✅ **Evaluation harness** (`tarnrag/eval/`) — `sweep` across `RETRIEVAL_PIPELINE` specs with
+   `hit@k` / MRR / nDCG, segmented by `query_type` (`by_query_type` / `format_segmented`).
 
 ## 9. Decisions (resolved)
 

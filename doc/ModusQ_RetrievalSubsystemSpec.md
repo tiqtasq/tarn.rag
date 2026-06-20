@@ -2,7 +2,32 @@
 
 **Audience:** Claude Code (implementation)
 **Scope:** The **retrieval** half of the RAG system only. Ingestion, generation, Field Sync, graph retrieval, and reranking models are **out of scope** and are defined here only as contracts at the boundary.
-**Status:** Implementation-ready specification.
+**Status:** Implementation-ready specification — the **Python port is partially built**; the **C++ port and parity harness are not started** (see the status section directly below).
+
+---
+
+## 0. Implementation status (2026-06-20)
+
+This spec targets **two ports** (Python + C++). Only the **Python** retrieval engine
+(`tarnrag/retrieval/`) exists today, and it implements most of §5 with a few deliberate or
+known deviations. The C++ port (§7.1, §11–§13) and the parity harness (§9) are **not started**.
+
+| Spec area | Status in the Python engine |
+|---|---|
+| §4 tech: SQLite + sqlite-vec + FTS5 + ONNX + HF tokenizers; configurable embedder | ✅ built (also a **Python-only Postgres/pgvector backend** — §9 allows this) |
+| §5.2 preprocess / §5.3 embed query + `config_fingerprint` validated at `open()` | ✅ built (`RetrievalEngine.open` refuses on schema / fingerprint mismatch) |
+| §5.4 Dense + Sparse retrievers | ✅ built (`DenseRetriever` / `SparseRetriever`) **but** the permitted-chunk filter is applied **post-hydrate**, not as an in-query pre-filter, and there is **no over-fetch fallback** — so the "`top_k` always correct" guarantee does not yet hold for tight scopes (see `code-review-findings.md`). `dense_knn`/`sparse_search` take **no `filter` arg**. |
+| §5.5 RRF fusion | ◑ RRF built (`RRFFuser`), **but the mandatory `(score desc, chunk_id asc)` tie-break is missing** — a real gap for the future cross-port parity contract (§9). |
+| §5.6 license + scope filtering | ◑ only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method **scope** are enforced. The per-purpose **`LicensePolicy`** (license-class-by-purpose; categorical exclusion of `third_party_copyrighted`) is **not implemented**. |
+| §5.7 reranking | ✅ superset: the default is effectively identity (no reranker), and an **optional cross-encoder** reranker is available (`CrossEncoderReranker`). |
+| §5.8 result assembly + provenance | ✅ built (`RetrievalResult` carries the §8 provenance **plus** layout-grade geometry / header paths / table cells). |
+| §5.9–§5.10 `answer()` / `ResponseSynthesizer` / `ExtractiveSynthesizer`; `Query.synthesize` | ⤳ **moved out of retrieval.** The answer path is now the separate **`tarnrag/generation/`** layer (`GenerationEngine`, with reasoners + grounding + proof trees — richer than extractive synthesis). `Query` has **no `synthesize` field**; `RetrievalEngine` is retrieve-only. See `doc/generation-architecture-design.md`. |
+| §7 module interfaces (`Embedder`/`Retriever`/`Fuser`/`Reranker`/`Store`) | ✅ realized as config-driven **Components** + a `RetrievalStore` port. Config uses `Settings.components[RETRIEVAL_PIPELINE]` (a `RetrievalPipeline`/router spec), **not** the §7 `EngineConfig` shape — functionally equivalent, different schema. The §7 `Store` signatures with a `filter` arg are **not** matched (see §5.4 above). |
+| §7 graph retriever stub; §8.3 filterable `vec_chunks` metadata columns | ❌ not built (`vec_chunks` holds `chunk_id` + `embedding` only). |
+| §9 cross-port parity harness; §11–§13 C++ port | ❌ not started — Python only. |
+
+The sections below are the **original target spec** and remain the contract for the C++ port; read
+them together with the deviations above.
 
 ---
 
