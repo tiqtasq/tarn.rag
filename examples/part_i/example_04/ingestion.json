@@ -1,0 +1,10 @@
+{
+  "class_name": "pipeline",
+  "stages": [
+    {"class_name": "LoadAndParse"},
+    {"class_name": "Enrich", "enrichers": [{"class_name": "acronyms"}]},
+    {"class_name": "CleanAndNormalize"},
+    {"class_name": "Chunk", "chunker": {"class_name": "recursive", "chunk_size": 120, "overlap": 24}},
+    {"class_name": "Embed"}
+  ]
+}

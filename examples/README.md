@@ -26,7 +26,13 @@ python -m examples.part_i.example_02.retrieval   # query the JSON-configured sto
 
 python -m examples.part_i.example_03.ingestion   # index the corpus with a small-chunk pipeline
 python -m examples.part_i.example_03.evaluation  # compare retrieval methods on a labeled set (eval harness)
+
+python -m examples.part_i.example_04.ingestion                  # index the corpus (offline)
+ANTHROPIC_API_KEY=sk-...  python -m examples.part_i.example_04.generation  # question -> grounded answer + proof tree
 ```
+
+Example 04 is the only one that needs an LLM (for generation); the rest run fully offline. Without a key
+it still ingests + retrieves and previews what it would send the model.
 
 Running with `-m` puts the repo root on the import path, so `examples` and `tarnrag` both resolve —
 no `PYTHONPATH` or `sys.path` tweaks. (Directory names use underscores because they are module names.)
@@ -46,10 +52,14 @@ examples/
 │   │   ├── pipeline.json
 │   │   ├── ingestion.py
 │   │   └── retrieval.py
-│   └── example_03/      # comparing retrieval methods with the eval harness
-│       ├── evalset.json
+│   ├── example_03/      # comparing retrieval methods with the eval harness
+│   │   ├── evalset.json
+│   │   ├── ingestion.py
+│   │   └── evaluation.py
+│   └── example_04/      # end-to-end generation (config-driven): question -> answer + proof tree
+│       ├── ingestion.json   retrieval.json   generation.json   questions.json
 │       ├── ingestion.py
-│       └── evaluation.py
+│       └── generation.py
 └── part_ii/             # production / eval / fine-tuning (coming)
 ```
 
