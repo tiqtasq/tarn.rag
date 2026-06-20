@@ -60,15 +60,20 @@ def test_init_loads_settings_from_a_path(tmp_path):
 
 async def test_open_wires_shared_resources_then_close_releases(tmp_path):
     """The composition root, end to end without a model: ``__init__`` leaves the engines unbuilt; the
-    context manager's ``open`` builds the repository + embedder once and injects the SAME objects into
-    both engines; ``retrieval_context`` exposes that shared ``(store, embedder)``; ``close`` releases it."""
+    context manager's ``open`` builds the repository + embedder once and the retrieval engine over them;
+    ingestion is lazy (P6); ``retrieval_context`` exposes the shared ``(store, embedder)``; ``close``
+    releases it."""
     tarn = TarnRag(_plumbing_settings(tmp_path))
     assert tarn._repository is None and tarn._ingestion is None  # __init__: nothing built yet
 
     async with tarn:  # __aenter__ -> open()
-        # one repository + one embedder, injected into both engines (no duplication, no reach-around)
-        assert tarn._repository is tarn._ingestion.repository is tarn._retrieval.repository
+        # retrieval is eager and shares the one repository + embedder (no duplication, no reach-around)
+        assert tarn._repository is tarn._retrieval.repository
         assert tarn._embedder is tarn._retrieval.embedder
+        # P6: ingestion is NOT spun up by a read/open — it builds lazily, over the same store
+        assert tarn._ingestion is None
+        ingestion = await tarn._ingestion_engine()
+        assert ingestion is tarn._ingestion and ingestion.repository is tarn._repository
         ctx = tarn.retrieval_context()
         assert ctx.store is tarn._repository and ctx.embedder is tarn._embedder
     # __aexit__ -> close() disconnected the store

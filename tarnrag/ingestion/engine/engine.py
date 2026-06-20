@@ -115,15 +115,9 @@ class IngestionEngine(Engine):
             embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
         elif repository is None or embedder is None:
             raise ValueError("inject both repository and embedder, or neither")
-        # The engine is the index producer: ESTABLISH the §8 build/identity record on a fresh index, or
-        # CONFIRM it on an existing one — never silently re-stamp (that would write on a read-only open
-        # and mask an embedder mismatch). RetrievalEngine.open validates the same record. The sinks
-        # persist document/chunk/embedding data into the same repository; job_status lives there too.
-        existing = await repository.index_meta()
-        if not existing.get("schema_version"):
-            await repository.write_index_meta(build_index_meta(embedder))
-        elif (conflict := index_meta_conflict(existing, embedder)) is not None:
-            raise IngestionError(f"cannot ingest into this index — {conflict}")
+        # The engine is the index producer: establish/confirm the §8 build/identity record (the sinks
+        # then persist document/chunk/embedding data into the same repository; job_status lives there too).
+        await cls.ensure_index_meta(repository, embedder)
         pipeline = cls.build_pipeline(settings)
 
         if settings.MODE == "distributed":
@@ -146,6 +140,18 @@ class IngestionEngine(Engine):
         if auto_drain:  # register the in-process worker that ingest() will drive
             _attach_worker(queue, orchestrator, obs)
         return engine
+
+    @staticmethod
+    async def ensure_index_meta(repository: DocumentRepository, embedder: Embedder) -> None:
+        """ESTABLISH the §8 build/identity record on a fresh index, or CONFIRM it on an existing one —
+        never silently re-stamp (that would write on a read-only open and mask an embedder mismatch).
+        Cheap (repository-only), so a composition root can call it without building the full engine;
+        ``RetrievalEngine.open`` validates the same record."""
+        existing = await repository.index_meta()
+        if not existing.get("schema_version"):
+            await repository.write_index_meta(build_index_meta(embedder))
+        elif (conflict := index_meta_conflict(existing, embedder)) is not None:
+            raise IngestionError(conflict)
 
     @staticmethod
     def build_pipeline(settings: Settings) -> Pipeline:
