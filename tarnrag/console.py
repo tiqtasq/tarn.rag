@@ -19,7 +19,7 @@ the config. Then type commands at the ``tarn>`` prompt::
     quit                 exit
 
 This is purely the **UI**: a rich parse-and-print REPL that owns all output and delegates the work to a
-:class:`tarnrag.facade.TarnRag` through its high-level methods. Rendering needs the ``console`` extra
+:class:`tarnrag.TarnRag` through its high-level methods. Rendering needs the ``console`` extra
 (``pip install '.[console]'``).
 """
 
@@ -34,8 +34,8 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.tree import Tree
 
-from tarnrag.facade import TarnRag, load_settings
 from tarnrag.report import Report, Severity
+from tarnrag.tarnrag import TarnRag
 
 _out = RichConsole()
 
@@ -51,7 +51,7 @@ _COMMANDS = [
 
 
 class Console:
-    """A rich REPL over a :class:`~tarnrag.facade.TarnRag` session — all output lives here. Construct with
+    """A rich REPL over a :class:`~tarnrag.TarnRag` session — all output lives here. Construct with
     an (opened) ``TarnRag`` and call :meth:`run`; the console never touches the engines directly, only the
     facade's high-level methods (``ingest`` / ``docs`` / ``delete`` / ``retrieve`` / ``ask``)."""
 
@@ -207,7 +207,7 @@ def _cite(citation) -> str:
 
 
 async def _main(config_path: str) -> None:
-    async with TarnRag(load_settings(config_path)) as tarn:
+    async with TarnRag(config_path) as tarn:
         await Console(tarn).run()
 
 

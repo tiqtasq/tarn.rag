@@ -13,8 +13,8 @@ import pytest
 from examples.common import MODEL_DIR, corpus
 from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.llm import StaticLanguageModel
-from tarnrag.facade import TarnRag, load_settings
 from tarnrag.report import Severity
+from tarnrag.tarnrag import TarnRag
 
 pytestmark = pytest.mark.skipif(
     not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
@@ -122,8 +122,9 @@ async def test_console_renders_over_the_facade(tmp_path):
         await console._do_delete("nope")  # missing id -> handled, not raised
 
 
-def test_load_settings_reads_json(tmp_path):
+def test_tarnrag_loads_settings_from_a_path(tmp_path):
+    """Constructing with a path (str / Path) loads the JSON config into ``settings`` — no engines opened."""
     cfg = tmp_path / "c.json"
     cfg.write_text(json.dumps({"EMBEDDING_DIMENSION": 384, "database": {"document_url": "sqlite:///x.db"}}))
-    settings = load_settings(cfg)
+    settings = TarnRag(cfg).settings
     assert settings.EMBEDDING_DIMENSION == 384 and "x.db" in settings.database.document_url

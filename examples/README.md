@@ -49,9 +49,9 @@ can drive directly in your own code. Each call returns an `Outcome` — its `val
 non-fatal issues (empty when all went well), so nothing is printed or silently skipped:
 
 ```python
-from tarnrag import TarnRag, load_settings
+from tarnrag import TarnRag
 
-async with TarnRag(load_settings("examples/console.config.json")) as tarn:
+async with TarnRag("examples/console.config.json") as tarn:
     ingested = await tarn.ingest(["examples/docs/corpus-1", "typo.txt"])
     for issue in ingested.report.issues:
         print(f"{issue.severity.value}: {issue.subject}: {issue.message}")  # warning: typo.txt: not found

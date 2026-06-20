@@ -8,7 +8,7 @@ the value and surfaces the report. The ingestion engine owns the repository; the
 it (one connection — it sees ingests live, and works on an empty store); the generation engine is built
 lazily on the first ``ask``. Use it directly::
 
-    async with TarnRag(load_settings("config.json")) as tarn:
+    async with TarnRag("config.json") as tarn:
         ingested = await tarn.ingest(["docs/"])
         for issue in ingested.report.issues:
             ...  # e.g. a path that wasn't found
@@ -38,17 +38,15 @@ from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 
 
-def load_settings(config_path: str | Path) -> Settings:
-    """Build ``Settings`` from a JSON config file (ambient ``.env`` ignored — the file is authoritative;
-    OS env vars still supplement, e.g. the LLM key)."""
-    config = json.loads(Path(config_path).read_text())
-    return Settings(_env_file=None, **config)
-
-
 class TarnRag:
     """An ingestion + retrieval + generation session over one store (see the module docstring)."""
 
-    def __init__(self, settings: Settings, llm: LanguageModel | None = None) -> None:
+    def __init__(self, settings: Settings | str | Path, llm: LanguageModel | None = None) -> None:
+        """``settings`` is a ready ``Settings`` or the path to a JSON config to load (the ambient ``.env``
+        is ignored — the file is authoritative; OS env vars still supplement, e.g. the LLM key). ``llm``
+        may be injected (tests / a custom backend)."""
+        if not isinstance(settings, Settings):
+            settings = Settings(_env_file=None, **json.loads(Path(settings).read_text()))
         self.settings = settings
         self._injected_llm = llm
         self._ingestion: IngestionEngine | None = None
@@ -80,7 +78,7 @@ class TarnRag:
         The document id is each file's stem, so re-ingesting a file upserts in place (under
         ``ID_POLICY='caller'``). The value is the resulting per-document statuses; the report flags paths
         that matched nothing and documents that failed to ingest — neither is dropped silently."""
-        files, missing = _expand(paths)
+        files, missing = self._expand(paths)
         issues = [Issue("not found", Severity.WARNING, subject=raw) for raw in missing]
         if not files:
             return Outcome([], Report(tuple(issues)))
@@ -126,18 +124,18 @@ class TarnRag:
             )
         return LanguageModel.create(self.settings.llm)
 
-
-def _expand(paths: list[str]) -> tuple[list[Path], list[str]]:
-    """Resolve each path to file(s): a directory contributes the files it directly contains. Returns the
-    resolved files and the raw paths that matched nothing (reported, not skipped silently)."""
-    files: list[Path] = []
-    missing: list[str] = []
-    for raw in paths:
-        path = Path(raw).expanduser()
-        if path.is_dir():
-            files.extend(sorted(p for p in path.iterdir() if p.is_file()))
-        elif path.is_file():
-            files.append(path)
-        else:
-            missing.append(raw)
-    return files, missing
+    @staticmethod
+    def _expand(paths: list[str]) -> tuple[list[Path], list[str]]:
+        """Resolve each path to file(s): a directory contributes the files it directly contains. Returns
+        the resolved files and the raw paths that matched nothing (reported, not skipped silently)."""
+        files: list[Path] = []
+        missing: list[str] = []
+        for raw in paths:
+            path = Path(raw).expanduser()
+            if path.is_dir():
+                files.extend(sorted(p for p in path.iterdir() if p.is_file()))
+            elif path.is_file():
+                files.append(path)
+            else:
+                missing.append(raw)
+        return files, missing

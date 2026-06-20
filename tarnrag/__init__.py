@@ -10,11 +10,10 @@ Public API::
 from tarnrag.ingestion import DocumentStatus, DocumentSummary, IngestionEngine, run_worker
 from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval import MethodRef, Query, RetrievalEngine, RetrievalError, RetrievalResult
-from tarnrag.facade import TarnRag, load_settings  # imported last — wires the three engines together
+from tarnrag.tarnrag import TarnRag  # imported last — wires the three engines together
 
 __all__ = [
     "TarnRag",
-    "load_settings",
     "Outcome",
     "Report",
     "Issue",

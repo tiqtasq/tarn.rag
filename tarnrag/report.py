@@ -12,9 +12,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Generic, TypeVar
-
-T = TypeVar("T")
 
 
 class Severity(str, Enum):
@@ -53,7 +50,7 @@ class Report:
 
 
 @dataclass(frozen=True)
-class Outcome(Generic[T]):
+class Outcome[T]:
     """A facade call's result: the ``value`` it produced, plus a ``report`` of any issues encountered
     alongside it (empty when all went well)."""
 
