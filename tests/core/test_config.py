@@ -25,6 +25,16 @@ def test_nested_env_loading(monkeypatch):
     assert s.EMBEDDING_DIMENSION == 768  # cross-cutting field stays top-level/flat
 
 
+def test_unknown_env_vars_are_ignored_not_fatal(monkeypatch):
+    """A stale/unknown env var (e.g. a removed config group, or a project's own custom key name) must not
+    crash Settings — extra='ignore'."""
+    monkeypatch.setenv("CHUNKING__SIZE", "512")  # a group that no longer exists on Settings
+    monkeypatch.setenv("OPENAI_LLM_KEY", "sk-custom")  # a non-standard, project-specific var
+    s = Settings(_env_file=None)  # must not raise
+    assert not hasattr(s, "chunking")
+    assert s.embedding.model  # the real fields still load
+
+
 def test_kwargs_override_nested():
     s = Settings(_env_file=None, embedding={"model": "k"}, EMBEDDING_DIMENSION=128)
     assert s.embedding.model == "k"

@@ -10,7 +10,7 @@ import pytest
 
 from tarnrag.core.engine.config import LLMSettings
 from tarnrag.core.resources.llm import LanguageModel, Prompt, StaticLanguageModel
-from tarnrag.core.resources.llm_api import AnthropicLanguageModel
+from tarnrag.core.resources.llm_api import AnthropicLanguageModel, OpenAILanguageModel
 
 
 def _fake_response(text, *, stop="end_turn", in_tok=10, out_tok=3):
@@ -65,9 +65,63 @@ def test_anthropic_missing_key_raises(monkeypatch):
         AnthropicLanguageModel(model="m")._key()
 
 
+async def test_openai_shapes_request_and_parses_reply():
+    lm = OpenAILanguageModel(model="meta-llama/Llama-3.3-70B-Instruct", api_key="k", base_url="https://host/v1")
+    captured = {}
+
+    async def fake_post(url, body, headers):
+        captured.update(url=url, body=body, headers=headers)
+        return {
+            "choices": [{"message": {"content": "the answer"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 3},
+        }
+
+    lm._post = fake_post
+    out = await lm.complete(Prompt(user="hi", system="sys", max_tokens=42))
+
+    assert out.text == "the answer" and out.stop_reason == "stop"
+    assert out.usage == {"input_tokens": 10, "output_tokens": 3}
+    assert captured["url"] == "https://host/v1/chat/completions"
+    assert captured["body"]["model"] == "meta-llama/Llama-3.3-70B-Instruct"
+    assert captured["body"]["max_tokens"] == 42
+    assert captured["body"]["messages"] == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+    ]
+    assert captured["headers"]["Authorization"] == "Bearer k"
+    assert lm.identity() == "openai:meta-llama/Llama-3.3-70B-Instruct"
+
+
+async def test_openai_omits_system_and_auth_when_absent(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    lm = OpenAILanguageModel(model="m", base_url="http://localhost:8000/v1")  # keyless local endpoint
+    captured = {}
+
+    async def fake_post(url, body, headers):
+        captured.update(url=url, body=body, headers=headers)
+        return {"choices": [{"message": {"content": "x"}}]}
+
+    lm._post = fake_post
+    await lm.complete(Prompt(user="hi"))  # no system instruction, no key
+    assert captured["body"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert "Authorization" not in captured["headers"]  # keyless local server
+
+
+def test_openai_defaults_base_url():
+    assert OpenAILanguageModel(model="gpt-4o-mini")._base_url == "https://api.openai.com/v1"
+
+
 def test_create_selects_anthropic():
     lm = LanguageModel.create(LLMSettings(api_key="k"))
     assert isinstance(lm, AnthropicLanguageModel) and lm.identity() == "anthropic:claude-sonnet-4-6"
+
+
+def test_create_selects_openai():
+    lm = LanguageModel.create(
+        LLMSettings(provider="openai", model="meta-llama/Llama-3.3-70B-Instruct", api_base_url="http://h/v1")
+    )
+    assert isinstance(lm, OpenAILanguageModel)
+    assert lm.model == "meta-llama/Llama-3.3-70B-Instruct" and lm._base_url == "http://h/v1"
 
 
 def test_create_rejects_unknown_provider():

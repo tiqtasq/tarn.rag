@@ -6,6 +6,16 @@ is relevant iff its text contains a gold phrase — so labels survive re-ingesti
 """
 
 from tarnrag.eval import metrics
+from tarnrag.eval.benchmarks import (
+    HF_LOADERS,
+    LOADERS,
+    BenchItem,
+    load_2wiki,
+    load_hotpotqa,
+    load_hotpotqa_hf,
+    load_musique,
+)
+from tarnrag.eval.benchmark_runner import MOTHRAG_PUBLISHED, format_comparison, run_benchmark
 from tarnrag.eval.dataset import EvalQuery, EvalSet
 from tarnrag.eval.generation import (
     GenEvalQuery,
@@ -54,4 +64,15 @@ __all__ = [
     "token_f1",
     "exact_match",
     "citation_coverage",
+    # MOTHRAG benchmark harness
+    "BenchItem",
+    "load_hotpotqa",
+    "load_hotpotqa_hf",
+    "load_2wiki",
+    "load_musique",
+    "LOADERS",
+    "HF_LOADERS",
+    "run_benchmark",
+    "format_comparison",
+    "MOTHRAG_PUBLISHED",
 ]

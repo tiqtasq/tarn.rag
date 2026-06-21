@@ -1,0 +1,40 @@
+[
+  {
+    "_id": "q1",
+    "question": "What is the tallest structure in Paris?",
+    "answer": "Eiffel Tower",
+    "type": "bridge",
+    "level": "easy",
+    "supporting_facts": [["Eiffel Tower", 1]],
+    "context": [
+      ["Eiffel Tower", ["The Eiffel Tower is a wrought-iron lattice tower in Paris.", "It is the tallest structure in Paris."]],
+      ["Louvre", ["The Louvre is the world's most-visited museum, located in Paris."]],
+      ["Big Ben", ["Big Ben is the nickname for the great bell of the clock at the north end of the Palace of Westminster in London."]]
+    ]
+  },
+  {
+    "_id": "q2",
+    "question": "In which city is the Colosseum located?",
+    "answer": "Rome",
+    "type": "bridge",
+    "level": "easy",
+    "supporting_facts": [["Colosseum", 0]],
+    "context": [
+      ["Colosseum", ["The Colosseum is an oval amphitheatre in the centre of Rome.", "It was built of travertine limestone."]],
+      ["Pantheon, Rome", ["The Pantheon is a former Roman temple in Rome."]],
+      ["Eiffel Tower", ["The Eiffel Tower is located in Paris."]]
+    ]
+  },
+  {
+    "_id": "q3",
+    "question": "Is the Eiffel Tower located in Paris?",
+    "answer": "yes",
+    "type": "comparison",
+    "level": "easy",
+    "supporting_facts": [["Eiffel Tower", 0]],
+    "context": [
+      ["Eiffel Tower", ["The Eiffel Tower is in Paris, France."]],
+      ["Big Ben", ["Big Ben is in London."]]
+    ]
+  }
+]
