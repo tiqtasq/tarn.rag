@@ -176,18 +176,22 @@ installed in CI) and `extraction/html.py` 86%.
 
 ## 5. Minor smells / observations
 
-- **[L]** `RetrievalPipeline._passes` / `_in_scope` carry `# type: ignore[union-attr]` for the
-  `scope: list[MethodRef] | str` union — a typing smell a small `_scoped(query) -> list[MethodRef] | None`
-  helper would erase.
-- **[L]** `RetrievalContext` carries `cross_encoder` (a reranker-only resource); the `CrossEncoderReranker`
-  raises a clear error if it's `None`. Injecting an optional resource for one consumer is acceptable but
-  slightly leaky — fine as is.
-- **[L]** Observability "enabled ⇒ `NoOpObservability`" inversion (`ingestion/engine/engine.py`): turning
-  observability *on* installs a do-nothing adapter (real adapters are future work). Expected for the phase,
-  surprising to a reader. (Carried over.)
-- **[L]** Doc/code drift is itself a smell: CLAUDE.md + `FUNCTIONAL_REQUIREMENTS.md` describe the pre-reorg
-  layout (`ingestion/stages/`, `core/embedder.py`, the metadata-bag chunk schema) and a non-existent
-  `dense_knn` filter arg. Addressed in the doc-cleanup pass; noted here for completeness.
+- **[L] ✅ Resolved** — the `# type: ignore[union-attr]` is gone: `_passes` / `_in_scope` were removed when
+  the license/scope filter moved into the retrievers (1.2). The `scope: list[MethodRef] | str` sentinel
+  union is now normalized in one place by `Query._scope_refs()` (used by `permitted_filter`).
+- **[L] ⏸️ Keep (reviewed)** — `RetrievalContext` carries `cross_encoder`. It's the same call-time
+  resource-injection pattern as the embedder (a `Retriever` uses `ctx.embedder`; a `Reranker` uses
+  `ctx.cross_encoder`), built lazily and only when a reranker is configured — consistent, not a leak. Kept.
+- **[L] ✅ Resolved** — observability is now built via `Observability.create(settings.observability)`
+  (disabled → `None`; enabled → the adapter selected by `type`, only `NoOpObservability` today), replacing
+  the inline `NoOpObservability() if enabled else None`. The "enabled installs a no-op" behavior is now
+  explicit + extensible (real adapters will dispatch on `type`) and documented as intentional.
+- **[L] ✅ Resolved** — doc/code drift: `FUNCTIONAL_REQUIREMENTS.md` was refreshed in the doc-cleanup pass,
+  and **CLAUDE.md is now updated too** (package layout → `core/{components,engine,resources}` /
+  `ingestion/{components,engine,pipeline}` / `retrieval` / `generation` / `eval`; the Extractor seam;
+  `core/resources/embedder.py`, default `gte-small`; the config-driven retrieval Components + license
+  pre-filter; async retrieval usage; `Observability.create`). The `dense_knn` filter arg the original
+  review called "non-existent" now exists (1.2).
 - **[M] Stale `test-and-build.yml` workflow — ✅ removed.** It built a Docker image from a **non-existent
   `Dockerfile`** and ran `pytest tests/unit` (**no such directory**) on `main` push/PR, so it could never
   pass (leftover service template; this is a library with no Docker image). Deleted — the real test/coverage

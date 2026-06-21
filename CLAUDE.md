@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**tarnrag** — a composable, DAG-based RAG **ingestion + retrieval** library: documents in, a
-queryable vector index out. There is no HTTP layer here; a consuming REST API lives in the
-separate **tiqtasq.backend** repo. The public surface is two engines:
+**tarnrag** — a composable, DAG-based RAG **ingestion + retrieval + generation** library: documents in, a
+queryable vector index out, optionally a grounded answer with a proof tree. There is no HTTP layer here; a
+consuming REST API lives in the separate **tiqtasq.backend** repo. The public surface is three engines plus
+a high-level facade (`TarnRag`) that wires all three over one store:
 
 ```python
+from tarnrag import TarnRag                                  # the high-level facade (ingest/retrieve/ask)
 from tarnrag import IngestionEngine, RetrievalEngine, run_worker, Query, DocumentStatus
 ```
 
@@ -17,13 +19,18 @@ Data flow:
 ```
 IngestionEngine.create() → ingest_paths/content/streams → PipelineOrchestrator (walks the DAG,
   creates jobs) → queue (InMemory in embedded mode · pgQueuer in distributed) → IngestionWorker(s)
-  → stages (load → clean → chunk → enrich → embed) → DocumentRepository (§8 index + job_status, one store)
+  → stages (load+extract → enrich → clean → chunk → embed) → DocumentRepository (§8 index + job_status, one store)
 
-RetrievalEngine.create() → await search/search_text → embed query → repository dense_knn → hydrate → ranked results
+RetrievalEngine.create() → await search → retrievers (dense/sparse, license-filtered) → fuse → hydrate
+  → auto-merge → rerank → top_k → ranked, provenance-bearing results
+
+GenerationEngine.create() → await answer → reason (retrieve↔read) → ground-check → proof tree + evidence
 ```
 
-Design specs: `doc/FUNCTIONAL_REQUIREMENTS.md` (ingestion pipeline) and
-`doc/ModusQ_RetrievalSubsystemSpec.md` (retrieval subsystem).
+Design specs: `doc/FUNCTIONAL_REQUIREMENTS.md` (ingestion), `doc/ModusQ_RetrievalSubsystemSpec.md` +
+`doc/retrieval-architecture-design.md` (retrieval), and `doc/generation-architecture-design.md` (generation).
+Retrieval methods, generation steps, extractors, chunkers, and enrichers are all config-driven **Components**
+(`core/components`) composed by spec under `Settings.components`.
 
 ## Using the engines
 
@@ -44,9 +51,9 @@ docs = await engine.list_documents()                 # -> list[DocumentSummary] 
 await engine.delete_document(ids[0])                 # remove a doc + its chunks/embeddings/jobs
 await engine.aclose()                                # or: async with await IngestionEngine.create() as engine: ...
 
-# Retrieval (sync; reads the §8 index ingestion built):
-with RetrievalEngine.create() as r:                  # validates schema + embedding fingerprint
-    hits = r.search_text("how do I inspect a tank?", top_k=8)
+# Retrieval (async; reads the §8 index ingestion built):
+async with await RetrievalEngine.create() as r:      # validates schema + embedding fingerprint
+    hits = await r.search_text("how do I inspect a tank?", top_k=8)
 ```
 
 - **`create()` is the entry point** for both engines (reads `Settings`). Bare constructors and
@@ -66,15 +73,19 @@ with RetrievalEngine.create() as r:                  # validates schema + embedd
 
 ```
 tarnrag/
-├── core/         # infra only: config, exceptions, observability
-├── contracts/    # cross-boundary shared kernel: dtos · ports · results · index_meta
-├── embedder.py   # Embedder ABC + OnnxEmbedder (shared by both engines)
-├── storage/      # persistence layer
-│   ├── status.py     # DocumentStatusReader (composes the status ports)
-│   └── repository/   # base.py (DocumentRepository) · postgres.py · sqlite.py
-├── ingestion/    # engine, worker, pipeline, orchestrator, queue, batch,
-│                 #   result_sink, jobs, types, factories, stages/
-└── retrieval/    # engine, types
+├── core/         # infra: components/ (Component + ComponentFactory + registry), engine/ (config,
+│                 #   Engine base, observability), resources/ (Embedder · CrossEncoder · LanguageModel),
+│                 #   exceptions, hashing
+├── contracts/    # cross-boundary shared kernel: dtos · ports · results · structure · index_meta
+├── storage/      # status.py (DocumentStatusReader) · repository/ (base · postgres · sqlite · chunk_provenance)
+├── ingestion/    # components/ (extraction · chunking · enrichment), pipeline/ (stage bases · clean · embed),
+│                 #   engine/ (engine+run_worker · worker · orchestrator · queue · batch · result_sink · jobs · types)
+├── retrieval/    # components/ (retriever · fuser · merger · reranker · classifier · license_policy),
+│                 #   pipeline/ (searcher · pipeline · router), engine/ (engine · protocol), types
+├── generation/   # components/ (reasoner · grounding · assembler), pipeline/, engine/, context · types
+├── eval/         # retrieval + generation eval harnesses (metrics · dataset · harness · generation)
+├── tarnrag.py    # TarnRag — high-level facade + composition root over the three engines
+├── report.py · console.py            # Outcome/Report/Issue/Severity · interactive rich console
 run_worker.py            # distributed consumer entry: asyncio.run(run_worker())
 scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
 ```
@@ -91,36 +102,43 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   registered handler, not a puller. **`PgQueuerJobQueue`** is the only file that imports pgQueuer
   (which owns SKIP LOCKED / retries / NOTIFY / dead-lettering); **`InMemoryJobQueue`** is the
   in-process double (embedded mode + tests, no Postgres). The consumer hands the worker a **`Batch`**
-  (`ingestion/jobs.py`) — homogeneous (all jobs share one `stage_name`, enforced by the
+  (`ingestion/engine/jobs.py`) — homogeneous (all jobs share one `stage_name`, enforced by the
   constructor). Keep the port a delegating seam — never reimplement queue mechanics in it.
 - **Three-layer split:**
-  - **Worker = compute only** (`ingestion/worker.py`). A pure handler holding only the coordinator
+  - **Worker = compute only** (`ingestion/engine/worker.py`). A pure handler holding only the coordinator
     (no queue, no run loop): `handle_batch(batch)` gets the stage via
     `BatchCoordinator.get_stage(...)` (the DAG's **long-lived** instance, so `EmbedStage`'s model
     loads once), runs it, and reports to a **`BatchContext`** from `begin_batch(batch)`:
     `ctx.submit()` results, then `ctx.complete()` (or `ctx.fail()` + re-raise on compute error).
     Depends **only** on the two batch ABCs — never the orchestrator/repo/queue/`ResultSink`.
     Raising → the queue requeues (recovery).
-  - **`ResultSink` = persistence** (`ingestion/result_sink.py`). Output-side; batches and writes
+  - **`ResultSink` = persistence** (`ingestion/engine/result_sink.py`). Output-side; batches and writes
     results. Composed inside the `BatchContext` — the worker never touches it.
     `async finalize() -> FinalizationOutcome`.
-  - **Orchestrator = `BatchCoordinator` + lifecycle + DAG walking** (`ingestion/orchestrator.py`).
+  - **Orchestrator = `BatchCoordinator` + lifecycle + DAG walking** (`ingestion/engine/orchestrator.py`).
     `begin_batch` records `processing`; `ctx.complete()` finalizes the sink, records status, and
     enqueues downstream jobs — or records `failed` and **raises** so the queue requeues. Also owns
     `ingest_documents`. Downstream is enqueued only after upstream persists (implicit dependencies).
 - **Stages stay pure** — no DB/queue access (the worker observes them). All stages subclass
-  `PipelineStage`; prefer a typed base: `MapperStage` (1→1, `map()`), `ChunkerStage` (1→N,
-  `chunk()`), `FilterStage` (1→{0,1}, `should_keep()`) — these merge metadata automatically
-  (subclasses return *updates*, never mutate the incoming dict).
-- **Pluggable PDF parsers (per-request).** `LoadAndParseStage` holds a registry (`stages/parsers.py`:
-  `pypdf` default, `pdfplumber`). The available set is stage config; a request picks one via the
-  `parser` argument, which the engine writes to `metadata['parser']` (item data flowing inline, not
-  per-job config). Unknown parser → rejected at the engine edge. HTML uses `load_html` (BeautifulSoup).
-- **The shared embedder** (`embedder.py`). `Embedder` ABC + `OnnxEmbedder` (prefix → tokenize → ONNX
-  CPU → mean-pool(mask) → L2; lazy `onnxruntime`/`tokenizers`). The **same** embedder embeds passages
-  (ingestion) and queries (retrieval), guaranteeing pipeline identity; `config_fingerprint()` is
-  recorded in `index_meta` and retrieval refuses to `open()` on mismatch. Model configurable via
-  `settings.embedding` (default all-MiniLM-L6-v2); fetch artifacts with `scripts/fetch_model.py`.
+  `PipelineStage` (`ingestion/pipeline/pipeline.py`); typed bases `MapperStage` (1→1, `map()`) /
+  `FilterStage` (1→{0,1}, `should_keep()`) merge metadata automatically (subclasses return *updates*,
+  never mutate the bag). Fan-out stages are **container stages** that build Component children:
+  `LoadAndParse` (extractors), `Enrich` (enrichers), `Chunk` (a `Chunker`, default `structure_aware`).
+- **Layout-aware extraction (Component seam).** `LoadAndParseStage` (`ingestion/components/extraction/`)
+  routes a `source_kind` to an `Extractor` Component that produces a `StructuredDocument` (ordered
+  elements + geometry + header paths + tables): `plain_text` · `markdown` · `html` (BeautifulSoup) ·
+  `pdf_text` (pdfplumber, fast tier) · `docling` (high-fidelity, opt-in `[docling]` extra). Routes are
+  config (`Config.routes`); a per-document `metadata['extractor']` override picks one inline. The
+  structure-aware chunker reads `item.document` and emits chunks carrying `ChunkProvenance` (header path,
+  geometry, the auto-merge `parent_chunk_id`).
+- **The shared embedder** (`core/resources/embedder.py`). `Embedder` ABC + `OnnxEmbedder` (prefix →
+  tokenize → ONNX CPU → pool(mask) → L2; lazy `onnxruntime`/`tokenizers`) + HTTP API backends
+  (`embedder_api.py`: OpenAI/Voyage/Gemini), selected by `settings.embedding.provider` via
+  `Embedder.create`. The **same** embedder embeds passages (ingestion) and queries (retrieval),
+  guaranteeing pipeline identity; `config_fingerprint()` is recorded in `index_meta` and retrieval refuses
+  to `open()` on mismatch. Model configurable via `settings.embedding` (default `gte-small`); fetch
+  artifacts with `scripts/fetch_model.py`. `CrossEncoder` (reranker) and `LanguageModel` (generation) are
+  sibling `Resource`s in `core/resources/`.
 - **The §8 index + status read model** (`storage/`). The retrieval index lives in the
   `DocumentRepository` itself (one store) — embedded: a single SQLite file (`index_meta`, `documents`,
   `chunks`, `vec_chunks` via sqlite-vec, `fts_chunks` via FTS5, `method_chunks`); distributed:
@@ -146,22 +164,30 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   job-status rows (the engine's `delete_document()` does both).
 - **Two databases.** `settings.database.queue_url` (pgQueuer) is separate from
   `settings.database.document_url` (document/chunk/embedding storage). Never conflate them.
-- **Observability is optional.** Core logic must work with `observability=None`; `NoOpObservability`
-  for dev/test. Guard every `self.obs` call. (Real adapters — Prometheus, structured logging — are
-  future work behind the ABC.)
-- **Retrieval is dense-only.** `RetrievalEngine.search` = embed → sqlite-vec `dense_knn` → truncate
-  `top_k` → `hydrate` → assemble (`score = -distance`). Sparse FTS5/BM25 + RRF fusion + license/scope
-  filtering are planned behind the `Retriever` / `Fuser` seams (`dense_knn` already takes a `filter` arg).
+- **Observability is optional.** Core logic must work with `observability=None` (guard every `self.obs`
+  call); `Observability.create(settings.observability)` returns the configured adapter or `None` when
+  disabled. Only `NoOpObservability` ships today, so an *enabled* observability installs the no-op until a
+  real adapter (Prometheus, structured logging) is registered there — by design, not an oversight.
+- **Retrieval is config-driven Components.** `RetrievalEngine.search` delegates to a `Searcher` built from
+  `Settings.components[RETRIEVAL_PIPELINE]` — a `RetrievalPipeline` (parallel `Retriever`s {dense/sparse} →
+  `Fuser` {identity/rrf, `(score desc, chunk_id asc)` tie-break} → hydrate → optional `Merger` {auto-merge}
+  → optional `Reranker` {cross-encoder} → `top_k`), or a `RoutingRetrievalPipeline` (a `QueryClassifier`
+  dispatches per `query_type`). License/scope filtering is a **pre-filter inside the retrievers**:
+  `Query.permitted_filter()` (via the configured `LicensePolicy`) builds a `ChunkFilter` that
+  `dense_knn`/`sparse_search` apply in SQL, over-fetching to backfill past dropped chunks. Comparing
+  methods = swapping the `RETRIEVAL_PIPELINE` spec.
 
 ## Conventions
 
-- **Config** (`core/config.py`). `Settings` (pydantic-settings) nests per-component sub-models —
-  `settings.embedding`, `settings.chunking`, `settings.database`, `settings.worker`,
+- **Config** (`core/engine/config.py`). `Settings` (pydantic-settings) nests per-component sub-models —
+  `settings.embedding`, `settings.rerank`, `settings.llm`, `settings.database`, `settings.worker`,
   `settings.observability` — read from env via the `GROUP__FIELD` convention (e.g. `EMBEDDING__MODEL`,
   `DATABASE__DOCUMENT_URL`). Cross-cutting `MODE`, `EMBEDDING_DIMENSION`, `UPLOAD_DIR`, `ID_POLICY`
-  stay top-level/flat. A `model_validator` pins the backend: `distributed` requires Postgres +
-  `DATABASE__QUEUE_URL`; `embedded` requires SQLite. See `.env.example`. Each component is built via a
-  `create()` classmethod from its config slice (`OnnxEmbedder.create`, `DocumentRepository.create`).
+  stay top-level/flat. `Settings.components` holds the pipeline specs (`ingestion_pipeline` /
+  `retrieval_pipeline` / `generation_pipeline` / `license_policy`), default-filled by a `model_validator`.
+  Another `model_validator` pins the backend: `distributed` requires Postgres + `DATABASE__QUEUE_URL`;
+  `embedded` requires SQLite. See `.env.example`. Each resource/repo is built via a `create()` from its
+  config slice (`Embedder.create`, `DocumentRepository.create`).
 - **Type annotations (Python 3.12):** builtin generics (`list`, `dict`, `tuple`, `type`) and
   `X | None` — never `typing.List` / `Dict` / `Optional`. Import `Iterator` / `Iterable` / `Callable`
   from `collections.abc`; keep `Any` / `Literal` from `typing`. Use `datetime.now(UTC)`.

@@ -27,7 +27,7 @@ from typing import Any, BinaryIO
 
 from tarnrag.core.engine.config import INGESTION_PIPELINE, IdPolicy, Settings, get_settings
 from tarnrag.core.hashing import sha256_file, sha256_hex
-from tarnrag.core.engine.observability import NoOpObservability
+from tarnrag.core.engine.observability import Observability
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import IngestionError
 from tarnrag.core.resources.embedder import Embedder
@@ -103,7 +103,7 @@ class IngestionEngine(Engine):
         or neither. The ``embedder`` is used only to stamp the index identity (``write_index_meta``);
         the Embed stage builds its own from ``Settings``."""
         settings = settings or get_settings()
-        obs = NoOpObservability() if settings.observability.enabled else None
+        obs = Observability.create(settings.observability)
         if repository is None and embedder is None:
             repository = await DocumentRepository.create(settings.database, settings.EMBEDDING_DIMENSION)
             embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
