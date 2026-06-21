@@ -129,18 +129,29 @@ Drop the extra (or document why it's kept).
 
 ## 4. Test-coverage gaps
 
-### 4.1 [H] Postgres adapter: 0% coverage
-`storage/repository/postgres.py` (50/50 statements missed). `tests/storage/repository/test_postgres.py`
-exists but **skips** without `TARNRAG_TEST_POSTGRES_URL`, so CI never exercises `dense_knn` (pgvector
-`<=>`), `sparse_search` (`to_tsvector`/`ts_rank_cd`), `hydrate`, or the asyncpg path. The entire second
-dialect — and the dense/sparse parity the design promises — is unverified. A dockerized `pgvector/pgvector`
-service in CI closes this; `retrieval-architecture-design.md` §9 already flags it as the known gap.
+### 4.1 [H] Postgres adapter: 0% coverage — ✅ RESOLVED
+> **✅ Resolved** (`feature/ci-postgres-coverage`): the coverage workflow (`.github/workflows/codecov.yml`)
+> now runs a `pgvector/pgvector:pg16` **service** and sets `TARNRAG_TEST_POSTGRES_URL`, so the gated
+> `test_postgres.py` (dense `<=>` KNN, `ts_rank_cd` sparse, Core `hydrate` + provenance, ivfflat/GIN
+> indexes, FK-cascade) runs in CI and `postgres.py` contributes coverage instead of showing 0%.
 
-### 4.2 [M] pgQueuer adapter path untested
-`ingestion/engine/queue.py` 74% — the missed lines (98–131) are `PgQueuerJobQueue.enqueue`/`run`/
-`set_handler`, i.e. the only real distributed-queue mechanics. The whole suite runs on `InMemoryJobQueue`;
-the pgQueuer adapter is written + reviewed but never run. Hard to unit-test without pgQueuer, but worth a
-gated integration test alongside 4.1.
+`storage/repository/postgres.py` (50/50 statements missed) was skipped in CI without
+`TARNRAG_TEST_POSTGRES_URL`, leaving the entire second dialect unverified.
+
+### 4.2 [M] pgQueuer adapter path untested — ✅ RESOLVED (and caught a real bug)
+> **✅ Resolved** (`feature/ci-postgres-coverage`): added `tests/ingestion/test_pgqueuer.py` — a gated
+> integration test that installs the pgQueuer schema, enqueues a job, runs the real `PgQueuerJobQueue.run`
+> loop, and asserts the entrypoint decodes the payload into a homogeneous `Batch`. It runs in CI on the new
+> Postgres service (4.1).
+>
+> **It immediately caught a production bug:** `PgQueuerJobQueue.__init__` built `QueueManager(driver)`, but
+> pinned pgQueuer (1.0.2) expects a `Queries` (`QueueManager.run` reads `self.queries.qbe`), so the
+> distributed `run()` path raised `AttributeError` — i.e. the distributed worker was broken and nothing
+> exercised it. Fixed to `QueueManager(self._queries)`. This is exactly the untested-path risk the finding
+> flagged.
+
+`ingestion/engine/queue.py` was 74% — the missed lines were `PgQueuerJobQueue.enqueue`/`run`/`set_handler`,
+the only real distributed-queue mechanics, since the whole suite ran on `InMemoryJobQueue`.
 
 ### 4.3 [L] docling / html extractors
 `extraction/docling_pdf.py` 22% (heavy converter gated on the optional `docling` install — only the
@@ -163,6 +174,11 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 - **[L]** Doc/code drift is itself a smell: CLAUDE.md + `FUNCTIONAL_REQUIREMENTS.md` describe the pre-reorg
   layout (`ingestion/stages/`, `core/embedder.py`, the metadata-bag chunk schema) and a non-existent
   `dense_knn` filter arg. Addressed in the doc-cleanup pass; noted here for completeness.
+- **[M] Stale `test-and-build.yml` workflow.** `.github/workflows/test-and-build.yml` builds a Docker image
+  from a **non-existent `Dockerfile`** and runs `pytest tests/unit` (**no such directory**) on `main`
+  push/PR — it cannot pass. Leftover from a service template; this is a library with no Docker image. Should
+  be **removed** (the real test/coverage job is `codecov.yml`) or rewritten to run the actual suite.
+  *(Discovered while wiring 4.1/4.2; left for a decision.)*
 
 ---
 
@@ -180,6 +196,6 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | 3.1 | M | config | ⏸️ **Keep** — retained as the distributed-worker tuning config (decision) |
 | 3.2 | M | storage | ⏸️ **Keep** — `query_chunks` (documented read-surface) + `health_check` (infra) retained (decision) |
 | 3.3 | L | config/pkg | `AppSettings.name`/`version` unused; `api` extra vestigial |
-| 4.1 | H | tests | Postgres adapter 0% coverage (skipped without a live DB) |
-| 4.2 | M | tests | pgQueuer adapter path untested (in-memory only) |
+| 4.1 | H | tests | ✅ **Resolved** — CI runs a `pgvector` service; `test_postgres.py` now covers `postgres.py` |
+| 4.2 | M | tests | ✅ **Resolved** — gated `test_pgqueuer.py` added; **caught + fixed** a real `QueueManager(driver)` bug |
 | 4.3 | L | tests | docling/html extractor coverage thin |
