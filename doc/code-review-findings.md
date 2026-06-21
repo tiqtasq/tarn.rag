@@ -161,10 +161,16 @@ no source **and no test** today.
 `ingestion/engine/queue.py` was 74% — the missed lines were `PgQueuerJobQueue.enqueue`/`run`/`set_handler`,
 the only real distributed-queue mechanics, since the whole suite ran on `InMemoryJobQueue`.
 
-### 4.3 [L] docling / html extractors
-`extraction/docling_pdf.py` 22% (heavy converter gated on the optional `docling` install — only the
-`DoclingDocument → StructuredDocument` `_map` is partially covered); `extraction/html.py` 86%. Acceptable
-given the gating, but the docling `_map` deserves a few more constructed-document cases.
+### 4.3 [L] docling / html extractors — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-l`): **html.py → 100%** (added tests for loose text nodes,
+> skipped `script`/`style` subtrees, `<pre>` code, container recursion, and the empty-table path). **docling
+> `_map` → 89%** (added a constructed-document case for list items / code / captions / empty-item skip; the
+> remaining gap is the heavy-converter `extract` path, still gated on the full `docling` package). CI now
+> installs **docling-core** (test-only) in `codecov.yml` so the `_map` tests run and contribute coverage;
+> the heavy `docling` converter test stays skipped.
+
+`extraction/docling_pdf.py` was 22% (only the `_map` partially covered, gated on `docling-core` not being
+installed in CI) and `extraction/html.py` 86%.
 
 ---
 
@@ -186,6 +192,10 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
   `Dockerfile`** and ran `pytest tests/unit` (**no such directory**) on `main` push/PR, so it could never
   pass (leftover service template; this is a library with no Docker image). Deleted — the real test/coverage
   job is `codecov.yml`.
+- **[L] Node-20 action deprecation — ✅ bumped.** CI logged that `actions/checkout@v4` / `setup-python@v4`
+  (and an older `checkout@v3` + deprecated `::set-output` in `branch-name-validation.yml`) run on the
+  deprecated Node 20. Bumped to `checkout@v5` / `setup-python@v6` and migrated `set-output` to
+  `$GITHUB_OUTPUT`.
 
 ---
 
@@ -205,4 +215,4 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | 3.3 | L | config/pkg | ✅ **Resolved** — removed `AppSettings.name`/`version` + the vestigial `api` extra |
 | 4.1 | H | tests | ✅ **Resolved** — CI runs a `pgvector` service; `test_postgres.py` now covers `postgres.py` |
 | 4.2 | M | tests | ✅ **Resolved** — gated `test_pgqueuer.py` added; **caught + fixed** a real `QueueManager(driver)` bug |
-| 4.3 | L | tests | docling/html extractor coverage thin |
+| 4.3 | L | tests | ✅ **Resolved** — html.py → 100%; docling `_map` → 89% (CI installs `docling-core`) |

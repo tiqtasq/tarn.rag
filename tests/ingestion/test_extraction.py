@@ -117,3 +117,38 @@ def test_html_headings_lists_and_table():
     for e in doc.elements:
         s = e.geometry[0]
         assert doc.text[s.start:s.end] == e.text  # offset invariant holds across all element kinds
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("bs4") is None, reason="beautifulsoup4 (parsers extra) not installed"
+)
+def test_html_loose_text_skip_tags_code_and_nesting():
+    """The remaining DOM-walk branches: loose text nodes -> paragraphs, skipped non-content subtrees
+    (script/style), <pre> -> code, and recursion into container tags (<div>/<section>)."""
+    html = (
+        "<body>"
+        "<style>.x{color:red}</style><script>var a = 1;</script>"  # skipped subtrees
+        "Loose intro text."  # bare text node -> paragraph
+        "<div><section><p>Nested para.</p></section></div>"  # recursion into containers
+        "<pre>def f():\n    return 1</pre>"  # <pre> -> code (newlines preserved)
+        "</body>"
+    )
+    doc = _run(HtmlExtractor, Source(source_id="d1", source_kind="html", content=html))
+    kinds = {(e.kind, e.text) for e in doc.elements}
+    assert (ElementKind.PARAGRAPH, "Loose intro text.") in kinds  # bare NavigableString captured
+    assert (ElementKind.PARAGRAPH, "Nested para.") in kinds  # found by recursing into div/section
+    assert (ElementKind.CODE, "def f():\n    return 1") in kinds  # <pre> block
+    assert "var a = 1" not in doc.text and "color:red" not in doc.text  # script/style dropped
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("bs4") is None, reason="beautifulsoup4 (parsers extra) not installed"
+)
+def test_html_empty_table_is_dropped():
+    """A <table> with no rows renders to empty markdown (no cells) and produces no table element."""
+    doc = _run(
+        HtmlExtractor,
+        Source(source_id="d1", source_kind="html", content="<body><table></table><p>after</p></body>"),
+    )
+    assert not any(e.kind == ElementKind.TABLE for e in doc.elements)
+    assert any(e.text == "after" for e in doc.elements)

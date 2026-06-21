@@ -94,6 +94,30 @@ def test_mapping_table_cells_geometry_and_header_addressing():
     assert doc.text[s.start:s.end] == "6 Nm"  # cell char-offset indexes doc.text exactly
 
 
+@requires_docling_core
+def test_mapping_lists_code_caption_and_skips_empty():
+    """_map covers the remaining text-item kinds — list items, code, captions — and skips text-empty
+    items (e.g. pictures); offsets still index doc.text exactly."""
+    from docling_core.types.doc.document import DoclingDocument
+    from docling_core.types.doc.labels import DocItemLabel
+
+    d = DoclingDocument(name="t")
+    d.add_list_item(text="Helmet", prov=_prov(1, (10, 10, 80, 20)))
+    d.add_code(text="print('hi')", prov=_prov(1, (10, 25, 120, 40)))
+    d.add_text(label=DocItemLabel.CAPTION, text="Figure 1: the pump.", prov=_prov(1, (10, 45, 120, 55)))
+    d.add_picture(prov=_prov(1, (10, 60, 60, 110)))  # no text -> skipped by _map
+
+    doc = DoclingExtractor._map(d, Source(source_id="d1", source_kind="pdf"))
+    kinds = {(e.kind, e.text) for e in doc.elements}
+    assert (ElementKind.LIST_ITEM, "Helmet") in kinds
+    assert (ElementKind.CODE, "print('hi')") in kinds
+    assert (ElementKind.CAPTION, "Figure 1: the pump.") in kinds
+    assert all(e.text.strip() for e in doc.elements)  # the text-less picture item was dropped
+    for e in doc.elements:
+        s = e.geometry[0]
+        assert doc.text[s.start:s.end] == e.text  # char offsets index doc.text exactly
+
+
 @pytest.mark.skipif(
     importlib.util.find_spec("docling") is None, reason="docling (the converter) not installed"
 )
