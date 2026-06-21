@@ -98,8 +98,10 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         from pgqueuer import QueueManager
         from pgqueuer.queries import Queries
 
-        self._qm = QueueManager(driver)
+        # pgQueuer's QueueManager takes a Queries (it reads its query builders, e.g. queries.qbe), not a
+        # raw driver — passing the driver makes run()/verify_structure fail with AttributeError.
         self._queries = Queries(driver)
+        self._qm = QueueManager(self._queries)
 
     @classmethod
     async def connect(cls, connection_url: str) -> "PgQueuerJobQueue":
