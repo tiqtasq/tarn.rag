@@ -51,5 +51,10 @@ class Query:
         of truncating first and filtering after (which could under-return for a tight scope)."""
         return ChunkFilter(
             require_grounding=self.purpose == Purpose.GENERATION_GROUNDING,
-            method_scope=None if self.scope == ALL else tuple(self.scope),
+            method_scope=self._scope_refs(),
         )
+
+    def _scope_refs(self) -> tuple[MethodRef, ...] | None:
+        """The method scope as a tuple of refs, or ``None`` for ``ALL`` (the whole index) — normalizes the
+        ``list[MethodRef] | str`` sentinel union in one place, so callers don't branch on the ALL string."""
+        return None if self.scope == ALL else tuple(self.scope)

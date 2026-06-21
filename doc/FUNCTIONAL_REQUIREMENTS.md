@@ -320,7 +320,7 @@ lives in dedicated columns + child tables). The CRUD: `store_document` / `store_
 the §8 retrieval reads (abstract `dense_knn` / `sparse_search` / `hydrate`), the index identity
 (`write_index_meta` / `index_meta`), and the document-status projection (`record_job` / `document_jobs` /
 `delete_document_jobs` / `document_status`). (`query_chunks`, `health_check`, and `update_chunk_metadata`
-exist but are currently unused / no-ops — see `code-review-findings.md`.)
+exist but are currently unused / no-ops — retained as documented read-surface / latent capability.)
 
 **Guarantees:** multi-row writes share one `engine.begin()` transaction (atomic); documents are keyed by
 `document_id` (== `source_id`, the PK, **stable**), so re-ingest upserts the doc and replaces its

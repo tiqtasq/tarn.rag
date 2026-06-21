@@ -13,13 +13,27 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tarnrag.core.engine.config import ObservabilitySettings
 
 
 class Observability(ABC):
     """
     Metrics + logging port. ``counter``/``gauge`` are sync (cheap); ``log`` is async.
     """
+
+    @staticmethod
+    def create(settings: ObservabilitySettings) -> Observability | None:
+        """Build the configured observability adapter, or ``None`` when disabled (core logic guards every
+        ``self.obs`` call, so ``None`` = off). The adapter is selected by ``settings.type``; only
+        ``NoOpObservability`` ships today, so an *enabled* observability currently installs the no-op until
+        a real adapter (Prometheus, structured logging) is registered here — by design, not an oversight."""
+        if not settings.enabled:
+            return None
+        # When real adapters land, dispatch on settings.type here; the no-op is the only one for now.
+        return NoOpObservability()
 
     @abstractmethod
     async def log(self, level: str, message: str, **context: Any) -> None:

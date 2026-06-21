@@ -35,3 +35,12 @@ def test_timer_is_inherited_concrete_on_the_abc():
     # timer is defined on the ABC (not abstract), so every adapter gets it for free.
     assert "timer" not in Observability.__abstractmethods__
     assert Observability.__abstractmethods__ == {"log", "counter", "gauge"}
+
+
+def test_create_returns_none_when_disabled_else_the_configured_adapter():
+    """The factory: disabled -> None (core logic guards on None); enabled -> the configured adapter
+    (only the no-op ships today)."""
+    from tarnrag.core.engine.config import ObservabilitySettings
+
+    assert Observability.create(ObservabilitySettings(enabled=False)) is None
+    assert isinstance(Observability.create(ObservabilitySettings(enabled=True)), NoOpObservability)
