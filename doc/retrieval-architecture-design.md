@@ -4,11 +4,10 @@
 `tarnrag/retrieval/components/` (`retriever.py` = `RetrievalContext` + dense/sparse `Retriever`s;
 `fuser.py` = identity/RRF; `merger.py` = `AutoMerger`; `reranker.py` = `CrossEncoderReranker`;
 `classifier.py`), `retrieval/pipeline/` (`searcher.py`, `pipeline.py` = `RetrievalPipeline`, `router.py` =
-`RoutingRetrievalPipeline`), and `tarnrag/eval/`. The two earlier deviations are now **fixed** (see
-`doc/code-review-findings.md` 1.1 / 1.2): the RRF/identity fusers apply the mandatory `(score desc,
-chunk_id asc)` tie-break, and the license/scope filter is a **pre-filter inside the retrievers** —
-`dense_knn`/`sparse_search` take a `ChunkFilter` and over-fetch to backfill, so scoped queries no longer
-under-return.
+`RoutingRetrievalPipeline`), and `tarnrag/eval/`. Two early deviations have since been **fixed**: the
+RRF/identity fusers apply the mandatory `(score desc, chunk_id asc)` tie-break, and the license/scope
+filter is a **pre-filter inside the retrievers** — `dense_knn`/`sparse_search` take a `ChunkFilter` and
+over-fetch to backfill, so scoped queries no longer under-return.
 
 The second original ask: **compare retrieval methods**. Retrieval used to be dense-only (`embed →
 dense_knn → hydrate → assemble`) in one monolithic `RetrievalEngine.search`. This designed the seams so
