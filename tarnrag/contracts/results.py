@@ -27,6 +27,22 @@ class Candidate:
 
 
 @dataclass(frozen=True)
+class ChunkFilter:
+    """The permitted-chunk predicate a retriever applies (ModusQ §5.6): which chunks a query may see,
+    derived from its purpose + scope (via a ``LicensePolicy``). Passed into ``dense_knn`` / ``sparse_search``
+    so disallowed chunks are dropped *inside* the retriever (with over-fetch backfilling past them) rather
+    than after the ``top_k`` truncation — which would let a tight scope return fewer than ``top_k`` hits.
+
+    ``method_scope`` / ``license_classes`` ``None`` ⇒ unrestricted on that axis; an empty tuple ⇒ nothing
+    permitted. A ``MethodRef`` with no version matches any version of its method id."""
+
+    require_available: bool = True  # drop chunks with available = 0
+    require_grounding: bool = False  # drop ai_grounding_allowed = 0 (GENERATION_GROUNDING queries)
+    method_scope: tuple[MethodRef, ...] | None = None  # None ⇒ ALL (no scope restriction)
+    license_classes: tuple[str, ...] | None = None  # permitted license_class set; None ⇒ no class filter
+
+
+@dataclass(frozen=True)
 class ChunkRecord:
     """
     A hydrated chunk: canonical text + provenance + license, for result assembly.

@@ -15,8 +15,9 @@ from __future__ import annotations
 import os
 
 import pytest
+from sqlalchemy import insert
 
-from tarnrag.contracts import Chunk, ChunkProvenance, Document, Embedding, Span
+from tarnrag.contracts import Chunk, ChunkFilter, ChunkProvenance, Document, Embedding, MethodRef, Span
 
 PG_URL = os.environ.get("TARNRAG_TEST_POSTGRES_URL", "")
 pytestmark = [
@@ -77,6 +78,25 @@ async def test_dense_sparse_hydrate_roundtrip(pg_repo):
     assert recs[a].locator == "§6.4" and recs[a].ai_grounding_allowed is True
     assert recs[a].provenance.header_path == ["Safety"] and recs[a].provenance.level == 1
     assert recs[a].provenance.geometry[0].start == 5
+
+
+async def test_filter_drops_disallowed_and_scopes(pg_repo):
+    """The permitted-chunk filter (available / method scope) is applied inside dense + sparse with
+    over-fetch backfill — the Postgres side of finding 1.2."""
+    a, b = await _index(pg_repo)  # a = tank chunk, b = quokka chunk
+    async with pg_repo.engine.begin() as conn:
+        await conn.execute(pg_repo.chunks.update().where(pg_repo.chunks.c.chunk_id == b).values(available=0))
+        await conn.execute(insert(pg_repo.method_chunks), [{"method_id": "M1", "method_version": "v1", "chunk_id": a}])
+    # [0,1,0] is nearest the (now unavailable) quokka chunk -> available-only backfills to the tank chunk.
+    avail = await pg_repo.dense_knn([0.0, 1.0, 0.0], 5, ChunkFilter(require_available=True))
+    assert [c.chunk_id for c in avail] == [a]
+    # method scope restricts dense + sparse to the in-scope chunk only.
+    only_a = ChunkFilter(method_scope=(MethodRef("M1"),))
+    assert [c.chunk_id for c in await pg_repo.dense_knn([1.0, 0.0, 0.0], 5, only_a)] == [a]
+    assert [c.chunk_id for c in await pg_repo.sparse_search("tank", 5, only_a)] == [a]  # a in scope
+    assert await pg_repo.sparse_search("quokka", 5, only_a) == []  # b matches but is out of scope
+    # license-class axis: neither chunk is customer_licensed (both default public_domain) -> nothing permitted.
+    assert await pg_repo.dense_knn([1.0, 0.0, 0.0], 5, ChunkFilter(license_classes=("customer_licensed",))) == []
 
 
 async def test_delete_cascades(pg_repo):

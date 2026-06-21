@@ -11,23 +11,36 @@ from __future__ import annotations
 import asyncio
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from tarnrag.contracts import Candidate, RetrievalStore
+from tarnrag.contracts import Candidate, ChunkFilter, RetrievalStore
 from tarnrag.core.components import Component
 from tarnrag.core.resources.cross_encoder import CrossEncoder
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.retrieval.types import Query
 
+if TYPE_CHECKING:
+    from tarnrag.retrieval.components.license_policy import LicensePolicy
+
 
 @dataclass
 class RetrievalContext:
-    """The runtime resources retrieval components need at query time: the read store, the query
-    embedder, and (only when a reranker is configured) the cross-encoder model."""
+    """The runtime resources retrieval components need at query time: the read store, the query embedder,
+    the optional cross-encoder model (only when a reranker is configured), and the optional license policy
+    (the engine injects it when built from ``Settings``; ``None`` ⇒ no license-class filtering)."""
 
     store: RetrievalStore
     embedder: Embedder
     cross_encoder: CrossEncoder | None = None
+    license_policy: LicensePolicy | None = None
+
+    def filter_for(self, query: Query) -> ChunkFilter:
+        """The permitted-chunk filter for ``query`` — via the injected ``LicensePolicy`` (purpose →
+        license classes + availability / grounding / scope), or the policy-free baseline
+        (``Query.permitted_filter``) when no policy is configured."""
+        if self.license_policy is not None:
+            return self.license_policy.filter_for(query)
+        return query.permitted_filter()
 
 
 class Retriever(Component):
@@ -51,7 +64,7 @@ class DenseRetriever(Retriever):
 
     async def retrieve(self, query: Query, ctx: RetrievalContext) -> list[Candidate]:
         vec = await asyncio.to_thread(ctx.embedder.embed_query, query.text)
-        return await ctx.store.dense_knn(vec, query.dense_k)
+        return await ctx.store.dense_knn(vec, query.dense_k, ctx.filter_for(query))
 
 
 class SparseRetriever(Retriever):
@@ -63,4 +76,4 @@ class SparseRetriever(Retriever):
     config: SparseRetriever.Config
 
     async def retrieve(self, query: Query, ctx: RetrievalContext) -> list[Candidate]:
-        return await ctx.store.sparse_search(query.text, query.sparse_k)
+        return await ctx.store.sparse_search(query.text, query.sparse_k, ctx.filter_for(query))

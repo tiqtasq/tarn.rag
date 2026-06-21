@@ -4,12 +4,14 @@ import pytest
 
 from tarnrag.contracts import IndexMeta
 from tarnrag.contracts import (
-    Chunk, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef, RetrievalResult,
+    Candidate, Chunk, ChunkFilter, ChunkProvenance, ChunkRecord, Document, Embedding, MethodRef,
+    RetrievalResult,
 )
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings
+from tarnrag.retrieval.components.fuser import IdentityFuser, RRFFuser
 from tarnrag.retrieval import (
-    AutoMerger, CrossEncoderReranker, Query, RetrievalContext, RetrievalEngine, RetrievalError,
-    RetrievalPipeline,
+    AutoMerger, CrossEncoderReranker, DefaultLicensePolicy, Query, RetrievalContext, RetrievalEngine,
+    RetrievalError, RetrievalPipeline,
 )
 from tarnrag.retrieval.types import Purpose
 
@@ -170,15 +172,47 @@ async def test_filter_drops_unavailable_and_respects_grounding(repo):
     assert await engine.search(Query(text="tank", top_k=5, purpose=Purpose.GENERATION_GROUNDING)) == []
 
 
-def test_scope_filter_matches_methods():
-    rec = ChunkRecord(
-        chunk_id="c", text="t", document_id="d", source_kind="document",
-        standard_id=None, locator=None, license_class="public_domain", methods=[("M1", "v2")],
+def test_query_permitted_filter_maps_purpose_and_scope():
+    """The Query builds the permitted-chunk filter the retrievers pass to the store (the filtering moved
+    into the retrievers): available-only by default, grounding-required for GENERATION_GROUNDING, and the
+    method scope carried as a tuple (ALL -> None)."""
+    assert Query(text="x").permitted_filter() == ChunkFilter()  # EXECUTION + ALL -> available-only
+    assert Query(text="x", purpose=Purpose.GENERATION_GROUNDING).permitted_filter().require_grounding
+    assert Query(text="x").permitted_filter().method_scope is None  # ALL -> unrestricted
+    assert Query(text="x", scope=[MethodRef("M1")]).permitted_filter().method_scope == (MethodRef("M1"),)
+    assert Query(text="x").permitted_filter().license_classes is None  # the baseline applies no class filter
+
+
+def test_default_license_policy_maps_purpose_to_classes():
+    """The DefaultLicensePolicy maps purpose -> permitted license classes (ModusQ §5.6 default), never
+    permitting third_party_copyrighted, and folds in the query's grounding/scope via permitted_filter."""
+    pol = DefaultLicensePolicy(DefaultLicensePolicy.Config())
+    f = pol.filter_for(Query(text="x"))
+    assert "third_party_copyrighted" not in f.license_classes  # the safety net
+    assert "public_domain" in f.license_classes and "customer_licensed" in f.license_classes
+    assert pol.filter_for(Query(text="x", purpose=Purpose.GENERATION_GROUNDING)).require_grounding
+
+
+async def test_default_license_policy_excludes_third_party_copyrighted(repo):
+    """End-to-end: with the default policy (engine built from Settings), a third_party_copyrighted chunk is
+    never returned, while a shippable-class chunk is."""
+    await repo.write_index_meta(IndexMeta.build(_FakeEmbedder()))
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            Chunk(parent_doc_id="s1", content="open content", chunk_index=0, total_chunks=2,
+                  metadata={"license_class": "public_domain"}),
+            Chunk(parent_doc_id="s1", content="copyrighted content", chunk_index=1, total_chunks=2,
+                  metadata={"license_class": "third_party_copyrighted"}),
+        ],
     )
-    assert RetrievalPipeline._passes(rec, Query(text="x"))  # default scope ALL -> in scope
-    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1")]))  # version-agnostic
-    assert RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M1", "v2")]))  # exact version
-    assert not RetrievalPipeline._passes(rec, Query(text="x", scope=[MethodRef("M9")]))  # no match -> out
+    await repo.store_embeddings([
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+    ])
+    settings = Settings(_env_file=None)  # default components -> the default_license policy applies
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)), settings=settings)
+    assert [r.chunk_id for r in await engine.search(Query(text="content", top_k=5))] == [a]
 
 
 async def _index_tree(repo):
@@ -279,6 +313,30 @@ async def test_cross_encoder_reranker_requires_model_in_context():
         await CrossEncoderReranker(CrossEncoderReranker.Config()).rerank(
             Query(text="q"), [_result("a", -1.0)], RetrievalContext(store=None, embedder=None)
         )
+
+
+def test_rrf_fusion_tie_breaks_by_chunk_id():
+    """A fused-score tie must break by ``chunk_id`` ascending (ModusQ §5.5/§9), not by retriever /
+    insertion order — the determinism the future C++ parity contract relies on."""
+    # 'b' and 'a' earn identical RRF scores (each is rank 1 in one retriever, rank 2 in the other), but
+    # 'b' is inserted first (it heads the dense list). The tie-break must still order 'a' before 'b'.
+    per_retriever = {
+        "dense": [Candidate("b", rank=1, raw_score=0.9), Candidate("a", rank=2, raw_score=0.5)],
+        "sparse": [Candidate("a", rank=1, raw_score=8.0), Candidate("b", rank=2, raw_score=7.0)],
+    }
+    hits = RRFFuser(RRFFuser.Config()).fuse(per_retriever)
+    assert hits[0].score == hits[1].score  # genuinely tied -> only the tie-break decides the order
+    assert [h.chunk_id for h in hits] == ["a", "b"]
+
+
+def test_identity_fusion_orders_best_first():
+    """The identity passthrough returns best-first by score (= -rank) with the same deterministic order,
+    independent of the order candidates arrive in."""
+    per_retriever = {
+        "dense": [Candidate("z", rank=2, raw_score=0.1), Candidate("a", rank=1, raw_score=0.9)]
+    }
+    hits = IdentityFuser(IdentityFuser.Config()).fuse(per_retriever)
+    assert [h.chunk_id for h in hits] == ["a", "z"]  # rank 1 ('a') before rank 2 ('z'), not input order
 
 
 async def test_pipeline_reranks_with_cross_encoder(repo):

@@ -15,7 +15,7 @@ from tarnrag.contracts.dtos import (
 )
 from tarnrag.contracts.index_meta import IndexMeta
 from tarnrag.contracts.ports import ChunkStore, DocumentFactsSource, JobStatusSource, RetrievalStore
-from tarnrag.contracts.results import Candidate, ChunkRecord, RetrievalResult
+from tarnrag.contracts.results import Candidate, ChunkFilter, ChunkRecord, RetrievalResult
 from tarnrag.contracts.structure import (
     Annotation,
     ChunkProvenance,
@@ -55,6 +55,7 @@ __all__ = [
     "JobStatusSource",
     # results
     "Candidate",
+    "ChunkFilter",
     "ChunkRecord",
     "RetrievalResult",
     # index_meta

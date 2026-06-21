@@ -3,6 +3,11 @@
 A ``Fuser`` is a config-driven ``Component``. ``identity`` is the single-retriever passthrough (the flow
 stays uniform — always retrieve → fuse); ``rrf`` is Reciprocal Rank Fusion for hybrid retrieval. Each
 ``FusedHit`` keeps the per-retriever scores (``component_scores``) so the breakdown stays transparent.
+
+Both fusers return their hits best-first with a **deterministic tie-break** — by ``score`` descending,
+then ``chunk_id`` ascending (the ModusQ §5.5 / §9 contract). The tie-break is what makes identical inputs
+yield byte-identical orderings across runs and ports; without it, equal-score hits would fall back to
+dict / iteration order, which the future C++ port could not reproduce.
 """
 
 from __future__ import annotations
@@ -26,6 +31,14 @@ class FusedHit:
     component_scores: dict[str, float] = field(default_factory=dict)
 
 
+def _ranked(hits: list[FusedHit]) -> list[FusedHit]:
+    """Order fused hits best-first with the mandatory deterministic tie-break: ``score`` descending, then
+    ``chunk_id`` ascending (ModusQ §5.5 / §9). Equal-score hits are broken by id, not by input order, so
+    identical inputs yield identical orderings across runs and ports. The single home for the ordering
+    contract every ``Fuser`` returns."""
+    return sorted(hits, key=lambda h: (-h.score, h.chunk_id))
+
+
 class Fuser(Component):
     """Port: merge ``{retriever_name: candidates}`` into one ranked list of ``FusedHit``s (best first)."""
 
@@ -47,11 +60,13 @@ class IdentityFuser(Fuser):
     config: IdentityFuser.Config
 
     def fuse(self, per_retriever: dict[str, list[Candidate]]) -> list[FusedHit]:
-        return [
-            FusedHit(c.chunk_id, score=-float(c.rank), component_scores={name: c.raw_score})
-            for name, candidates in per_retriever.items()
-            for c in candidates
-        ]
+        return _ranked(
+            [
+                FusedHit(c.chunk_id, score=-float(c.rank), component_scores={name: c.raw_score})
+                for name, candidates in per_retriever.items()
+                for c in candidates
+            ]
+        )
 
 
 class RRFFuser(Fuser):
@@ -71,5 +86,6 @@ class RRFFuser(Fuser):
             for c in candidates:
                 scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + 1.0 / (self.config.k + c.rank)
                 components.setdefault(c.chunk_id, {})[name] = c.raw_score
-        ranked = sorted(scores, key=lambda cid: scores[cid], reverse=True)
-        return [FusedHit(cid, score=scores[cid], component_scores=components[cid]) for cid in ranked]
+        return _ranked(
+            [FusedHit(cid, score=s, component_scores=components[cid]) for cid, s in scores.items()]
+        )

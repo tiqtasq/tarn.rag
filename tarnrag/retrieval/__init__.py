@@ -16,6 +16,7 @@ from tarnrag.retrieval.components.classifier import (
 )
 from tarnrag.retrieval.engine.engine import RetrievalEngine, RetrievalError
 from tarnrag.retrieval.components.fuser import Fuser
+from tarnrag.retrieval.components.license_policy import DefaultLicensePolicy, LicensePolicy
 from tarnrag.retrieval.components.merger import AutoMerger, Merger
 from tarnrag.retrieval.pipeline.pipeline import RetrievalPipeline
 from tarnrag.retrieval.engine.retrieval_engine_protocol import RetrievalEngineProtocol
@@ -44,5 +45,7 @@ __all__ = [
     "AutoMerger",
     "Reranker",
     "CrossEncoderReranker",
+    "LicensePolicy",
+    "DefaultLicensePolicy",
     "RetrievalContext",
 ]

@@ -18,34 +18,51 @@ Severity legend: **[H]** worth doing soon · **[M]** worth doing · **[L]** cosm
 
 ## 1. Correctness / spec deviations (the bugs worth fixing)
 
-### 1.1 [H] RRF / identity fusion has no deterministic tie-break
-`RRFFuser.fuse` (`retrieval/components/fuser.py:74`) sorts `sorted(scores, key=lambda cid: scores[cid],
-reverse=True)` — score only. `IdentityFuser` doesn't tie-break either. The ModusQ spec makes a secondary
+### 1.1 [H] RRF / identity fusion has no deterministic tie-break — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): both fusers now route through a shared `_ranked` helper
+> that sorts `(score desc, chunk_id asc)`, so equal-score hits break by id rather than retriever/insertion
+> order. Covered by `test_rrf_fusion_tie_breaks_by_chunk_id` + `test_identity_fusion_orders_best_first`.
+
+`RRFFuser.fuse` (`retrieval/components/fuser.py:74`) sorted `sorted(scores, key=lambda cid: scores[cid],
+reverse=True)` — score only. `IdentityFuser` didn't tie-break either. The ModusQ spec makes a secondary
 `chunk_id asc` tie-break **mandatory** (`ModusQ_RetrievalSubsystemSpec.md` §5.5, §9) because it is the
-contract that makes the future C++ port return byte-identical orderings (R1). Today two chunks with equal
-fused score order by dict-insertion, i.e. retriever order — non-deterministic across runs/ports.
-- **Fix:** `sorted(scores, key=lambda cid: (-scores[cid], cid))`; same idea for the identity passthrough.
-- **No test** asserts ordering on a fused tie — add one.
+contract that makes the future C++ port return byte-identical orderings (R1). Two chunks with equal fused
+score used to order by dict-insertion, i.e. retriever order — non-deterministic across runs/ports.
+- **Fix applied:** `sorted(hits, key=lambda h: (-h.score, h.chunk_id))` via the shared `_ranked` helper.
 
-### 1.2 [H] License/scope filter is post-hydrate, not a pre-filter — scoped queries can under-return
-`RetrievalPipeline.search` over-fetches `dense_k`/`sparse_k` (default 50), fuses, hydrates, then drops
-disallowed chunks in `_passes` (`retrieval/pipeline/pipeline.py:76`). `dense_knn(query_vec, k)` /
-`sparse_search(query_text, k)` take **no filter argument** anywhere (`contracts/ports.py:93,98`,
-`sqlite.py`, `postgres.py`). ModusQ §5.4 requires the permitted-chunk filter applied *inside* the
-retriever **or** an over-fetch-until-enough fallback (`overfetch_factor`, default 4). Neither exists:
-a query scoped to a narrow method set whose in-scope chunks rank past the top-`k` pool returns fewer than
-`top_k` even when more in-scope chunks exist deeper in the index. Numerically correct for the common
-(mostly-permitted) case; a **recall bug** for tight scopes/licenses.
-- **Fix:** add a `filter`/predicate arg to `dense_knn`/`sparse_search` (pushed into the SQL), or an
-  over-fetch loop. Either way, update the now-false claim in CLAUDE.md and
-  `retrieval-architecture-design.md` §6 that "`dense_knn` already takes a `filter` arg."
+### 1.2 [H] License/scope filter is post-hydrate, not a pre-filter — scoped queries can under-return — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): the permitted-chunk filter moved **into the retrievers**.
+> `Query.permitted_filter()` builds a `ChunkFilter` (available / grounding / method-scope) that the
+> retrievers pass to `dense_knn` / `sparse_search` (now `(…, k, filter=None)`); each dialect applies it as
+> a SQL predicate and **over-fetches** (`DocumentRepository._overfetch`, ×4 window) until ≥ `k` permitted
+> hits or the index is exhausted, so a tight scope no longer under-returns. The post-hydrate `_passes` was
+> removed. On Postgres the filtered dense path also sets `ivfflat.probes = lists` (the ANN otherwise probes
+> one list and under-returns regardless of `LIMIT`). Tested on SQLite (`test_dense_knn_filter_backfills_*`,
+> scope, sparse) **and** live pgvector (`test_filter_drops_disallowed_and_scopes`). Per-purpose
+> `license_class` policy stays deferred → finding 1.3.
 
-### 1.3 [M] Per-purpose license-class policy is not enforced
-`_passes` enforces only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method
-scope. ModusQ §5.6 specifies a purpose → permitted-`license_class` map and that `third_party_copyrighted`
-is **never** returned by any purpose. As written, `EXECUTION`/`AUTHORING` apply no license-class filter and
-`third_party_copyrighted` is not categorically excluded. The docstring admits it's deferred — fine to
-defer, but it is a stated safety requirement; track it explicitly (a `LicensePolicy` seam).
+`RetrievalPipeline.search` used to over-fetch `dense_k`/`sparse_k`, fuse, hydrate, then drop disallowed
+chunks in `_passes`; `dense_knn` / `sparse_search` took **no filter argument**, so a query scoped to a
+narrow method set whose in-scope chunks ranked past the top-`k` pool returned fewer than `top_k` even when
+more in-scope chunks existed deeper in the index — numerically fine for the common (mostly-permitted) case,
+a **recall bug** for tight scopes/licenses (ModusQ §5.4 mandates the in-retriever pre-filter + over-fetch).
+- **Fix applied:** `ChunkFilter` + `dense_knn`/`sparse_search(…, filter)` + the shared `_overfetch` loop;
+  the false "`dense_knn` already takes a `filter` arg" claim in CLAUDE.md is now actually true.
+
+### 1.3 [M] Per-purpose license-class policy is not enforced — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes`): added a config-driven **`LicensePolicy`** seam
+> (`retrieval/components/license_policy.py`). `DefaultLicensePolicy` ships the ModusQ §5.6 map — every
+> purpose may see the four shippable classes and **`third_party_copyrighted` is never listed**, so it can
+> never be returned. The engine builds it from the `LICENSE_POLICY` spec in `Settings.components` (default
+> filled) and injects it via `RetrievalContext.filter_for`, which adds `license_classes` to the
+> `ChunkFilter`; both dialects filter `license_class IN (…)`. Deployments tune the per-purpose map (or swap
+> the policy) without touching the retrievers. Covered by a policy unit test, a store license-class test,
+> an engine end-to-end test (copyrighted chunk never returned), and the gated PG test.
+
+The old `_passes` enforced only `available`, `ai_grounding_allowed` (for `GENERATION_GROUNDING`), and method
+scope — `EXECUTION`/`AUTHORING` applied no license-class filter and `third_party_copyrighted` was not
+categorically excluded, despite ModusQ §5.6 requiring a purpose → permitted-`license_class` map with
+`third_party_copyrighted` never permitted. Now enforced via the `LicensePolicy` seam.
 
 ### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide
 `per_retriever = {r.config.class_name: candidates ...}` (`pipeline.py:61`). Two retrievers of the same
@@ -142,9 +159,9 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 
 | # | Sev | Area | One-line |
 |---|-----|------|----------|
-| 1.1 | H | retrieval | RRF/identity fusion lacks the mandatory `(score desc, chunk_id asc)` tie-break (C++ parity) |
-| 1.2 | H | retrieval | license/scope filter is post-hydrate with no over-fetch — scoped queries under-return |
-| 1.3 | M | retrieval | per-purpose license-class policy (§5.6) not enforced; `third_party_copyrighted` not excluded |
+| 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
+| 1.2 | H | retrieval | ✅ **Resolved** — filter moved into the retrievers (`ChunkFilter` + `dense_knn`/`sparse_search` filter arg + `_overfetch` backfill; PG `ivfflat.probes`) |
+| 1.3 | M | retrieval | ✅ **Resolved** — `LicensePolicy` seam (§5.6 default map; `third_party_copyrighted` never permitted) → `ChunkFilter.license_classes` |
 | 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
 | 2.1 | M | ingestion | extension→kind parsed in both the engine and `LoadAndParse` |
 | 2.2 | L | generation | evidence-accumulation dedup duplicated across two reasoners |

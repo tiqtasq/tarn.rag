@@ -27,7 +27,7 @@ import sqlite_vec
 from sqlalchemy import Text, event
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from tarnrag.contracts import Candidate, Chunk, ChunkRecord, Embedding
+from tarnrag.contracts import Candidate, Chunk, ChunkFilter, ChunkRecord, Embedding
 from tarnrag.storage.repository.base import DocumentRepository
 
 
@@ -139,40 +139,123 @@ class SqliteRepository(DocumentRepository):
             )
         return [e.chunk_id for e in embeddings]
 
-    async def dense_knn(self, query_vec: list[float], k: int) -> list[Candidate]:
+    async def dense_knn(
+        self, query_vec: list[float], k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """
         Exact KNN over ``vec_chunks`` (sqlite-vec), nearest first. Raw SQL: ``MATCH`` and the
         synthetic ``distance`` column are sqlite-vec's proprietary query API (see module docstring).
+        With a ``filter`` the result is the ``k`` nearest *permitted* chunks: sqlite-vec picks its k
+        nearest before a join can filter, so we over-fetch a window, join ``chunks`` to drop disallowed
+        rows, and backfill (``_overfetch``, ModusQ §5.4).
         """
         q = sqlite_vec.serialize_float32(query_vec)
+        if filter is None:
+            async with self.engine.connect() as conn:
+                rows = (
+                    await conn.exec_driver_sql(
+                        "SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? "
+                        "ORDER BY distance LIMIT ?",
+                        (q, k),
+                    )
+                ).fetchall()
+            return [
+                Candidate(chunk_id=cid, rank=i + 1, raw_score=dist)
+                for i, (cid, dist) in enumerate(rows)
+            ]
+        where, params = self._chunk_filter_sql(filter, "c")
         async with self.engine.connect() as conn:
-            rows = (
-                await conn.exec_driver_sql(
-                    "SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? "
-                    "ORDER BY distance LIMIT ?",
-                    (q, k),
-                )
-            ).fetchall()
-        return [
-            Candidate(chunk_id=cid, rank=i + 1, raw_score=dist)
-            for i, (cid, dist) in enumerate(rows)
-        ]
+            total = (await conn.exec_driver_sql("SELECT count(*) FROM vec_chunks")).fetchone()[0]
 
-    async def sparse_search(self, query_text: str, k: int) -> list[Candidate]:
+            async def page(window: int) -> list[tuple[str, float]]:
+                return (
+                    await conn.exec_driver_sql(
+                        "SELECT v.chunk_id, v.distance FROM "
+                        "(SELECT chunk_id, distance FROM vec_chunks WHERE embedding MATCH ? "
+                        "ORDER BY distance LIMIT ?) v JOIN chunks c ON c.chunk_id = v.chunk_id "
+                        f"WHERE {where} ORDER BY v.distance",
+                        (q, window, *params),
+                    )
+                ).fetchall()
+
+            return await self._overfetch(k, total, page)
+
+    async def sparse_search(
+        self, query_text: str, k: int, filter: ChunkFilter | None = None
+    ) -> list[Candidate]:
         """§8 sparse retrieval over FTS5 ``fts_chunks`` (BM25, best first). Raw SQL: ``MATCH`` + the
-        ``bm25()`` rank are FTS5's query API. ``raw_score`` is the FTS5 BM25 value (lower = better)."""
+        ``bm25()`` rank are FTS5's query API. ``raw_score`` is the FTS5 BM25 value (lower = better).
+        A ``filter`` is applied as in :meth:`dense_knn` (over-fetch the top window, join ``chunks``, keep
+        permitted rows, backfill)."""
         match = self._fts_query(query_text)
         if not match:
             return []
+        if filter is None:
+            async with self.engine.connect() as conn:
+                rows = (
+                    await conn.exec_driver_sql(
+                        "SELECT chunk_id, bm25(fts_chunks) AS score FROM fts_chunks "
+                        "WHERE fts_chunks MATCH ? ORDER BY score LIMIT ?",
+                        (match, k),
+                    )
+                ).fetchall()
+            return [
+                Candidate(chunk_id=cid, rank=i + 1, raw_score=score)
+                for i, (cid, score) in enumerate(rows)
+            ]
+        where, params = self._chunk_filter_sql(filter, "c")
         async with self.engine.connect() as conn:
-            rows = (
-                await conn.exec_driver_sql(
-                    "SELECT chunk_id, bm25(fts_chunks) AS score FROM fts_chunks "
-                    "WHERE fts_chunks MATCH ? ORDER BY score LIMIT ?",
-                    (match, k),
+            total = (await conn.exec_driver_sql("SELECT count(*) FROM fts_chunks")).fetchone()[0]
+
+            async def page(window: int) -> list[tuple[str, float]]:
+                return (
+                    await conn.exec_driver_sql(
+                        "SELECT f.chunk_id, f.score FROM "
+                        "(SELECT chunk_id, bm25(fts_chunks) AS score FROM fts_chunks "
+                        "WHERE fts_chunks MATCH ? ORDER BY score LIMIT ?) f "
+                        "JOIN chunks c ON c.chunk_id = f.chunk_id "
+                        f"WHERE {where} ORDER BY f.score",
+                        (match, window, *params),
+                    )
+                ).fetchall()
+
+            return await self._overfetch(k, total, page)
+
+    @staticmethod
+    def _chunk_filter_sql(filter: ChunkFilter, alias: str) -> tuple[str, list]:
+        """Build the permitted-chunk ``WHERE`` fragment + params for ``filter`` over the ``chunks`` row
+        aliased ``alias`` (used in the over-fetch join). Returns ``("1", [])`` when nothing is restricted;
+        an empty ``method_scope`` yields ``"0"`` (nothing permitted). The SQLite (raw-SQL) counterpart of
+        ``PostgresRepository._chunk_filter_condition``."""
+        clauses: list[str] = []
+        params: list = []
+        if filter.require_available:
+            clauses.append(f"{alias}.available = 1")
+        if filter.require_grounding:
+            clauses.append(f"{alias}.ai_grounding_allowed = 1")
+        if filter.license_classes is not None:
+            if not filter.license_classes:
+                clauses.append("0")  # empty permitted set -> nothing permitted
+            else:
+                placeholders = ", ".join("?" * len(filter.license_classes))
+                clauses.append(f"{alias}.license_class IN ({placeholders})")
+                params.extend(filter.license_classes)
+        if filter.method_scope is not None:
+            if not filter.method_scope:
+                clauses.append("0")  # empty scope -> nothing permitted
+            else:
+                ors: list[str] = []
+                for ref in filter.method_scope:
+                    if ref.method_version is None:
+                        ors.append("method_id = ?")
+                        params.append(ref.method_id)
+                    else:
+                        ors.append("(method_id = ? AND method_version = ?)")
+                        params.extend([ref.method_id, ref.method_version])
+                clauses.append(
+                    f"{alias}.chunk_id IN (SELECT chunk_id FROM method_chunks WHERE {' OR '.join(ors)})"
                 )
-            ).fetchall()
-        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=score) for i, (cid, score) in enumerate(rows)]
+        return (" AND ".join(clauses) if clauses else "1", params)
 
     @staticmethod
     def _fts_query(text: str) -> str:

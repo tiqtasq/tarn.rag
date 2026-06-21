@@ -12,18 +12,20 @@ from __future__ import annotations
 from typing import Any
 
 from tarnrag.core.components import ComponentFactory
-from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, Settings, get_settings
+from tarnrag.core.engine.config import LICENSE_POLICY, RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import IndexMeta, RetrievalResult
 from tarnrag.storage.repository import DocumentRepository
+from tarnrag.retrieval.components.license_policy import LicensePolicy
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.pipeline.searcher import Searcher
 from tarnrag.retrieval.types import Query
 
 _DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser
+_DEFAULT_LICENSE_POLICY: dict[str, Any] = {"class_name": "default_license"}  # ModusQ §5.6
 
 
 class RetrievalEngine(Engine):
@@ -40,13 +42,16 @@ class RetrievalEngine(Engine):
         embedder: Embedder,
         searcher: Searcher,
         cross_encoder: CrossEncoder | None = None,
+        license_policy: LicensePolicy | None = None,
     ):
-        """Pure data-holder: inject the resources (the read store + query embedder + an optional reranker)
-        and the pre-built ``Searcher``. Build from ``Settings`` via :meth:`open` / :meth:`create`."""
+        """Pure data-holder: inject the resources (the read store + query embedder + an optional reranker +
+        an optional license policy) and the pre-built ``Searcher``. Build from ``Settings`` via
+        :meth:`open` / :meth:`create`."""
         self.repository = repository
         self.embedder = embedder
         self._pipeline = searcher
         self._cross_encoder = cross_encoder
+        self._license_policy = license_policy
 
     @staticmethod
     def build_searcher(settings: Settings | None = None) -> Searcher:
@@ -54,6 +59,16 @@ class RetrievalEngine(Engine):
         fuser) — the retrieval analog of ``IngestionEngine.build_pipeline``."""
         spec = settings.components.get(RETRIEVAL_PIPELINE) if settings is not None else None
         return ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, Searcher)
+
+    @staticmethod
+    def build_license_policy(settings: Settings | None = None) -> LicensePolicy | None:
+        """Build the ``LicensePolicy`` from the ``LICENSE_POLICY`` spec (default: the ModusQ §5.6
+        ``default_license`` map). ``None`` for a settings-less ``open`` — the low-level seam applies no
+        license-class filter (matching the cross-encoder's settings-less behavior)."""
+        if settings is None:
+            return None
+        spec = settings.components.get(LICENSE_POLICY, _DEFAULT_LICENSE_POLICY)
+        return ComponentFactory.get().create_as(spec, LicensePolicy)
 
     @classmethod
     async def open(
@@ -71,7 +86,10 @@ class RetrievalEngine(Engine):
         # The cross-encoder's model loads lazily, so building it here is cheap; it stays unused unless the
         # configured pipeline has a reranker (a settings-less ``open`` has none).
         cross_encoder = OnnxCrossEncoder.create(settings.rerank) if settings is not None else None
-        return cls(repository, embedder, cls.build_searcher(settings), cross_encoder)
+        return cls(
+            repository, embedder, cls.build_searcher(settings), cross_encoder,
+            cls.build_license_policy(settings),
+        )
 
     @classmethod
     async def create(
@@ -94,9 +112,9 @@ class RetrievalEngine(Engine):
         return await cls.open(repository, embedder, settings)
 
     async def search(self, query: Query) -> list[RetrievalResult]:
-        """Run the configured retrieval pipeline (retrieve → fuse → hydrate → filter → merge → rerank →
-        top_k → assemble)."""
-        ctx = RetrievalContext(self.repository, self.embedder, self._cross_encoder)
+        """Run the configured retrieval pipeline (retrieve [license/scope pre-filter] → fuse → hydrate →
+        merge → rerank → top_k → assemble)."""
+        ctx = RetrievalContext(self.repository, self.embedder, self._cross_encoder, self._license_policy)
         return await self._pipeline.search(query, ctx)
 
     async def search_text(
