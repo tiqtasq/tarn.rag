@@ -174,11 +174,10 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 - **[L]** Doc/code drift is itself a smell: CLAUDE.md + `FUNCTIONAL_REQUIREMENTS.md` describe the pre-reorg
   layout (`ingestion/stages/`, `core/embedder.py`, the metadata-bag chunk schema) and a non-existent
   `dense_knn` filter arg. Addressed in the doc-cleanup pass; noted here for completeness.
-- **[M] Stale `test-and-build.yml` workflow.** `.github/workflows/test-and-build.yml` builds a Docker image
-  from a **non-existent `Dockerfile`** and runs `pytest tests/unit` (**no such directory**) on `main`
-  push/PR — it cannot pass. Leftover from a service template; this is a library with no Docker image. Should
-  be **removed** (the real test/coverage job is `codecov.yml`) or rewritten to run the actual suite.
-  *(Discovered while wiring 4.1/4.2; left for a decision.)*
+- **[M] Stale `test-and-build.yml` workflow — ✅ removed.** It built a Docker image from a **non-existent
+  `Dockerfile`** and ran `pytest tests/unit` (**no such directory**) on `main` push/PR, so it could never
+  pass (leftover service template; this is a library with no Docker image). Deleted — the real test/coverage
+  job is `codecov.yml`.
 
 ---
 
