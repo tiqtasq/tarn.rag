@@ -42,13 +42,12 @@ from tarnrag.ingestion.engine.queue import (
     JobEnqueuer,
     PgQueuerJobQueue,
 )
+from tarnrag.ingestion.components.extraction.load_parse import infer_source_kind
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.ingestion.engine.worker import IngestionWorker
 from tarnrag.ingestion.engine.result_sink import create_sink_registry
 
 logger = logging.getLogger(__name__)
-
-_SOURCE_TYPES = {"pdf": "pdf", "txt": "text", "text": "text", "html": "html", "htm": "html"}
 
 
 class IngestionEngine(Engine):
@@ -193,7 +192,7 @@ class IngestionEngine(Engine):
                 content="",  # loaded by LoadAndParseStage
                 extra={
                     "source_path": path,
-                    "source_type": self._infer_source_type(path),
+                    "source_type": infer_source_kind(path),
                     "content_hash": sha256_file(path),  # dedup key (sha256 of the file bytes)
                     **({"extractor": extractor} if extractor else {}),
                 },
@@ -368,9 +367,6 @@ class IngestionEngine(Engine):
                 **extra,
             },
         )
-
-    def _infer_source_type(self, path: str) -> str:
-        return _SOURCE_TYPES.get(path.lower().rsplit(".", 1)[-1], "unknown")
 
     def _stage_stream(self, filename: str, source: BinaryIO) -> str:
         """Stream a binary file-like under a unique name (extension preserved so the loader
