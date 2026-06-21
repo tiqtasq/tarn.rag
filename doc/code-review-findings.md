@@ -64,12 +64,16 @@ scope — `EXECUTION`/`AUTHORING` applied no license-class filter and `third_par
 categorically excluded, despite ModusQ §5.6 requiring a purpose → permitted-`license_class` map with
 `third_party_copyrighted` never permitted. Now enforced via the `LicensePolicy` seam.
 
-### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide
-`per_retriever = {r.config.class_name: candidates ...}` (`pipeline.py:61`). Two retrievers of the same
-class (e.g. two `dense` with different `dense_k`, or two `sparse` over different fields) collide on the key;
-the later silently overwrites the earlier and its candidates vanish from fusion. Key by the unique
-`r.config.name or r.config.class_name` instead (the Component framework already supports per-instance
-`name`).
+### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-2`): `RetrievalPipeline._retriever_keys()` keys each retriever
+> by its configured `name` (else `class_name`), disambiguating duplicates with a `#n` suffix, so two
+> same-class retrievers no longer collide on one key (which dropped one's candidates from fusion). Covered
+> by `test_retriever_keys_disambiguate_duplicates`. The common single-class / uniquely-named case is
+> unchanged.
+
+`per_retriever = {r.config.class_name: candidates ...}` used to let two retrievers of the same class (e.g.
+two `dense`, or two `sparse` over different fields) collide on the key — the later silently overwrote the
+earlier and its candidates vanished from fusion.
 
 ---
 
@@ -162,7 +166,7 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
 | 1.2 | H | retrieval | ✅ **Resolved** — filter moved into the retrievers (`ChunkFilter` + `dense_knn`/`sparse_search` filter arg + `_overfetch` backfill; PG `ivfflat.probes`) |
 | 1.3 | M | retrieval | ✅ **Resolved** — `LicensePolicy` seam (§5.6 default map; `third_party_copyrighted` never permitted) → `ChunkFilter.license_classes` |
-| 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
+| 1.4 | M | retrieval | ✅ **Resolved** — retrievers keyed by `name`/`class_name` with `#n` disambiguation (`_retriever_keys`) |
 | 2.1 | M | ingestion | extension→kind parsed in both the engine and `LoadAndParse` |
 | 2.2 | L | generation | evidence-accumulation dedup duplicated across two reasoners |
 | 2.3 | L | framework | container build/`_ensure_children` boilerplate repeated (idiom, optional) |

@@ -132,6 +132,25 @@ async def test_pipeline_hybrid_fuses_dense_and_sparse(repo):
     assert results[0].provenance is not None  # provenance threaded through the read path
 
 
+def test_retriever_keys_disambiguate_duplicates():
+    """Two same-class retrievers must map to distinct keys, so neither's candidates are silently dropped
+    when building the per-retriever map; a configured `name` is honoured."""
+    pipe = RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense"}, {"class_name": "dense"}, {"class_name": "sparse"}]
+        )
+    )
+    pipe._ensure_children()
+    assert pipe._retriever_keys() == ["dense", "dense#1", "sparse"]  # duplicate disambiguated by suffix
+    named = RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense", "name": "primary"}, {"class_name": "dense", "name": "backup"}]
+        )
+    )
+    named._ensure_children()
+    assert named._retriever_keys() == ["primary", "backup"]  # explicit names used as-is
+
+
 async def test_engine_uses_configured_pipeline_spec(repo):
     cids = await _index(repo)
     settings = Settings(
