@@ -1,35 +1,65 @@
 [project]
 name = "tarn-rag"
 version = "0.1.0"
-description = "RAG ingestion pipeline — composable, DAG-based, database-agnostic"
+description = "Composable, DAG-based RAG ingestion + retrieval + generation engines"
+readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "tiqtasq" }]
+keywords = ["rag", "retrieval", "embeddings", "vector-search", "ingestion", "llm", "sqlite-vec", "pgvector"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Indexing",
+    "Typing :: Typed",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "pydantic>=2",
     "pydantic-settings>=2",
     "sqlalchemy>=2",
     "aiosqlite",
     "numpy",
-    "sqlite-vec",  # §8 retrieval index (dense KNN); also used by the build/tests
+    "sqlite-vec",  # §8 retrieval index (dense KNN) on the SQLite/embedded path
 ]
 
 [project.optional-dependencies]
-# Postgres/pgQueuer backends — not needed for the SQLite test path.
+# Postgres/pgQueuer backends — not needed for the SQLite/embedded path.
 postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
-onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # ONNX embedding pipeline (R4)
+onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # local ONNX embedding pipeline
 embeddings-api = ["httpx"]  # HTTP embedding-API backends (OpenAI / Voyage / Gemini)
 generation = ["anthropic"]  # the generation LanguageModel backend (Claude, official SDK)
-console = ["rich"]  # rich terminal UI for the interactive console (python -m tarnrag.console)
+console = ["rich"]  # the interactive console UI (the `tarnrag` command / python -m tarnrag.console)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 docling = ["docling"]  # high-fidelity layout-aware PDF extraction (heavy; pulls docling-core + models)
-dev = ["pytest", "pytest-asyncio", "httpx", "rich"]
+# Convenience: the common single-process / embedded runtime (local ONNX embedder, parsers, generation,
+# API embedders, console). Heavy / infra backends (postgres, queue, docling) stay opt-in.
+all = ["tarn-rag[onnx,parsers,embeddings-api,generation,console]"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx", "rich"]
+
+[project.scripts]
+# Interactive console REPL. Needs the `console` extra: pip install 'tarn-rag[console]'
+# (the wrapper exits with that hint instead of a raw ModuleNotFoundError when rich is absent).
+tarnrag = "tarnrag._cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tiqtasq-com/tarn.rag"
+Repository = "https://github.com/tiqtasq-com/tarn.rag"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]  # >=77 for PEP 639 SPDX `license` + `license-files`
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["tarnrag*"]
+
+[tool.setuptools.package-data]
+tarnrag = ["py.typed"]  # ship the PEP 561 marker so downstream type-checkers use our hints
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
