@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 
 from tarnrag.core.resources.llm import StaticLanguageModel
-from tarnrag.eval.benchmark_runner import MOTHRAG_PUBLISHED, format_comparison, run_benchmark
+from tarnrag.eval.benchmark_runner import (
+    MOTHRAG_PUBLISHED,
+    format_comparison,
+    format_sweep,
+    run_benchmark,
+    sweep_benchmark,
+)
 from tarnrag.eval.benchmarks import load_hotpotqa
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "hotpot_sample.json"
@@ -74,3 +80,20 @@ async def test_run_benchmark_end_to_end_offline():
     assert report.per_query[1].exact_match is False  # q2 gold "Rome" != canned
     table = format_comparison({"hotpotqa": report})
     assert "hotpotqa" in table and "0.781" in table  # rendered against MOTHRAG's published F1
+
+
+@requires_model
+async def test_sweep_benchmark_returns_a_report_per_reasoner():
+    """The Phase-0 reasoner sweep: each named reasoner is run over the same per-question passages and gets
+    its own aggregate report; the table renders against MOTHRAG's reference for the dataset."""
+    pytest.importorskip("onnxruntime")
+    pytest.importorskip("tokenizers")
+    items = load_hotpotqa(FIXTURE)
+    canned = '{"answer": "Eiffel Tower", "steps": [{"claim": "Tallest in Paris.", "cited": [1]}]}'
+    reports = await sweep_benchmark(items, StaticLanguageModel(canned), reasoners=["single_hop"])
+
+    assert set(reports) == {"single_hop"}
+    assert reports["single_hop"].n == 3
+    assert reports["single_hop"].per_query[0].token_f1 == 1.0  # q1 matches the canned answer
+    table = format_sweep("hotpotqa", reports)
+    assert "single_hop" in table and "0.781" in table  # MOTHRAG reference line for hotpotqa

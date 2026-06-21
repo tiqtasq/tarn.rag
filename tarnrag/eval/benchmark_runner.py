@@ -14,12 +14,21 @@ ensemble / bridge / ChainFilter) — but a baseline of where tarn.rag's current 
 from __future__ import annotations
 
 import tempfile
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import DatabaseSettings, Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmarks import BenchItem
-from tarnrag.eval.generation import GenEvalReport, _aggregate, _score
+from tarnrag.eval.generation import (
+    GenEvalReport,
+    _aggregate,
+    _score,
+    format_generation_reports,
+)
+from tarnrag.generation import GenerationContext, GenerationPipeline
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.retrieval.engine.engine import RetrievalEngine
@@ -34,13 +43,11 @@ MOTHRAG_PUBLISHED: dict[str, dict[str, float]] = {
 }
 
 
-async def run_benchmark(
-    items: list[BenchItem], llm: LanguageModel, *, settings: Settings | None = None
-) -> GenEvalReport:
-    """Answer each ``BenchItem`` over its own passages and return the aggregate generation report
-    (token-F1 / EM / grounded-rate / citation-coverage). ``llm`` is the injected reader; ``settings`` drives
-    the embedder + the ``GENERATION_PIPELINE`` spec (reasoner / grounding)."""
-    settings = settings or Settings(_env_file=None)
+@asynccontextmanager
+async def _eval_engines(settings: Settings) -> AsyncIterator[tuple[IngestionEngine, RetrievalEngine]]:
+    """One ephemeral SQLite store + one shared embedder + the ingestion/retrieval engines over it — the
+    substrate every benchmark question is ingested into and retrieved from (the store is cleared per
+    question by the caller). Disconnected on exit."""
     embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
     with tempfile.TemporaryDirectory() as tmp:
         repo = await DocumentRepository.create(
@@ -50,24 +57,64 @@ async def run_benchmark(
             await IngestionEngine.ensure_index_meta(repo, embedder)
             ingest = await IngestionEngine.create(settings, repository=repo, embedder=embedder)
             retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
-            generation = GenerationEngine.assemble(retrieval, llm, settings)
-            per_query = []
-            for item in items:
-                await _clear(ingest)
-                await ingest.ingest_content(
-                    [{"content": text, "title": title, "source_type": "text"} for title, text in item.passages]
-                )
-                result = await generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
-                per_query.append(_score(item.query, result))
-            return _aggregate(per_query)
+            yield ingest, retrieval
         finally:
             await repo.disconnect()  # idempotent dispose; shared by the engines (injected)
 
 
-async def _clear(ingest: IngestionEngine) -> None:
-    """Drop the previous question's passages so each question retrieves over only its own (distractor)."""
+async def _ingest_passages(ingest: IngestionEngine, item: BenchItem) -> None:
+    """Replace the store's contents with this question's passages — distractor isolation: each question
+    retrieves over only its own candidates."""
     for summary in await ingest.list_documents():
         await ingest.delete_document(summary.document_id)
+    await ingest.ingest_content(
+        [{"content": text, "title": title, "source_type": "text"} for title, text in item.passages]
+    )
+
+
+async def run_benchmark(
+    items: list[BenchItem], llm: LanguageModel, *, settings: Settings | None = None
+) -> GenEvalReport:
+    """Answer each ``BenchItem`` over its own passages and return the aggregate generation report
+    (token-F1 / EM / grounded-rate / citation-coverage). ``llm`` is the injected reader; ``settings`` drives
+    the embedder + the ``GENERATION_PIPELINE`` spec (reasoner / grounding)."""
+    settings = settings or Settings(_env_file=None)
+    async with _eval_engines(settings) as (ingest, retrieval):
+        generation = GenerationEngine.assemble(retrieval, llm, settings)
+        per_query = []
+        for item in items:
+            await _ingest_passages(ingest, item)
+            result = await generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
+            per_query.append(_score(item.query, result))
+        return _aggregate(per_query)
+
+
+async def sweep_benchmark(
+    items: list[BenchItem],
+    llm: LanguageModel,
+    *,
+    reasoners: list[str] | None = None,
+    settings: Settings | None = None,
+) -> dict[str, GenEvalReport]:
+    """Run several reasoners over the *same* per-question passages and score each — the Phase-0 config
+    comparison (``single_hop`` vs ``iterative`` vs ``decomposition``), reader + embedder held fixed and
+    grounding off (it's a reasoner comparison). Each question is ingested once and answered by every
+    reasoner over one shared ``GenerationContext``; returns one report per reasoner name."""
+    settings = settings or Settings(_env_file=None)
+    reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
+    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    factory = ComponentFactory.get()
+    async with _eval_engines(settings) as (ingest, retrieval):
+        ctx = GenerationContext(retrieval, llm)
+        pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
+        per_query: dict[str, list] = {name: [] for name in pipelines}
+        for item in items:
+            await _ingest_passages(ingest, item)
+            query = Query(text=item.query.text, purpose=item.query.purpose)
+            for name, pipeline in pipelines.items():
+                result = await pipeline.answer(query, ctx)
+                per_query[name].append(_score(item.query, result))
+        return {name: _aggregate(pq) for name, pq in per_query.items()}
 
 
 def format_comparison(reports: dict[str, GenEvalReport]) -> str:
@@ -93,6 +140,17 @@ def format_comparison(reports: dict[str, GenEvalReport]) -> str:
             f"{_avg(ems):>8.3f}{_avg(mems):>8.3f}{_avg(ems) - _avg(mems):>+8.3f}"
         )
     return "\n".join(lines)
+
+
+def format_sweep(dataset: str, reports: dict[str, GenEvalReport]) -> str:
+    """Render a reasoner sweep for one dataset: the per-reasoner metric table (one row each) + MOTHRAG's
+    published F1/EM for that dataset as the reference to beat."""
+    m = MOTHRAG_PUBLISHED.get(dataset, {})
+    ref = (
+        f"MOTHRAG ({dataset}, Llama-3.3-70B): "
+        f"F1={m.get('f1', float('nan')):.3f}  EM={m.get('em', float('nan')):.3f}"
+    )
+    return f"{format_generation_reports(reports)}\n\n{ref}"
 
 
 def _avg(xs: list[float]) -> float:

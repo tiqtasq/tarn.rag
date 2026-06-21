@@ -15,7 +15,13 @@ from tarnrag.eval.benchmarks import (
     load_hotpotqa_hf,
     load_musique,
 )
-from tarnrag.eval.benchmark_runner import MOTHRAG_PUBLISHED, format_comparison, run_benchmark
+from tarnrag.eval.benchmark_runner import (
+    MOTHRAG_PUBLISHED,
+    format_comparison,
+    format_sweep,
+    run_benchmark,
+    sweep_benchmark,
+)
 from tarnrag.eval.dataset import EvalQuery, EvalSet
 from tarnrag.eval.generation import (
     GenEvalQuery,
@@ -73,6 +79,8 @@ __all__ = [
     "LOADERS",
     "HF_LOADERS",
     "run_benchmark",
+    "sweep_benchmark",
     "format_comparison",
+    "format_sweep",
     "MOTHRAG_PUBLISHED",
 ]
