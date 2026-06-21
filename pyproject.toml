@@ -16,7 +16,6 @@ dependencies = [
 # Postgres/pgQueuer backends — not needed for the SQLite test path.
 postgres = ["asyncpg", "pgvector"]
 queue = ["pgqueuer"]
-api = ["fastapi", "uvicorn", "python-multipart"]  # multipart = file uploads
 onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # ONNX embedding pipeline (R4)
 embeddings-api = ["httpx"]  # HTTP embedding-API backends (OpenAI / Voyage / Gemini)
 generation = ["anthropic"]  # the generation LanguageModel backend (Claude, official SDK)

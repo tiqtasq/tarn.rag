@@ -31,17 +31,19 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 2
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # docling-core (test-only) lets the DoclingDocument -> StructuredDocument `_map` tests run in CI and
+        # cover the docling extractor's mapping; the heavy `docling` converter stays gated (skipped).
+        run: pip install -r requirements.txt docling-core
 
       - name: Set PYTHONPATH to repo root
         run: echo "PYTHONPATH=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
