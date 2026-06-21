@@ -41,11 +41,10 @@ GENERATION_PIPELINE = "generation_pipeline"
 
 class AppSettings(BaseModel):
     """
-    Process metadata (largely vestigial since the FastAPI layer moved out).
+    Process-level flags. (The FastAPI layer moved to tiqtasq.backend; only ``debug`` remains — it
+    gates the engine's debug-only surface, e.g. ``IngestionEngine.document_jobs``.)
     """
 
-    name: str = "RAG Ingestion"
-    version: str = "0.1.0"
     debug: bool = False
 
 

@@ -122,6 +122,18 @@ class Reasoner(Component):
                 out.append(i)
         return out
 
+    @staticmethod
+    def _accumulate(
+        evidence: list[RetrievalResult], seen: set[str], results: list[RetrievalResult]
+    ) -> None:
+        """Append ``results`` to ``evidence`` in order, skipping chunk ids already gathered — the
+        dedup multi-hop reasoners share as they pool passages across retrieval rounds. Mutates both
+        ``evidence`` and ``seen``."""
+        for r in results:
+            if r.chunk_id not in seen:
+                seen.add(r.chunk_id)
+                evidence.append(r)
+
 
 class SingleHopReasoner(Reasoner):
     """One retrieval round + one read — the MVP reasoner. Search → numbered passages → strict-JSON answer
@@ -172,10 +184,7 @@ class IterativeReasoner(Reasoner):
         search_query = query.text
         for hop in range(self.config.max_hops):
             results = await ctx.retrieval.search(replace(query, text=search_query, top_k=self.config.top_k))
-            for r in results:
-                if r.chunk_id not in seen:
-                    seen.add(r.chunk_id)
-                    evidence.append(r)
+            self._accumulate(evidence, seen, results)
             completion = await ctx.llm.complete(
                 Prompt(
                     system=_ITER_SYSTEM,
@@ -217,10 +226,7 @@ class DecompositionReasoner(Reasoner):
         seen: set[str] = set()
         for sub_question in await self._decompose(query.text, ctx):
             results = await ctx.retrieval.search(replace(query, text=sub_question, top_k=self.config.top_k))
-            for r in results:
-                if r.chunk_id not in seen:
-                    seen.add(r.chunk_id)
-                    evidence.append(r)
+            self._accumulate(evidence, seen, results)
         completion = await ctx.llm.complete(
             Prompt(
                 system=_READ_SYSTEM,

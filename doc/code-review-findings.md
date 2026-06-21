@@ -90,17 +90,25 @@ Previously `IngestionEngine._infer_source_type` + `_SOURCE_TYPES` and `LoadAndPa
 parsed the extension with different vocabularies (`text` vs `txt`; markdown unrecognized by the engine) for
 the same routing decision.
 
-### 2.2 [L] Evidence-accumulation dedup repeated across reasoners
-`IterativeReasoner.reason` and `DecompositionReasoner.reason` (`generation/components/reasoner.py:175,217`)
-both run the same `for r in results: if r.chunk_id not in seen: seen.add(...); evidence.append(...)`. A
-small shared `_accumulate(evidence, seen, results)` helper on `Reasoner` removes the repeat.
+### 2.2 [L] Evidence-accumulation dedup repeated across reasoners — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-l`): extracted `Reasoner._accumulate(evidence, seen, results)`;
+> `IterativeReasoner` and `DecompositionReasoner` both call it instead of repeating the dedup loop.
 
-### 2.3 [L] Container `_build_children` + nullable-field + `_ensure_children` boilerplate
-~7 containers (`RetrievalPipeline`, `RoutingRetrievalPipeline`, `GenerationPipeline`,
-`CascadingGroundingChecker`, `LoadAndParseStage`, `EnrichStage`, `Pipeline`) repeat the same shape:
-declare `self._x: T | None = None`, build in `_build_children`, call `_ensure_children()` first thing in
-the run method. It's a consistent, readable idiom — flagged only as a candidate for a tiny mixin if it
-grows further. Not worth churning now.
+`IterativeReasoner.reason` and `DecompositionReasoner.reason` both ran the same `for r in results: if
+r.chunk_id not in seen: seen.add(...); evidence.append(...)` pooling loop.
+
+### 2.3 [L] Container `_build_children` + nullable-field + `_ensure_children` boilerplate — ⏸️ WON'T-FIX (reviewed)
+> **Decision: keep** (2026-06-21). Reviewed all 8 containers (`Pipeline`, `RetrievalPipeline`,
+> `RoutingRetrievalPipeline`, `GenerationPipeline`, `CascadingGroundingChecker`, `ChunkStage`,
+> `EnrichStage`, `LoadAndParseStage`): their children are **heterogeneous** (lists / single / optional /
+> spec-keyed caches with different types + build logic), and the only shared mechanic (build-once + guard)
+> already lives in `Component._ensure_children` / `_build_children`. Any factoring (declarative
+> `{field: (key, type)}` map or a mixin) would lose the typed attributes and add reflection/indirection —
+> a net-negative abstraction, with no type-checker pain to relieve (CI runs ruff, not mypy). Left as the
+> consistent, readable idiom the finding itself recommended keeping.
+
+The repeated shape is a 2–4 line `__init__` that null-inits typed child fields + one `self._ensure_children()`
+call at the top of the run method — irreducible without harming readability.
 
 ---
 
@@ -120,10 +128,10 @@ have **no readers** — not `run_worker`, not the queue. (Retained rather than r
 `DocumentRepository.query_chunks` and `health_check` (`storage/repository/base.py:492,313`) are called by
 no source **and no test** today.
 
-### 3.3 [L] `AppSettings.name` / `AppSettings.version` unused; `api` extra vestigial
-Only `app.debug` is read. And the `api = [fastapi, uvicorn, python-multipart]` extra (`pyproject.toml:19`)
-has no consumer — the HTTP layer lives in **tiqtasq.backend**, and CLAUDE.md states "no HTTP layer here."
-Drop the extra (or document why it's kept).
+### 3.3 [L] `AppSettings.name` / `AppSettings.version` unused; `api` extra vestigial — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-l`): removed the unused `AppSettings.name` / `version` (only
+> `app.debug` is read), and dropped the vestigial `api` (`fastapi` / `uvicorn` / `python-multipart`) extra
+> from `pyproject.toml` — the HTTP layer lives in tiqtasq.backend (CLAUDE.md: "no HTTP layer here").
 
 ---
 
@@ -190,11 +198,11 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | 1.3 | M | retrieval | ✅ **Resolved** — `LicensePolicy` seam (§5.6 default map; `third_party_copyrighted` never permitted) → `ChunkFilter.license_classes` |
 | 1.4 | M | retrieval | ✅ **Resolved** — retrievers keyed by `name`/`class_name` with `#n` disambiguation (`_retriever_keys`) |
 | 2.1 | M | ingestion | ✅ **Resolved** — one shared `infer_source_kind`; the engine's markdown-blind `_SOURCE_TYPES` removed |
-| 2.2 | L | generation | evidence-accumulation dedup duplicated across two reasoners |
-| 2.3 | L | framework | container build/`_ensure_children` boilerplate repeated (idiom, optional) |
+| 2.2 | L | generation | ✅ **Resolved** — shared `Reasoner._accumulate` |
+| 2.3 | L | framework | ⏸️ **Won't-fix** — heterogeneous children; abstraction would be net-negative (reviewed) |
 | 3.1 | M | config | ⏸️ **Keep** — retained as the distributed-worker tuning config (decision) |
 | 3.2 | M | storage | ⏸️ **Keep** — `query_chunks` (documented read-surface) + `health_check` (infra) retained (decision) |
-| 3.3 | L | config/pkg | `AppSettings.name`/`version` unused; `api` extra vestigial |
+| 3.3 | L | config/pkg | ✅ **Resolved** — removed `AppSettings.name`/`version` + the vestigial `api` extra |
 | 4.1 | H | tests | ✅ **Resolved** — CI runs a `pgvector` service; `test_postgres.py` now covers `postgres.py` |
 | 4.2 | M | tests | ✅ **Resolved** — gated `test_pgqueuer.py` added; **caught + fixed** a real `QueueManager(driver)` bug |
 | 4.3 | L | tests | docling/html extractor coverage thin |
