@@ -64,23 +64,31 @@ scope — `EXECUTION`/`AUTHORING` applied no license-class filter and `third_par
 categorically excluded, despite ModusQ §5.6 requiring a purpose → permitted-`license_class` map with
 `third_party_copyrighted` never permitted. Now enforced via the `LicensePolicy` seam.
 
-### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide
-`per_retriever = {r.config.class_name: candidates ...}` (`pipeline.py:61`). Two retrievers of the same
-class (e.g. two `dense` with different `dense_k`, or two `sparse` over different fields) collide on the key;
-the later silently overwrites the earlier and its candidates vanish from fusion. Key by the unique
-`r.config.name or r.config.class_name` instead (the Component framework already supports per-instance
-`name`).
+### 1.4 [M] `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-2`): `RetrievalPipeline._retriever_keys()` keys each retriever
+> by its configured `name` (else `class_name`), disambiguating duplicates with a `#n` suffix, so two
+> same-class retrievers no longer collide on one key (which dropped one's candidates from fusion). Covered
+> by `test_retriever_keys_disambiguate_duplicates`. The common single-class / uniquely-named case is
+> unchanged.
+
+`per_retriever = {r.config.class_name: candidates ...}` used to let two retrievers of the same class (e.g.
+two `dense`, or two `sparse` over different fields) collide on the key — the later silently overwrote the
+earlier and its candidates vanished from fusion.
 
 ---
 
 ## 2. Duplication / DRY
 
-### 2.1 [M] Extension → kind is parsed in two layers
-`IngestionEngine._infer_source_type` + `_SOURCE_TYPES` (`ingestion/engine/engine.py:51,372`) sets
-`metadata['source_type']` from the file extension; `LoadAndParseStage._infer_kind` (`extraction/
-load_parse.py:107`) *also* parses the extension, then falls back to `metadata['source_type']`. Two
-extension parsers, two vocabularies (`text` vs `txt`), for the same routing decision. Consolidate on one
-(let the stage own kind detection, or have the engine pass a canonical kind the stage trusts).
+### 2.1 [M] Extension → kind is parsed in two layers — ✅ RESOLVED
+> **✅ Resolved** (`feature/code-review-fixes-2`): one shared `infer_source_kind(path)`
+> (`extraction/load_parse.py`) is now the single extension→kind parser, used by both `LoadAndParseStage`
+> (routing) and `IngestionEngine` (stamping `metadata['source_type']`). The engine's separate
+> `_infer_source_type` / `_SOURCE_TYPES` (a coarser, markdown-blind vocabulary that mapped `.md` →
+> `"unknown"`) is gone, so the two paths can't drift or disagree (e.g. on `.htm` / markdown).
+
+Previously `IngestionEngine._infer_source_type` + `_SOURCE_TYPES` and `LoadAndParseStage._infer_kind` each
+parsed the extension with different vocabularies (`text` vs `txt`; markdown unrecognized by the engine) for
+the same routing decision.
 
 ### 2.2 [L] Evidence-accumulation dedup repeated across reasoners
 `IterativeReasoner.reason` and `DecompositionReasoner.reason` (`generation/components/reasoner.py:175,217`)
@@ -98,16 +106,19 @@ grows further. Not worth churning now.
 
 ## 3. Dead / unused code
 
-### 3.1 [M] `WorkerSettings` is entirely unused
-`WorkerSettings(queue_timeout_seconds, concurrency)` + `Settings.worker` (`core/engine/config.py:125,172`)
-have **no readers** — not `run_worker`, not the queue. Either wire them into the distributed consume loop
-(their evident intent) or drop the class + field until the distributed path needs tuning. (Carried over
-from the previous review — still dead.)
+### 3.1 [M] `WorkerSettings` is entirely unused — ⏸️ KEEP (decision)
+> **Decision: keep** (2026-06-20). Left in place as the config home for the distributed consume loop's
+> future tuning (`queue_timeout_seconds` / `concurrency`), to be wired when that path is built out.
 
-### 3.2 [M] `query_chunks` and `health_check` have zero references
+`WorkerSettings(queue_timeout_seconds, concurrency)` + `Settings.worker` (`core/engine/config.py:125,172`)
+have **no readers** — not `run_worker`, not the queue. (Retained rather than removed.)
+
+### 3.2 [M] `query_chunks` and `health_check` have zero references — ⏸️ KEEP (decision)
+> **Decision: keep** (2026-06-20). `query_chunks` stays as the documented repository read-surface (FR doc);
+> `health_check` stays as conventional infra for a future readiness probe. Retained rather than removed.
+
 `DocumentRepository.query_chunks` and `health_check` (`storage/repository/base.py:492,313`) are called by
-no source **and no test**. Cover/use or remove (and drop `query_chunks` from any doc that lists it as the
-read surface).
+no source **and no test** today.
 
 ### 3.3 [L] `AppSettings.name` / `AppSettings.version` unused; `api` extra vestigial
 Only `app.debug` is read. And the `api = [fastapi, uvicorn, python-multipart]` extra (`pyproject.toml:19`)
@@ -162,12 +173,12 @@ given the gating, but the docling `_map` deserves a few more constructed-documen
 | 1.1 | H | retrieval | ✅ **Resolved** — fusion now applies the `(score desc, chunk_id asc)` tie-break (shared `_ranked`) + regression tests |
 | 1.2 | H | retrieval | ✅ **Resolved** — filter moved into the retrievers (`ChunkFilter` + `dense_knn`/`sparse_search` filter arg + `_overfetch` backfill; PG `ivfflat.probes`) |
 | 1.3 | M | retrieval | ✅ **Resolved** — `LicensePolicy` seam (§5.6 default map; `third_party_copyrighted` never permitted) → `ChunkFilter.license_classes` |
-| 1.4 | M | retrieval | `RetrievalPipeline` keys retrievers by `class_name` — duplicate-class configs collide |
-| 2.1 | M | ingestion | extension→kind parsed in both the engine and `LoadAndParse` |
+| 1.4 | M | retrieval | ✅ **Resolved** — retrievers keyed by `name`/`class_name` with `#n` disambiguation (`_retriever_keys`) |
+| 2.1 | M | ingestion | ✅ **Resolved** — one shared `infer_source_kind`; the engine's markdown-blind `_SOURCE_TYPES` removed |
 | 2.2 | L | generation | evidence-accumulation dedup duplicated across two reasoners |
 | 2.3 | L | framework | container build/`_ensure_children` boilerplate repeated (idiom, optional) |
-| 3.1 | M | config | `WorkerSettings` entirely unused |
-| 3.2 | M | storage | `query_chunks` / `health_check` have zero references |
+| 3.1 | M | config | ⏸️ **Keep** — retained as the distributed-worker tuning config (decision) |
+| 3.2 | M | storage | ⏸️ **Keep** — `query_chunks` (documented read-surface) + `health_check` (infra) retained (decision) |
 | 3.3 | L | config/pkg | `AppSettings.name`/`version` unused; `api` extra vestigial |
 | 4.1 | H | tests | Postgres adapter 0% coverage (skipped without a live DB) |
 | 4.2 | M | tests | pgQueuer adapter path untested (in-memory only) |

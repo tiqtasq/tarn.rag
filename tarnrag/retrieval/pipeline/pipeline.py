@@ -58,7 +58,7 @@ class RetrievalPipeline(Searcher):
     async def search(self, query: Query, ctx: RetrievalContext) -> list[RetrievalResult]:
         self._ensure_children()
         lists = await asyncio.gather(*(r.retrieve(query, ctx) for r in self._retrievers))
-        per_retriever = {r.config.class_name: candidates for r, candidates in zip(self._retrievers, lists)}
+        per_retriever = dict(zip(self._retriever_keys(), lists))
         # Candidates are already license/scope-filtered inside each retriever (over-fetched), so the
         # fused set is permitted; merge / rerank, then top_k.
         fused = self._fuser.fuse(per_retriever)
@@ -73,3 +73,17 @@ class RetrievalPipeline(Searcher):
         if self._reranker is not None:
             results = await self._reranker.rerank(query, results, ctx)
         return results[: query.top_k]
+
+    def _retriever_keys(self) -> list[str]:
+        """A distinct key per retriever (for the per-retriever candidate map + the fused
+        ``component_scores``): its configured ``name``, else its ``class_name``. Duplicates are
+        disambiguated with a ``#n`` suffix, so two same-class retrievers don't collide on one key and
+        silently drop one's candidates — the common (uniquely-named / single-class) case is unchanged."""
+        keys: list[str] = []
+        counts: dict[str, int] = {}
+        for r in self._retrievers:
+            base = r.config.name or r.config.class_name
+            n = counts.get(base, 0)
+            counts[base] = n + 1
+            keys.append(base if n == 0 else f"{base}#{n}")
+        return keys

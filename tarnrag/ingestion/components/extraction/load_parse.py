@@ -40,6 +40,14 @@ _DEFAULT_ROUTES: dict[str, dict[str, Any]] = {
 }
 
 
+def infer_source_kind(path: str | None) -> str:
+    """The routing key for a file path: its lower-cased extension (``txt`` / ``md`` / ``pdf`` / ``html`` /
+    …), or ``""`` when there's no path or extension. The **single** extension→kind parser — used both by
+    ``LoadAndParseStage`` (to route) and by ``IngestionEngine`` (to stamp ``metadata['source_type']``), so
+    the two can't drift to different vocabularies."""
+    return Path(path).suffix.lower().lstrip(".") if path else ""
+
+
 class LoadAndParseStage(PipelineStage):
     """Load + structured-parse a document, setting ``item.document`` + ``item.content = document.text``."""
 
@@ -71,7 +79,7 @@ class LoadAndParseStage(PipelineStage):
         self._ensure_children()
         md = item.metadata
         path = md.get("source_path")
-        source_kind = self._infer_kind(path) or md.get("source_type") or ""
+        source_kind = infer_source_kind(path) or md.get("source_type") or ""
         document = self._select(source_kind, md.get("extractor")).extract(
             Source(
                 source_id=md.get("source_id") or md.get("doc_id") or str(uuid.uuid4()),
@@ -102,8 +110,3 @@ class LoadAndParseStage(PipelineStage):
         if key not in self._built:
             self._built[key] = factory.create_as(dict(spec), Extractor)
         return self._built[key]
-
-    @staticmethod
-    def _infer_kind(path: str | None) -> str:
-        """The routing key from a file path: its extension (``txt``/``md``/``pdf``/``html``/…)."""
-        return Path(path).suffix.lower().lstrip(".") if path else ""
