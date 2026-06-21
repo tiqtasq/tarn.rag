@@ -65,6 +65,55 @@ def test_hf_record_normalizes_columns_to_a_bench_item():
     assert [t for t, _ in item.passages] == ["A", "B"]
 
 
+def test_2wiki_hf_record_cleans_messy_encoding():
+    """voidful/2WikiMultihopQA wraps titles in literal quotes, JSON-encodes the sentence list as a string,
+    and stores sent_id as a string — the cleaner normalizes all three to the _hotpot_item shape."""
+    from tarnrag.eval.benchmarks import _2wiki_hf_record, _hotpot_item
+
+    row = {
+        "question": "Who directed it?",
+        "answer": "Ada",
+        "context": [['"Film X"', '["Film X was directed by Ada.", "It came out in 1990."]'], ['"Other"', '["noise."]']],
+        "supporting_facts": [['"Film X"', "0"]],
+    }
+    rec = _2wiki_hf_record(row)
+    assert rec["context"] == [("Film X", ["Film X was directed by Ada.", "It came out in 1990."]), ("Other", ["noise."])]
+    assert rec["supporting_facts"] == [("Film X", 0)]
+    item = _hotpot_item(rec)
+    assert item.query.answer == "Ada"
+    assert item.query.supporting == ["Film X was directed by Ada."]  # gold sentence resolved
+
+
+def test_musique_item_carries_aliases_and_abstention():
+    from tarnrag.eval.benchmarks import _musique_item
+
+    row = {
+        "question": "Who is the spouse?",
+        "answer": "Miquette Giraudy",
+        "answer_aliases": ["Giraudy"],
+        "answerable": True,
+        "paragraphs": [
+            {"title": "A", "paragraph_text": "Gong is a band.", "is_supporting": True},
+            {"title": "B", "paragraph_text": "noise", "is_supporting": False},
+        ],
+    }
+    item = _musique_item(row)
+    assert item.query.answer == "Miquette Giraudy" and item.query.answer_aliases == ["Giraudy"]
+    assert item.query.answer_contains == ["Miquette Giraudy", "Giraudy"]  # aliases feed content-hit too
+    assert item.query.supporting == ["Gong is a band."] and item.query.should_abstain is False
+    # unanswerable -> should_abstain
+    assert _musique_item({"question": "q", "answer": "", "answerable": False, "paragraphs": []}).query.should_abstain
+
+
+def test_alias_scoring_takes_the_max():
+    """An answer matching an alias (not the primary gold) still scores a perfect F1/EM."""
+    from tarnrag.eval.generation import GenEvalQuery, GenerationResult, _score
+
+    q = GenEvalQuery(text="q", answer="Miquette Giraudy", answer_aliases=["Giraudy"])
+    scored = _score(q, GenerationResult(answer="Giraudy", abstained=False, grounded=True, evidence=[], proof=[]))
+    assert scored.exact_match is True and scored.token_f1 == 1.0
+
+
 @requires_model
 async def test_run_benchmark_end_to_end_offline():
     """Full distractor loop per question (ingest its passages → retrieve → answer → score), with a canned

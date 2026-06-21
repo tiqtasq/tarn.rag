@@ -35,12 +35,14 @@ from tarnrag.retrieval.types import Purpose, Query
 @dataclass
 class GenEvalQuery:
     """One labeled question. ``answer_contains`` (gold phrases) drives content-hit; ``answer`` (a gold
-    string) drives token-F1 / exact-match; ``should_abstain`` marks a question unanswerable from the
-    corpus; ``supporting`` (gold phrases) is what the answer's cited evidence should cover."""
+    string) drives token-F1 / exact-match — scored as the **max over ``answer`` + ``answer_aliases``** (the
+    SQuAD/MuSiQue protocol, where several gold strings are acceptable); ``should_abstain`` marks a question
+    unanswerable from the corpus; ``supporting`` (gold phrases) is what the answer's cited evidence covers."""
 
     text: str
     answer_contains: list[str] = field(default_factory=list)
     answer: str = ""
+    answer_aliases: list[str] = field(default_factory=list)
     should_abstain: bool = False
     supporting: list[str] = field(default_factory=list)
     query_type: str = ""
@@ -62,6 +64,7 @@ class GenEvalSet:
                     text=r["text"],
                     answer_contains=list(r.get("answer_contains", [])),
                     answer=r.get("answer", ""),
+                    answer_aliases=list(r.get("answer_aliases", [])),
                     should_abstain=bool(r.get("should_abstain", False)),
                     supporting=list(r.get("supporting", [])),
                     query_type=r.get("query_type", ""),
@@ -160,14 +163,15 @@ def _score(q: GenEvalQuery, result: GenerationResult) -> GenQueryReport:
     """Score one answered query. The answer metrics are only applicable to *answerable* queries (a wrong
     abstention then scores 0, since the refusal won't contain the gold phrases)."""
     answerable = not q.should_abstain
+    golds = [q.answer, *q.answer_aliases]  # several gold strings may be acceptable (SQuAD/MuSiQue: take the max)
     return GenQueryReport(
         text=q.text,
         abstained=result.abstained,
         abstention_correct=result.abstained == q.should_abstain,
         grounded=result.grounded,
         content_hit=content_hit(result.answer, q.answer_contains) if answerable and q.answer_contains else None,
-        token_f1=token_f1(result.answer, q.answer) if answerable and q.answer else None,
-        exact_match=exact_match(result.answer, q.answer) if answerable and q.answer else None,
+        token_f1=max(token_f1(result.answer, g) for g in golds) if answerable and q.answer else None,
+        exact_match=any(exact_match(result.answer, g) for g in golds) if answerable and q.answer else None,
         citation_coverage=citation_coverage(result, q.supporting) if q.supporting else None,
         query_type=q.query_type,
     )

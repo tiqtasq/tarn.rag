@@ -11,9 +11,11 @@ from tarnrag.eval.benchmarks import (
     LOADERS,
     BenchItem,
     load_2wiki,
+    load_2wiki_hf,
     load_hotpotqa,
     load_hotpotqa_hf,
     load_musique,
+    load_musique_hf,
 )
 from tarnrag.eval.benchmark_runner import (
     MOTHRAG_PUBLISHED,
@@ -75,7 +77,9 @@ __all__ = [
     "load_hotpotqa",
     "load_hotpotqa_hf",
     "load_2wiki",
+    "load_2wiki_hf",
     "load_musique",
+    "load_musique_hf",
     "LOADERS",
     "HF_LOADERS",
     "run_benchmark",

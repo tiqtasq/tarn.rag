@@ -95,36 +95,82 @@ def _hf_hotpot_record(r: dict) -> dict:
     }
 
 
+def _2wiki_hf_record(r: dict) -> dict:
+    """A ``voidful/2WikiMultihopQA`` row → the row-oriented record ``_hotpot_item`` expects. That repo's
+    encoding is messy: titles are wrapped in literal double-quotes, each paragraph's sentence list is a
+    JSON-encoded *string*, and ``sent_id`` is a string — so clean the quotes, ``json.loads`` the sentences,
+    and ``int`` the index."""
+
+    def title(t: str) -> str:
+        return t.strip().strip('"')
+
+    def sents(s: object) -> list[str]:
+        return json.loads(s) if isinstance(s, str) else list(s)
+
+    return {
+        "question": r["question"],
+        "answer": r["answer"],
+        "context": [(title(t), sents(s)) for t, s in r["context"]],
+        "supporting_facts": [(title(t), int(i)) for t, i in r["supporting_facts"]],
+    }
+
+
+def _musique_item(r: dict) -> BenchItem:
+    """One MuSiQue record → ``BenchItem``. ``paragraphs`` carry ``is_supporting``; ``answerable=False`` maps
+    to ``should_abstain``; ``answer_aliases`` (acceptable alternative golds) ride along for max-over scoring."""
+    paragraphs = r.get("paragraphs", [])
+    passages = [(p.get("title", ""), p.get("paragraph_text", "")) for p in paragraphs]
+    supporting = [p.get("paragraph_text", "") for p in paragraphs if p.get("is_supporting")]
+    answerable = r.get("answerable", True)
+    answer = r.get("answer", "") or ""
+    aliases = list(r.get("answer_aliases", []) or [])
+    return BenchItem(
+        query=GenEvalQuery(
+            text=r["question"],
+            answer=answer,
+            answer_aliases=aliases,
+            answer_contains=[] if _yes_no(answer) else ([answer, *aliases] if answer else []),
+            should_abstain=not answerable,
+            supporting=supporting,
+        ),
+        passages=passages,
+    )
+
+
 def load_musique(path: str | Path, *, limit: int | None = None) -> list[BenchItem]:
-    """MuSiQue (answerable) JSON Lines: one object per line —
-    ``{question, answer, answerable, paragraphs: [{title, paragraph_text, is_supporting}, …]}``.
-    Unanswerable items (in the full set) map to ``should_abstain``; supporting paragraphs drive coverage."""
+    """MuSiQue JSON Lines: one object per line —
+    ``{question, answer, answer_aliases, answerable, paragraphs: [{title, paragraph_text, is_supporting}, …]}``."""
     lines = [ln for ln in Path(path).read_text(encoding="utf-8").splitlines() if ln.strip()]
-    items: list[BenchItem] = []
-    for ln in lines[: limit or len(lines)]:
-        r = json.loads(ln)
-        paragraphs = r.get("paragraphs", [])
-        passages = [(p.get("title", ""), p.get("paragraph_text", "")) for p in paragraphs]
-        supporting = [p.get("paragraph_text", "") for p in paragraphs if p.get("is_supporting")]
-        answerable = r.get("answerable", True)
-        answer = r.get("answer", "") or ""
-        items.append(
-            BenchItem(
-                query=GenEvalQuery(
-                    text=r["question"],
-                    answer=answer,
-                    answer_contains=[] if _yes_no(answer) else ([answer] if answer else []),
-                    should_abstain=not answerable,
-                    supporting=supporting,
-                ),
-                passages=passages,
-            )
-        )
-    return items
+    return [_musique_item(json.loads(ln)) for ln in lines[: limit or len(lines)]]
+
+
+def load_2wiki_hf(split: str = "validation", *, limit: int | None = None) -> list[BenchItem]:
+    """2WikiMultiHopQA distractor from HuggingFace (``voidful/2WikiMultihopQA``). Streams the split and
+    normalizes the messy encoding (see ``_2wiki_hf_record``). Needs the ``datasets`` package."""
+    import itertools
+
+    from datasets import load_dataset
+
+    ds = load_dataset("voidful/2WikiMultihopQA", split=split, streaming=True)
+    rows = itertools.islice(ds, limit) if limit else ds
+    return [_hotpot_item(_2wiki_hf_record(r)) for r in rows]
+
+
+def load_musique_hf(split: str = "validation", *, limit: int | None = None) -> list[BenchItem]:
+    """MuSiQue from HuggingFace (``dgslibisey/MuSiQue``). Streams the split, keeps only **answerable**
+    questions (MOTHRAG reports F1/EM on the answerable benchmark), and builds the same items as the file
+    loader. Needs the ``datasets`` package."""
+    import itertools
+
+    from datasets import load_dataset
+
+    ds = (r for r in load_dataset("dgslibisey/MuSiQue", split=split, streaming=True) if r.get("answerable", True))
+    rows = itertools.islice(ds, limit) if limit else ds
+    return [_musique_item(r) for r in rows]
 
 
 # dataset name -> file loader (takes a downloaded path), for the CLI.
 LOADERS = {"hotpotqa": load_hotpotqa, "2wiki": load_2wiki, "musique": load_musique}
 
 # dataset name -> HuggingFace loader (no local file needed), for `--hf`.
-HF_LOADERS = {"hotpotqa": load_hotpotqa_hf}
+HF_LOADERS = {"hotpotqa": load_hotpotqa_hf, "2wiki": load_2wiki_hf, "musique": load_musique_hf}

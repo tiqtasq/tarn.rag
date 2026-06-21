@@ -13,8 +13,9 @@ ensemble / bridge / ChainFilter) — but a baseline of where tarn.rag's current 
 
 from __future__ import annotations
 
+import logging
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 
 from tarnrag.core.components import ComponentFactory
@@ -28,12 +29,26 @@ from tarnrag.eval.generation import (
     _score,
     format_generation_reports,
 )
-from tarnrag.generation import GenerationContext, GenerationPipeline
+from tarnrag.generation import GenerationContext, GenerationPipeline, GenerationResult
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 from tarnrag.retrieval.types import Query
 from tarnrag.storage.repository import DocumentRepository
+
+logger = logging.getLogger(__name__)
+
+
+async def _safe_answer(answer: Awaitable[GenerationResult]) -> GenerationResult:
+    """Await an answer, returning an empty result (scored as a miss) instead of crashing the whole sweep on a
+    single question's failure — a hard LLM error after retries, a context-length 400, etc. Failures are
+    logged so a high count is visible (they shouldn't be silently absorbed)."""
+    try:
+        return await answer
+    except Exception as e:
+        logger.warning("benchmark answer failed; scoring as empty: %s: %s", type(e).__name__, e)
+        return GenerationResult(answer="")
+
 
 # MOTHRAG's published F1 / EM (paper Table 1 + the EM line), Llama-3.3-70B reader, n=1000/dataset.
 MOTHRAG_PUBLISHED: dict[str, dict[str, float]] = {
@@ -84,7 +99,7 @@ async def run_benchmark(
         per_query = []
         for item in items:
             await _ingest_passages(ingest, item)
-            result = await generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
+            result = await _safe_answer(generation.answer(Query(text=item.query.text, purpose=item.query.purpose)))
             per_query.append(_score(item.query, result))
         return _aggregate(per_query)
 
@@ -112,7 +127,7 @@ async def sweep_benchmark(
             await _ingest_passages(ingest, item)
             query = Query(text=item.query.text, purpose=item.query.purpose)
             for name, pipeline in pipelines.items():
-                result = await pipeline.answer(query, ctx)
+                result = await _safe_answer(pipeline.answer(query, ctx))
                 per_query[name].append(_score(item.query, result))
         return {name: _aggregate(pq) for name, pq in per_query.items()}
 

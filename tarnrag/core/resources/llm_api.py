@@ -11,6 +11,7 @@ provider map.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
@@ -124,6 +125,8 @@ class OpenAILanguageModel(LanguageModel):
     PROVIDER = "openai"
     API_KEY_ENV = "OPENAI_API_KEY"
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    RETRY_STATUS = frozenset({429, 500, 502, 503, 504, 529})  # transient: rate-limit / overloaded / 5xx
+    RETRY_ATTEMPTS = 4
 
     def __init__(
         self,
@@ -158,13 +161,34 @@ class OpenAILanguageModel(LanguageModel):
             "max_tokens": prompt.max_tokens or self.default_max_tokens,
             "temperature": prompt.temperature,
         }
-        data = await self._post(f"{self._base_url}/chat/completions", body, self._headers())
+        data = await self._post_retrying(f"{self._base_url}/chat/completions", body, self._headers())
         choice = (data.get("choices") or [{}])[0]
         return Completion(
             text=(choice.get("message") or {}).get("content") or "",
             stop_reason=choice.get("finish_reason"),
             usage=self._usage_of(data.get("usage")),
         )
+
+    async def _post_retrying(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        """``_post`` with exponential backoff on transient failures (429 / 5xx / timeouts). Over a long batch
+        (e.g. the eval sweep — thousands of calls) a single transient error is near-certain, so retry rather
+        than lose the run; client errors (4xx) and the final attempt propagate."""
+        import httpx
+
+        delay = 1.0
+        for attempt in range(self.RETRY_ATTEMPTS):
+            last = attempt + 1 == self.RETRY_ATTEMPTS
+            try:
+                return await self._post(url, body, headers)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code not in self.RETRY_STATUS or last:
+                    raise
+            except (httpx.TimeoutException, httpx.TransportError):
+                if last:
+                    raise
+            await asyncio.sleep(delay)
+            delay *= 2
+        raise RuntimeError("unreachable: the retry loop returns or raises")  # pragma: no cover
 
     # ---------------- the one stubbable seam ----------------
 

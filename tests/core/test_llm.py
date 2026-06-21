@@ -111,6 +111,47 @@ def test_openai_defaults_base_url():
     assert OpenAILanguageModel(model="gpt-4o-mini")._base_url == "https://api.openai.com/v1"
 
 
+async def _no_sleep(*_a, **_k):
+    pass
+
+
+async def test_openai_retries_transient_errors(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)  # no real backoff wait
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    calls = {"n": 0}
+
+    async def flaky_post(url, body, headers):
+        calls["n"] += 1
+        if calls["n"] < 3:  # 429 twice, then succeed
+            req = httpx.Request("POST", url)
+            raise httpx.HTTPStatusError("rate limited", request=req, response=httpx.Response(429, request=req))
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    lm._post = flaky_post
+    out = await lm.complete(Prompt(user="hi"))
+    assert out.text == "ok" and calls["n"] == 3
+
+
+async def test_openai_does_not_retry_client_errors(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    calls = {"n": 0}
+
+    async def bad_post(url, body, headers):
+        calls["n"] += 1
+        req = httpx.Request("POST", url)
+        raise httpx.HTTPStatusError("bad request", request=req, response=httpx.Response(400, request=req))
+
+    lm._post = bad_post
+    with pytest.raises(httpx.HTTPStatusError):
+        await lm.complete(Prompt(user="hi"))
+    assert calls["n"] == 1  # 4xx is not retried
+
+
 def test_create_selects_anthropic():
     lm = LanguageModel.create(LLMSettings(api_key="k"))
     assert isinstance(lm, AnthropicLanguageModel) and lm.identity() == "anthropic:claude-sonnet-4-6"
