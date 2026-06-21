@@ -38,6 +38,27 @@ def test_mothrag_published_numbers_present():
     assert MOTHRAG_PUBLISHED["hotpotqa"]["f1"] == 0.781
 
 
+def test_hf_record_normalizes_columns_to_a_bench_item():
+    """A HuggingFace hotpot_qa row (column-oriented context/supporting_facts) normalizes to the same
+    record the JSON loader uses, then to a BenchItem (no network/`datasets` needed for the conversion)."""
+    from tarnrag.eval.benchmarks import _hf_hotpot_record, _hotpot_item
+
+    hf_row = {
+        "question": "Are A and B the same?",
+        "answer": "yes",
+        "context": {"title": ["A", "B"], "sentences": [["a0.", "a1."], ["b0."]]},
+        "supporting_facts": {"title": ["A"], "sent_id": [1]},
+    }
+    record = _hf_hotpot_record(hf_row)
+    assert record["context"] == [("A", ["a0.", "a1."]), ("B", ["b0."])]
+    assert record["supporting_facts"] == [("A", 1)]
+
+    item = _hotpot_item(record)
+    assert item.query.answer == "yes" and item.query.answer_contains == []  # yes/no -> no content-hit
+    assert item.query.supporting == ["a1."]  # gold sentence resolved by (title, sent_id)
+    assert [t for t, _ in item.passages] == ["A", "B"]
+
+
 @requires_model
 async def test_run_benchmark_end_to_end_offline():
     """Full distractor loop per question (ingest its passages → retrieve → answer → score), with a canned

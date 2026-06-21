@@ -23,6 +23,7 @@ openai = ["httpx"]  # OpenAI-compatible /chat/completions LLM backend (OpenAI / 
 console = ["rich"]  # rich terminal UI for the interactive console (python -m tarnrag.console)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 docling = ["docling"]  # high-fidelity layout-aware PDF extraction (heavy; pulls docling-core + models)
+benchmarks = ["datasets"]  # load the MOTHRAG benchmarks (HotpotQA/…) from HuggingFace for eval/benchmarks
 dev = ["pytest", "pytest-asyncio", "httpx", "rich"]
 
 [build-system]

@@ -152,7 +152,9 @@ class Settings(BaseSettings):
     ``DATABASE__DOCUMENT_URL``. The top-level fields keep their flat names.
     """
 
-    model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__")
+    # ``extra="ignore"`` so an unrecognized env var (a stale key from an older config, or a project's own
+    # custom var like a non-standard API-key name) doesn't crash ``get_settings()`` for the whole app.
+    model_config = SettingsConfigDict(env_file=".env", env_nested_delimiter="__", extra="ignore")
 
     # Execution mode for IngestionEngine. 'embedded' runs the whole pipeline in-process
     # (InMemory queue — no Postgres/pgQueuer needed); 'distributed' enqueues to pgQueuer.

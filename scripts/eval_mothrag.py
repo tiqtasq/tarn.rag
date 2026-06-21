@@ -23,12 +23,15 @@ import asyncio
 from tarnrag.core.engine.config import get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import format_comparison, run_benchmark
-from tarnrag.eval.benchmarks import LOADERS
+from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS
 
 
-async def _run(dataset: str, path: str, limit: int | None) -> None:
+async def _run(dataset: str, path: str | None, limit: int | None, hf: bool) -> None:
     settings = get_settings()
-    items = LOADERS[dataset](path, limit=limit)
+    if hf:
+        items = HF_LOADERS[dataset](limit=limit)  # streamed from HuggingFace — no local file
+    else:
+        items = LOADERS[dataset](path, limit=limit)
     print(
         f"running {len(items)} {dataset} questions "
         f"through reader={settings.llm.provider}:{settings.llm.model} …"
@@ -41,10 +44,17 @@ async def _run(dataset: str, path: str, limit: int | None) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run a MOTHRAG benchmark through tarn.rag's generation engine")
     parser.add_argument("dataset", choices=sorted(LOADERS), help="which benchmark")
-    parser.add_argument("path", help="path to the downloaded dataset file")
+    parser.add_argument("path", nargs="?", help="path to the downloaded dataset file (omit with --hf)")
+    parser.add_argument(
+        "--hf", action="store_true", help=f"stream from HuggingFace instead of a file ({sorted(HF_LOADERS)})"
+    )
     parser.add_argument("--limit", type=int, default=None, help="run only the first N questions")
     args = parser.parse_args(argv)
-    asyncio.run(_run(args.dataset, args.path, args.limit))
+    if args.hf and args.dataset not in HF_LOADERS:
+        parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
+    if not args.hf and not args.path:
+        parser.error("provide a dataset file path, or use --hf")
+    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf))
 
 
 if __name__ == "__main__":
