@@ -58,9 +58,12 @@ class LanguageModel(Resource):
         the provider's constructor. The provider map is local (single use) and the import lazy (it pulls
         the optional SDK). LLM construction is uniform, so — unlike ``Embedder.create`` — no per-provider
         ``create`` is needed; a provider with bespoke construction would reintroduce one."""
-        from tarnrag.core.resources.llm_api import AnthropicLanguageModel
+        from tarnrag.core.resources.llm_api import AnthropicLanguageModel, OpenAILanguageModel
 
-        providers: dict[str, type[LanguageModel]] = {"anthropic": AnthropicLanguageModel}
+        providers: dict[str, type[LanguageModel]] = {
+            "anthropic": AnthropicLanguageModel,
+            "openai": OpenAILanguageModel,  # OpenAI itself or any compatible endpoint (vLLM/Together/…)
+        }
         provider = providers.get(llm.provider)
         if provider is None:
             raise ValueError(f"unknown LLM provider {llm.provider!r}; choose from {sorted(providers)}")

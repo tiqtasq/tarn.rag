@@ -104,10 +104,12 @@ class LLMSettings(BaseModel):
     ``temperature`` / ``max_tokens`` are the defaults a ``Prompt`` may override per call.
     """
 
-    provider: Literal["anthropic"] = "anthropic"  # more backends add here + in ``LanguageModel.create``
+    # 'anthropic' (Claude SDK) | 'openai' (any OpenAI-compatible /chat/completions endpoint — set
+    # api_base_url to point at vLLM / Together / Groq / … e.g. for a Llama-3.3-70B reader).
+    provider: Literal["anthropic", "openai"] = "anthropic"
     model: str = "claude-sonnet-4-6"
-    api_key: str = ""  # falls back to ANTHROPIC_API_KEY
-    api_base_url: str = ""  # falls back to the SDK default endpoint
+    api_key: str = ""  # falls back to the provider's env var (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+    api_base_url: str = ""  # falls back to the provider's default endpoint
     api_timeout: float = 60.0
     max_tokens: int = 1024
     temperature: float = 0.0
