@@ -3,7 +3,7 @@
 **Goal:** SOTA-competitive multi-hop QA (MOTHRAG ≈ 68.3 avg F1; NeocorRAG ≈ 69 is the GPU/constrained-decoding
 ceiling) **without** trading away tarn.rag's differentiators (offline / layout-grade provenance / license
 filtering). **Method: measure first, then add by measured leverage.** The MOTHRAG gap analysis lives in
-`generation-architecture-design.md` §6; the eval harness is `scripts/eval_mothrag.py` (`tarnrag/eval/`).
+`generation-architecture-design.md` §6; the eval harness is `scripts/run_benchmarks.py` (`tarnrag/eval/`).
 
 ## Roadmap, by leverage (cheap → expensive)
 
@@ -42,7 +42,7 @@ worth it. Starting with the ensemble would be optimizing the unmeasured.
 ## Phase 0 — results (2026-06-22)
 
 ### Setup
-- **Harness:** `python scripts/eval_mothrag.py <dataset> --hf --limit 200 --sweep` (branch
+- **Harness:** `python scripts/run_benchmarks.py <dataset> --hf --limit 200 --sweep` (branch
   `feature/mothrag-phase0-sweep`, PR #71).
 - **Protocol:** *distractor*, n = 200 per dataset. Each question ingests only its own candidate passages
   (~10 HotpotQA/2Wiki, ~20 MuSiQue) into an isolated store, then retrieve → reason → answer; scored

@@ -152,6 +152,57 @@ async def test_openai_does_not_retry_client_errors(monkeypatch):
     assert calls["n"] == 1  # 4xx is not retried
 
 
+async def test_openai_retries_transport_errors_to_exhaustion(monkeypatch):
+    import httpx
+
+    monkeypatch.setattr("asyncio.sleep", _no_sleep)
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    calls = {"n": 0}
+
+    async def dead_post(url, body, headers):
+        calls["n"] += 1
+        raise httpx.ConnectError("name resolution failed", request=httpx.Request("POST", url))
+
+    lm._post = dead_post
+    with pytest.raises(httpx.ConnectError):  # a DNS/connect blip is retried, then propagates
+        await lm.complete(Prompt(user="hi"))
+    assert calls["n"] == OpenAILanguageModel.RETRY_ATTEMPTS
+
+
+async def test_openai_post_roundtrips_via_httpx():
+    """The real ``_post`` path (httpx) exercised end-to-end with a mock transport — no network."""
+    import json
+
+    import httpx
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["model"] == "m" and str(request.url) == "https://h/v1/chat/completions"
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    lm = OpenAILanguageModel(model="m", api_key="k", base_url="https://h/v1", client=client)
+    out = await lm.complete(Prompt(user="hi"))
+    assert out.text == "hi" and out.stop_reason == "stop"
+    assert out.usage == {"input_tokens": 2, "output_tokens": 1}
+    await client.aclose()
+
+
+def test_openai_http_lazily_builds_async_client():
+    import httpx
+
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    client = lm._http()
+    assert isinstance(client, httpx.AsyncClient)
+    assert lm._http() is client  # cached, built once
+
+
 def test_create_selects_anthropic():
     lm = LanguageModel.create(LLMSettings(api_key="k"))
     assert isinstance(lm, AnthropicLanguageModel) and lm.identity() == "anthropic:claude-sonnet-4-6"

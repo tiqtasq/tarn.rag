@@ -56,9 +56,10 @@ class EmbeddingSettings(BaseModel):
     """
 
     # Backend: 'onnx' = local ONNX (default, offline); 'openai' / 'voyage' / 'gemini' = HTTP embedding
-    # APIs (the ``embeddings-api`` extra). The provider + model + dimension are part of the index
+    # APIs (the ``embeddings-api`` extra); 'hash' = a deterministic model-free embedder for offline/CI/demos
+    # (no semantics — never for production). The provider + model + dimension are part of the index
     # fingerprint, so a locally-built index won't ``open()`` against an API embedder (and vice versa).
-    provider: Literal["onnx", "openai", "voyage", "gemini"] = "onnx"
+    provider: Literal["onnx", "openai", "voyage", "gemini", "hash"] = "onnx"
 
     model: str = "thenlper/gte-small"  # HF id (onnx) or API model name
     revision: str = ""  # onnx only (recorded in index_meta)

@@ -16,11 +16,28 @@ Scoring is token-F1 / exact-match (SQuAD-style) over ``GenEvalQuery.answer`` —
 
 from __future__ import annotations
 
+import itertools
 import json
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from tarnrag.eval.generation import GenEvalQuery
+
+
+def _hf_rows(repo: str, split: str, rows: Iterable[dict] | None, *, config: str | None = None) -> Iterable[dict]:
+    """The rows for an HF loader: the injected ``rows`` (tests pass synthetic rows — no network/``datasets``),
+    else a streamed ``load_dataset``."""
+    if rows is not None:
+        return rows
+    from datasets import load_dataset  # pragma: no cover - integration path (needs the datasets pkg + network)
+
+    args = (repo, config) if config else (repo,)  # pragma: no cover
+    return load_dataset(*args, split=split, streaming=True)  # pragma: no cover
+
+
+def _limited(rows: Iterable[dict], limit: int | None) -> Iterable[dict]:
+    return itertools.islice(rows, limit) if limit else rows
 
 
 @dataclass
@@ -70,18 +87,15 @@ def load_hotpotqa(path: str | Path, *, limit: int | None = None) -> list[BenchIt
 load_2wiki = load_hotpotqa
 
 
-def load_hotpotqa_hf(split: str = "validation", *, limit: int | None = None) -> list[BenchItem]:
+def load_hotpotqa_hf(
+    split: str = "validation", *, limit: int | None = None, rows: Iterable[dict] | None = None
+) -> list[BenchItem]:
     """HotpotQA distractor from HuggingFace (``hotpotqa/hotpot_qa``, config ``distractor``) — the reliable
     source, since the canonical ``curtis.ml.cmu.edu`` host is frequently down. Streams the split (so a
     ``limit`` fetches only what it needs) and normalizes the column-oriented HF rows to the JSON shape
     ``_hotpot_item`` consumes. Needs the ``datasets`` package (the ``benchmarks`` extra)."""
-    import itertools
-
-    from datasets import load_dataset
-
-    ds = load_dataset("hotpotqa/hotpot_qa", "distractor", split=split, streaming=True)
-    rows = itertools.islice(ds, limit) if limit else ds
-    return [_hotpot_item(_hf_hotpot_record(r)) for r in rows]
+    rows = _hf_rows("hotpotqa/hotpot_qa", split, rows, config="distractor")
+    return [_hotpot_item(_hf_hotpot_record(r)) for r in _limited(rows, limit)]
 
 
 def _hf_hotpot_record(r: dict) -> dict:
@@ -144,29 +158,24 @@ def load_musique(path: str | Path, *, limit: int | None = None) -> list[BenchIte
     return [_musique_item(json.loads(ln)) for ln in lines[: limit or len(lines)]]
 
 
-def load_2wiki_hf(split: str = "validation", *, limit: int | None = None) -> list[BenchItem]:
+def load_2wiki_hf(
+    split: str = "validation", *, limit: int | None = None, rows: Iterable[dict] | None = None
+) -> list[BenchItem]:
     """2WikiMultiHopQA distractor from HuggingFace (``voidful/2WikiMultihopQA``). Streams the split and
     normalizes the messy encoding (see ``_2wiki_hf_record``). Needs the ``datasets`` package."""
-    import itertools
-
-    from datasets import load_dataset
-
-    ds = load_dataset("voidful/2WikiMultihopQA", split=split, streaming=True)
-    rows = itertools.islice(ds, limit) if limit else ds
-    return [_hotpot_item(_2wiki_hf_record(r)) for r in rows]
+    rows = _hf_rows("voidful/2WikiMultihopQA", split, rows)
+    return [_hotpot_item(_2wiki_hf_record(r)) for r in _limited(rows, limit)]
 
 
-def load_musique_hf(split: str = "validation", *, limit: int | None = None) -> list[BenchItem]:
+def load_musique_hf(
+    split: str = "validation", *, limit: int | None = None, rows: Iterable[dict] | None = None
+) -> list[BenchItem]:
     """MuSiQue from HuggingFace (``dgslibisey/MuSiQue``). Streams the split, keeps only **answerable**
     questions (MOTHRAG reports F1/EM on the answerable benchmark), and builds the same items as the file
     loader. Needs the ``datasets`` package."""
-    import itertools
-
-    from datasets import load_dataset
-
-    ds = (r for r in load_dataset("dgslibisey/MuSiQue", split=split, streaming=True) if r.get("answerable", True))
-    rows = itertools.islice(ds, limit) if limit else ds
-    return [_musique_item(r) for r in rows]
+    rows = _hf_rows("dgslibisey/MuSiQue", split, rows)
+    answerable = (r for r in rows if r.get("answerable", True))
+    return [_musique_item(r) for r in _limited(answerable, limit)]
 
 
 # dataset name -> file loader (takes a downloaded path), for the CLI.

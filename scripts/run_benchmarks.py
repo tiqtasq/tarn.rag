@@ -1,14 +1,14 @@
-"""Run a MOTHRAG benchmark (HotpotQA / 2WikiMultiHopQA / MuSiQue, distractor) through tarn.rag's generation
-engine and print F1 / EM against MOTHRAG's published numbers.
+"""Run the multi-hop QA benchmarks (HotpotQA / 2WikiMultiHopQA / MuSiQue, distractor) through tarn.rag's
+generation engine and print F1 / EM against MOTHRAG's published numbers.
 
-Download the dataset file first (see ``tarnrag/eval/benchmarks.py`` for sources + formats), then point the
-reader at any OpenAI-compatible endpoint (e.g. a Llama-3.3-70B server, to match MOTHRAG's reader) via env::
+Stream the datasets from HuggingFace with ``--hf`` (no download), and point the reader at any
+OpenAI-compatible endpoint (e.g. a Llama-3.3-70B server, to match MOTHRAG's reader) via env::
 
     LLM__PROVIDER=openai \
     LLM__MODEL=meta-llama/Llama-3.3-70B-Instruct \
     LLM__API_BASE_URL=https://your-endpoint/v1 \
     LLM__API_KEY=sk-... \
-    python scripts/eval_mothrag.py hotpotqa /data/hotpot_dev_distractor_v1.json --limit 50
+    python scripts/run_benchmarks.py hotpotqa --hf --limit 200 --sweep
 
 Start with a small ``--limit`` to gauge cost/quality (one multi-hop answer is several LLM calls). The
 embedder + the GENERATION_PIPELINE (reasoner / grounding) are whatever Settings selects (env / .env). The

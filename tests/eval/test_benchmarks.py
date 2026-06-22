@@ -1,13 +1,10 @@
-"""The MOTHRAG benchmark harness: the HotpotQA-style loader (pure) and an end-to-end run over the real
-ingest → retrieve → generate → score loop, driven by a deterministic ``StaticLanguageModel`` (no API key).
-
-The end-to-end test needs the local ONNX embedder (gte-small) for ingestion + retrieval, so it's gated on
-the model being fetched — like the other ONNX-backed tests."""
+"""The benchmark harness: the loaders (pure) and an end-to-end run over the real ingest → retrieve →
+generate → score loop, driven by a deterministic ``StaticLanguageModel`` + the model-free ``hash`` embedder
+(so the whole loop runs offline, no API key and no ONNX download)."""
 
 from pathlib import Path
 
-import pytest
-
+from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.eval.benchmark_runner import (
     MOTHRAG_PUBLISHED,
@@ -16,13 +13,20 @@ from tarnrag.eval.benchmark_runner import (
     run_benchmark,
     sweep_benchmark,
 )
-from tarnrag.eval.benchmarks import load_hotpotqa
+from tarnrag.eval.benchmarks import (
+    load_2wiki_hf,
+    load_hotpotqa,
+    load_hotpotqa_hf,
+    load_musique,
+    load_musique_hf,
+)
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "hotpot_sample.json"
-MODEL_DIR = Path("models/gte-small")
-requires_model = pytest.mark.skipif(
-    not (MODEL_DIR / "model.onnx").exists(), reason="model not fetched (scripts/fetch_model.py)"
-)
+
+
+def _offline_settings() -> Settings:
+    """Settings whose embedder is the model-free ``hash`` backend — the eval loop runs with no ONNX model."""
+    return Settings(_env_file=None, embedding={"provider": "hash"})
 
 
 def test_load_hotpotqa_parses_passages_answer_and_supporting():
@@ -114,15 +118,13 @@ def test_alias_scoring_takes_the_max():
     assert scored.exact_match is True and scored.token_f1 == 1.0
 
 
-@requires_model
 async def test_run_benchmark_end_to_end_offline():
-    """Full distractor loop per question (ingest its passages → retrieve → answer → score), with a canned
-    LLM. The canned answer matches q1's gold, so its token-F1/EM are perfect; the others differ."""
-    pytest.importorskip("onnxruntime")
-    pytest.importorskip("tokenizers")
+    """Full distractor loop per question (ingest its passages → retrieve → answer → score), over the
+    model-free hash embedder + a canned LLM. The canned answer matches q1's gold (perfect F1/EM); others
+    differ. Runs in CI — no ONNX model, no API key."""
     items = load_hotpotqa(FIXTURE)
     canned = '{"answer": "Eiffel Tower", "steps": [{"claim": "The tallest structure in Paris.", "cited": [1]}]}'
-    report = await run_benchmark(items, StaticLanguageModel(canned))
+    report = await run_benchmark(items, StaticLanguageModel(canned), settings=_offline_settings())
 
     assert report.n == 3
     assert report.per_query[0].exact_match is True and report.per_query[0].token_f1 == 1.0  # q1 == canned
@@ -131,18 +133,77 @@ async def test_run_benchmark_end_to_end_offline():
     assert "hotpotqa" in table and "0.781" in table  # rendered against MOTHRAG's published F1
 
 
-@requires_model
 async def test_sweep_benchmark_returns_a_report_per_reasoner():
     """The Phase-0 reasoner sweep: each named reasoner is run over the same per-question passages and gets
     its own aggregate report; the table renders against MOTHRAG's reference for the dataset."""
-    pytest.importorskip("onnxruntime")
-    pytest.importorskip("tokenizers")
     items = load_hotpotqa(FIXTURE)
     canned = '{"answer": "Eiffel Tower", "steps": [{"claim": "Tallest in Paris.", "cited": [1]}]}'
-    reports = await sweep_benchmark(items, StaticLanguageModel(canned), reasoners=["single_hop"])
+    reports = await sweep_benchmark(
+        items, StaticLanguageModel(canned), reasoners=["single_hop"], settings=_offline_settings()
+    )
 
     assert set(reports) == {"single_hop"}
     assert reports["single_hop"].n == 3
     assert reports["single_hop"].per_query[0].token_f1 == 1.0  # q1 matches the canned answer
     table = format_sweep("hotpotqa", reports)
     assert "single_hop" in table and "0.781" in table  # MOTHRAG reference line for hotpotqa
+
+
+def test_hf_loaders_map_injected_rows():
+    """The HF loaders' mapping / filtering / limit logic, exercised with injected rows (no network / no
+    ``datasets``). The ``load_dataset`` call itself is the only integration-only line."""
+    hp = load_hotpotqa_hf(
+        rows=[{
+            "question": "q", "answer": "a",
+            "context": {"title": ["T"], "sentences": [["s0.", "s1."]]},
+            "supporting_facts": {"title": ["T"], "sent_id": [1]},
+        }]
+    )
+    assert hp[0].query.answer == "a" and hp[0].query.supporting == ["s1."]
+
+    tw = load_2wiki_hf(rows=[{
+        "question": "q", "answer": "a",
+        "context": [['"T"', '["s0."]']], "supporting_facts": [['"T"', "0"]],
+    }])
+    assert tw[0].query.supporting == ["s0."]  # the messy 2Wiki encoding is cleaned
+
+    mq_rows = [
+        {"question": "q1", "answer": "a1", "answerable": True, "paragraphs": [{"title": "A", "paragraph_text": "p", "is_supporting": True}]},
+        {"question": "q2", "answer": "", "answerable": False, "paragraphs": []},
+        {"question": "q3", "answer": "a3", "answerable": True, "paragraphs": []},
+    ]
+    assert [it.query.text for it in load_musique_hf(rows=mq_rows)] == ["q1", "q3"]  # unanswerable filtered
+    assert len(load_musique_hf(rows=mq_rows, limit=1)) == 1  # limit
+
+
+def test_load_musique_file(tmp_path):
+    """The MuSiQue JSON-Lines file loader."""
+    import json as _json
+
+    rows = [
+        {"question": "q1", "answer": "a1", "answerable": True,
+         "paragraphs": [{"title": "A", "paragraph_text": "p", "is_supporting": True}]},
+        {"question": "q2", "answer": "a2", "answerable": True, "paragraphs": []},
+    ]
+    path = tmp_path / "musique.jsonl"
+    path.write_text("\n".join(_json.dumps(r) for r in rows), encoding="utf-8")
+    items = load_musique(str(path))
+    assert [it.query.text for it in items] == ["q1", "q2"]
+    assert items[0].query.supporting == ["p"]
+    assert len(load_musique(str(path), limit=1)) == 1
+
+
+async def test_safe_answer_guards_failures():
+    """A per-question failure yields an empty result (scored a miss) instead of crashing the sweep; a
+    success passes through."""
+    from tarnrag.eval.benchmark_runner import _safe_answer
+    from tarnrag.generation import GenerationResult
+
+    async def boom() -> GenerationResult:
+        raise RuntimeError("llm down")
+
+    async def ok() -> GenerationResult:
+        return GenerationResult(answer="hi")
+
+    assert (await _safe_answer(boom())).answer == ""
+    assert (await _safe_answer(ok())).answer == "hi"

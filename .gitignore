@@ -3,6 +3,7 @@ models/
 *.db
 index.db
 uploads/
+doc/main.pdf  # the MOTHRAG paper — kept locally for reference, not committed
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
