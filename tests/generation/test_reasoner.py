@@ -2,8 +2,11 @@
 
 import json
 
+import pytest
+
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import SingleHopReasoner
+from tarnrag.generation.components.reasoner import Reasoner
 from tarnrag.generation.context import GenerationContext
 from tarnrag.retrieval.types import Query
 
@@ -66,6 +69,30 @@ async def test_read_width_comes_from_config_top_k(make_result, fake_retrieval):
     ctx = GenerationContext(fr, StaticLanguageModel(json.dumps({"answer": "ok"})))
     await _reasoner(top_k=3).reason(Query(text="q", top_k=99), ctx)
     assert fr.seen.top_k == 3  # the reasoner's config drives the read, not the caller's query.top_k
+
+
+@pytest.mark.parametrize(
+    "raw, clean",
+    [
+        ("The answer is Paris", "Paris"),
+        ("Answer: 1889", "1889"),
+        ('"Eiffel Tower"', "Eiffel Tower"),
+        ("Final answer: yes", "yes"),
+        ("Eiffel Tower", "Eiffel Tower"),  # already minimal — untouched
+        ("Apply a coating.", "Apply a coating."),  # trailing punctuation left to the scorer
+        ("answer", "answer"),  # bare word (no 'is'/':') is not stripped
+    ],
+)
+def test_clean_answer_strips_leadins_and_quotes(raw, clean):
+    assert Reasoner._clean_answer(raw) == clean
+
+
+async def test_reason_applies_short_answer_extraction(make_result, fake_retrieval):
+    """The reasoner trims the model's lead-in so the answer is the span (what token-F1/EM score)."""
+    results = [make_result("a", "x")]
+    reply = json.dumps({"answer": "The answer is Paris", "steps": [{"claim": "c", "cited": [1]}]})
+    out = await _reasoner().reason(Query(text="q"), _ctx(fake_retrieval(results), reply))
+    assert out.answer == "Paris"
 
 
 async def test_numbered_passages_and_header_label_in_the_prompt(make_result, fake_retrieval):

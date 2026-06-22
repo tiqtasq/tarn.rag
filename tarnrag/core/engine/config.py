@@ -214,9 +214,14 @@ class Settings(BaseSettings):
                 "fuser": {"class_name": "identity"},
             },
         )
-        # The generation composition: single-hop reason + grounding + provenance assembler by default
-        # (the component owns the detailed defaults). Present so consumers read it directly, like the others.
-        self.components.setdefault(GENERATION_PIPELINE, {"class_name": "generation_pipeline"})
+        # The generation composition: a decomposition reasoner + provenance assembler by default. Phase 0
+        # (doc/phases.md) found decomposition best on average across HotpotQA/2Wiki/MuSiQue; it costs more
+        # LLM calls than single_hop (decompose + per-sub-question retrieval + synthesis) — set
+        # ``reasoner.class_name`` to ``single_hop`` for the cheap one-call path.
+        self.components.setdefault(
+            GENERATION_PIPELINE,
+            {"class_name": "generation_pipeline", "reasoner": {"class_name": "decomposition"}},
+        )
         # The retrieval license policy (ModusQ §5.6 default): purpose → permitted license classes, with
         # third_party_copyrighted never permitted. Override the spec to tune the per-purpose map.
         self.components.setdefault(LICENSE_POLICY, {"class_name": "default_license"})

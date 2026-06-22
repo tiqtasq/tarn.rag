@@ -35,6 +35,14 @@ def test_unknown_env_vars_are_ignored_not_fatal(monkeypatch):
     assert s.embedding.model  # the real fields still load
 
 
+def test_default_generation_reasoner_is_decomposition():
+    """Phase 1: the shipped default generation pipeline uses the decomposition reasoner (best on average)."""
+    from tarnrag.core.engine.config import GENERATION_PIPELINE
+
+    spec = Settings(_env_file=None).components[GENERATION_PIPELINE]
+    assert spec["reasoner"]["class_name"] == "decomposition"
+
+
 def test_kwargs_override_nested():
     s = Settings(_env_file=None, embedding={"model": "k"}, EMBEDDING_DIMENSION=128)
     assert s.embedding.model == "k"

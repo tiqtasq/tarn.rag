@@ -64,6 +64,16 @@ async def test_iterative_stops_at_the_hop_budget(make_result):
     assert len(retrieval.queries) == 1 and len(out.evidence) == 1  # forced to answer at the budget
 
 
+async def test_iterative_cleans_the_answer(make_result):
+    a = make_result("a", "Alpha.")
+    retrieval = _RoutedRetrieval([("", [a])])
+    llm = _scripted(json.dumps({"done": True, "answer": "The answer is alpha", "steps": [{"claim": "c", "cited": [1]}]}))
+    out = await IterativeReasoner(IterativeReasoner.Config()).reason(
+        Query(text="q"), GenerationContext(retrieval, llm)
+    )
+    assert out.answer == "alpha"  # the short-answer lead-in is stripped
+
+
 async def test_iterative_dedups_evidence_across_hops(make_result):
     a = make_result("a", "Alpha.")
     retrieval = _RoutedRetrieval([("", [a])])  # every hop retrieves the same chunk

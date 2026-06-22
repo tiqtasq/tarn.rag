@@ -16,6 +16,7 @@ The passage-formatting / cited-index parsing / read logic live on the base, so a
 
 from __future__ import annotations
 
+import re
 from abc import abstractmethod
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -46,15 +47,24 @@ class ReasonedAnswer:
 
 
 # The read prompt — answer using ONLY the numbered passages, citing per claim. Shared by the single-hop
-# read and the decomposition synthesis (both are "read these passages → answer + cited steps").
+# read and the decomposition synthesis (both are "read these passages → answer + cited steps"). The answer
+# is demanded as the MINIMAL span (multi-hop QA is scored by token-F1/EM against short gold answers — a
+# narrated sentence tanks both even when correct; see doc/phases.md Phase 0).
 _READ_SYSTEM = (
     "You are a careful technical assistant. Answer the question using ONLY the numbered passages "
     "provided; do not use outside knowledge. If the passages do not contain the answer, say so plainly.\n\n"
     "Reply with a SINGLE JSON object and nothing else:\n"
-    '{"answer": "<concise answer>", "steps": [{"claim": "<one supported statement>", '
+    '{"answer": "<shortest answer span>", "steps": [{"claim": "<one supported statement>", '
     '"cited": [<passage numbers this claim relies on>]}]}\n'
+    'Make "answer" the MINIMAL span that answers the question — a name, entity, number, date, or yes/no '
+    '(e.g. "Eiffel Tower", "1889", "yes"); no sentence, no explanation, no restating the question. Put '
+    "reasoning in the steps, not in the answer.\n"
     'Each claim\'s "cited" lists the 1-based passage numbers that support it; use only numbers shown.'
 )
+
+# A leading "the answer is …" / "answer:" the model sometimes prepends — stripped so it doesn't count as
+# answer tokens (surrounding quotes too). Trailing punctuation/articles are left to the scorer's normalization.
+_ANSWER_LEADIN = re.compile(r"^\s*(?:the\s+)?(?:final\s+)?answer(?:\s+is\b|\s*:)\s*", re.IGNORECASE)
 
 
 class Reasoner(Component):
@@ -85,13 +95,21 @@ class Reasoner(Component):
         return f"{result.locator} — " if result.locator else ""
 
     @staticmethod
+    def _clean_answer(answer: str) -> str:
+        """Trim a final answer toward its span: drop a leading 'the answer is …' / 'answer:' lead-in and any
+        surrounding quotes the model adds (multi-hop QA wants the minimal span, not a sentence). Trailing
+        punctuation / articles are left to the scorer's SQuAD normalization."""
+        a = answer.strip().strip('"').strip("'").strip()
+        return _ANSWER_LEADIN.sub("", a).strip() or a
+
+    @staticmethod
     def _read(text: str, n: int) -> tuple[str, list[ReasonedStep]]:
         """Parse a read reply ``{answer, steps:[{claim, cited}]}``; fall back to ``(text, cite-all)``."""
         data = extract_json(text)
         if not isinstance(data, dict) or "answer" not in data:
-            answer = text.strip()
+            answer = Reasoner._clean_answer(text)
             return answer, [ReasonedStep(claim=answer, cited=list(range(n)))]
-        answer = str(data.get("answer", "")).strip()
+        answer = Reasoner._clean_answer(str(data.get("answer", "")))
         return answer, Reasoner._parse_steps(data.get("steps"), answer, n)
 
     @staticmethod
@@ -158,9 +176,11 @@ _ITER_SYSTEM = (
     "You research a question over a corpus you can search in steps. Given the question and the passages "
     "gathered SO FAR (numbered), decide whether they suffice — use ONLY these passages.\n\n"
     "Reply with a SINGLE JSON object and nothing else:\n"
-    '{"done": <true|false>, "answer": "<answer, if done>", '
+    '{"done": <true|false>, "answer": "<shortest answer span, if done>", '
     '"follow_up": "<one focused search query, if not done>", '
     '"steps": [{"claim": "<supported statement>", "cited": [<passage numbers>]}]}\n'
+    'When done, "answer" is the MINIMAL span — a name, entity, number, date, or yes/no (e.g. "Eiffel Tower", '
+    '"1889", "yes"); no sentence, no explanation. '
     "When the passages are enough, set done=true with answer + steps. Otherwise done=false with a follow_up "
     "search that would fill the gap. On the final step you must answer with what you have."
 )
@@ -193,11 +213,11 @@ class IterativeReasoner(Reasoner):
             )
             data = extract_json(completion.text)
             if not isinstance(data, dict):  # unparseable ⇒ answer with the raw text, citing all gathered
-                answer = completion.text.strip()
+                answer = self._clean_answer(completion.text)
                 return ReasonedAnswer(answer, [ReasonedStep(answer, list(range(len(evidence))))], evidence)
             follow_up = str(data.get("follow_up", "")).strip()
             if hop == self.config.max_hops - 1 or data.get("done") or not follow_up:
-                answer = str(data.get("answer", "")).strip()
+                answer = self._clean_answer(str(data.get("answer", "")))
                 return ReasonedAnswer(answer, self._parse_steps(data.get("steps"), answer, len(evidence)), evidence)
             search_query = follow_up
         return ReasonedAnswer("", [], evidence)  # only reached if max_hops <= 0
