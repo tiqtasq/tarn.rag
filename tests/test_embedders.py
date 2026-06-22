@@ -14,9 +14,30 @@ import pytest
 
 from tarnrag.core.components import Component
 from tarnrag.core.engine.config import EmbeddingSettings
-from tarnrag.core.resources.embedder import Embedder, OnnxEmbedder
+from tarnrag.core.resources.embedder import Embedder, HashEmbedder, OnnxEmbedder
 from tarnrag.core.resources.embedder_api import GeminiEmbedder, OpenAIEmbedder, VoyageEmbedder
 from tarnrag.core.resources.resource import Resource
+
+
+def test_hash_embedder_is_deterministic_offline():
+    """The model-free `hash` backend: deterministic, right dim, L2-normalized, no model/network."""
+    emb = Embedder.create(EmbeddingSettings(provider="hash"), 384)
+    assert isinstance(emb, HashEmbedder) and emb.dim() == 384 and emb.identity() == "hash:384"
+
+    v = emb.embed_query("the eiffel tower is in paris")
+    assert len(v) == 384
+    assert abs(np.linalg.norm(v) - 1.0) < 1e-5  # L2-normalized
+    assert emb.embed_query("the eiffel tower is in paris") == v  # deterministic
+    assert emb.embed_passages(["a", "b"]) == [emb.embed_query("a"), emb.embed_query("b")]
+
+
+def test_hash_embedder_identity_and_meta():
+    emb = HashEmbedder(embedding_dim=8)
+    meta = emb.embed_meta()
+    assert meta["embedding_provider"] == "hash" and meta["embedding_dim"] == "8"
+    assert meta["embedding_config_fingerprint"] == emb.config_fingerprint()
+    assert HashEmbedder(embedding_dim=8).config_fingerprint() == emb.config_fingerprint()  # stable
+    assert HashEmbedder(embedding_dim=16).config_fingerprint() != emb.config_fingerprint()  # dim-sensitive
 
 
 # ---------------- ONNX pooling / normalize (now config-driven) ----------------

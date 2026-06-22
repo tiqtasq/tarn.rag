@@ -42,6 +42,8 @@ class Embedder(Resource):
         ``create``; this dispatches to it.)"""
         if embedding.provider == "onnx":
             return OnnxEmbedder.create(embedding, embedding_dimension)
+        if embedding.provider == "hash":
+            return HashEmbedder.create(embedding, embedding_dimension)
         from tarnrag.core.resources.embedder_api import EMBEDDER_PROVIDERS
 
         try:
@@ -266,3 +268,57 @@ class OnnxEmbedder(Embedder):
 
     def embed_query(self, text: str) -> list[float]:
         return self._embed([text], self.query_prefix)[0]
+
+
+class HashEmbedder(Embedder):
+    """A deterministic, dependency-free embedder — the embedding analog of ``StaticLanguageModel``: maps text
+    to a fixed-dim vector with the hashing trick (each whitespace token hashed into a bucket), L2-normalized.
+
+    Retrieval quality is poor (no semantics) — it exists so the **whole pipeline runs offline with no model
+    download** (CI, demos, the eval loop), the way ``StaticLanguageModel`` lets generation run with no key.
+    Selected via ``EmbeddingSettings.provider='hash'``; never for production retrieval."""
+
+    PROVIDER = "hash"
+
+    def __init__(self, *, embedding_dim: int = 384):
+        self.embedding_dim = embedding_dim
+
+    @classmethod
+    def create(cls, embedding: EmbeddingSettings, embedding_dimension: int) -> HashEmbedder:
+        return cls(embedding_dim=embedding_dimension)
+
+    def dim(self) -> int:
+        return self.embedding_dim
+
+    def identity(self) -> str:
+        return f"{self.PROVIDER}:{self.embedding_dim}"
+
+    def embed_passages(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(t) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
+
+    def _embed(self, text: str) -> list[float]:
+        import numpy as np
+
+        vec = np.zeros(self.embedding_dim, dtype=np.float32)
+        for token in text.lower().split():
+            vec[int(sha256_hex(token)[:8], 16) % self.embedding_dim] += 1.0
+        norm = float(np.linalg.norm(vec)) or 1.0
+        return (vec / norm).tolist()
+
+    def _identity(self) -> dict[str, Any]:
+        return {"provider": self.PROVIDER, "embedding_dim": self.embedding_dim, "normalize": "l2"}
+
+    def config_fingerprint(self) -> str:
+        return self._fingerprint(self._identity())
+
+    def embed_meta(self) -> dict[str, str]:
+        return {
+            "embedding_provider": self.PROVIDER,
+            "embedding_model_id": self.PROVIDER,
+            "embedding_dim": str(self.embedding_dim),
+            "normalize": "l2",
+            "embedding_config_fingerprint": self.config_fingerprint(),
+        }
