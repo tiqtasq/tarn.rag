@@ -180,4 +180,43 @@ match of MOTHRAG's reader/embedder would shift absolutes; the *relative* Phase-0
 The cheap levers are nearly exhausted (~0.06 F1 off MOTHRAG). To go *past* it, **Phase 2** — and the data
 says **retrieval is now the ceiling** (hit 0.42–0.65): the bridge substrate (multi-query fusion + an LLM
 relevance-judge reranker) and stronger multi-hop, measured against this Phase-1 baseline. A stronger
-reader/embedder (the other Phase-1 lever, not yet pulled) is a parallel free check.
+reader/embedder (the other Phase-1 lever, not yet pulled) is a parallel free check — done next.
+
+### Reader check — gpt-4o (2026-06-22)
+
+The one Phase-1 lever not yet pulled: swap the reader to **gpt-4o** (everything else identical — `gte-small`,
+n=200, same prompts, `--sweep`), to see how much of the residual gap is the reader. Clean run, 0 failures.
+
+**gpt-4o results (n=200; decomposition is now best on all three)**
+| dataset | reasoner | hit | F1 | EM |
+|---|---|---|---|---|
+| HotpotQA | `decomposition` | 0.639 | **0.766** | **0.625** |
+| 2Wiki | `decomposition` | 0.747 | **0.726** | **0.650** |
+| MuSiQue | `decomposition` | 0.540 | **0.617** | **0.505** |
+
+**Best reasoner per dataset: Phase 1 (gpt-4o-mini) → gpt-4o, vs MOTHRAG**
+| dataset | F1: mini → 4o | F1 gap to MOTHRAG | EM: mini → 4o | EM gap to MOTHRAG |
+|---|---|---|---|---|
+| HotpotQA | 0.705 → 0.766 | −0.015 | 0.570 → 0.625 | −0.023 |
+| 2Wiki | 0.651 → 0.726 | −0.037 | 0.575 → 0.650 | −0.032 |
+| MuSiQue | 0.513 → 0.617 | **+0.112** | 0.390 → 0.505 | **+0.099** |
+| **avg** | **0.623 → 0.703** | **+0.020** | **0.512 → 0.593** | **+0.014** |
+
+**Conclusions**
+1. **The residual gap was the reader.** gpt-4o lifts best-reasoner average F1 0.623 → **0.703** and EM 0.512 →
+   **0.593** — *at/above* MOTHRAG's average (0.683 / 0.579). HotpotQA + 2Wiki land within −0.02…−0.04;
+   MuSiQue is well **above** (+0.11 F1).
+2. **The headline:** tarn.rag's **lean** stack — no ensemble, no bridge, no ChainFilter — matches MOTHRAG's
+   average on a comparable reader. The §6 architecture is **not needed for parity**; it's for going *past*.
+3. **Caveat — not a controlled win.** gpt-4o is very likely a stronger reader than MOTHRAG's Llama-3.3-70B,
+   so "above MOTHRAG's average" reflects a reader edge *and* the Phase-1 prompts, not architecture. The
+   defensible claim: **the residual Phase-1 gap was dominated by reader strength, not by the missing
+   architecture.** A true match needs tarn.rag *on* Llama-3.3-70B (an OpenAI-compatible endpoint).
+4. **decomposition is now best on all three** (it overtook `single_hop` on 2Wiki with the stronger reader) —
+   the default is firmly vindicated.
+5. `hit` also rose with gpt-4o (0.54–0.75) — some of gpt-4o-mini's low hit was weak extraction, not just
+   retrieval misses; but headroom to 1.0 remains.
+
+This **reframes Phase 2**: not "catch up to MOTHRAG" (parity is reached) but "go beyond" — raise retrieval
+`hit` toward its ceiling (bridge substrate), with MuSiQue the clearest target. A controlled run on a
+Llama-3.3-70B endpoint would also pin the apples-to-apples number.
