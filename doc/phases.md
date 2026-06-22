@@ -114,6 +114,70 @@ largely reader-independent.
 
 ### Status / next
 - [x] All three datasets swept, clean (HotpotQA, 2Wiki, MuSiQue).
-- [ ] **Phase 1:** default reasoner → `decomposition`; short-answer prompt + answer extraction; re-measure
-  (expect the largest EM gains on HotpotQA/2Wiki).
-- [ ] **Phase 2 candidate:** bridge substrate / stronger multi-hop — justified primarily by MuSiQue's low hit.
+- [x] **Phase 1** done — see below.
+- [ ] **Phase 2 candidate:** bridge substrate / stronger multi-hop — to push *past* MOTHRAG, esp. on MuSiQue.
+
+---
+
+## Phase 1 — results (2026-06-22)
+
+**Changes:** default reasoner → `decomposition`; short-answer prompts (demand the minimal span, not a
+sentence) + a `_clean_answer` lead-in/quote stripper. No architecture. Same harness/protocol as Phase 0
+(`gpt-4o-mini` + `gte-small`, n=200, distractor, grounding off). Clean run, 0 failures.
+
+### Results (n = 200 each)
+
+**HotpotQA**
+| reasoner | hit | F1 | EM | cite |
+|---|---|---|---|---|
+| `single_hop` | 0.536 | 0.659 | 0.550 | 0.681 |
+| `iterative` | 0.432 | 0.523 | 0.430 | 0.767 |
+| **`decomposition`** | **0.574** | **0.705** | **0.570** | 0.713 |
+
+**2WikiMultiHopQA**
+| reasoner | hit | F1 | EM | cite |
+|---|---|---|---|---|
+| **`single_hop`** | **0.648** | **0.651** | **0.575** | 0.704 |
+| `iterative` | 0.418 | 0.393 | 0.335 | 0.814 |
+| `decomposition` | 0.643 | 0.641 | 0.565 | 0.738 |
+
+**MuSiQue**
+| reasoner | hit | F1 | EM | cite |
+|---|---|---|---|---|
+| `single_hop` | 0.350 | 0.446 | 0.330 | 0.497 |
+| `iterative` | 0.300 | 0.344 | 0.270 | 0.738 |
+| **`decomposition`** | **0.415** | **0.513** | **0.390** | 0.530 |
+
+### Phase 0 → Phase 1, best reasoner per dataset, vs MOTHRAG
+| dataset | F1: P0 → P1 (Δ) | F1 gap to MOTHRAG | EM: P0 → P1 (Δ) | EM gap to MOTHRAG |
+|---|---|---|---|---|
+| HotpotQA | 0.507 → 0.705 (+0.198) | −0.076 | 0.280 → 0.570 (+0.290) | −0.078 |
+| 2Wiki | 0.414 → 0.651 (+0.237) | −0.112 | 0.170 → 0.575 (+0.405) | −0.107 |
+| MuSiQue | 0.275 → 0.513 (+0.238) | **+0.008** | 0.075 → 0.390 (+0.315) | −0.016 |
+| **avg** | **0.399 → 0.623** | **−0.060** | **0.175 → 0.512** | **−0.067** |
+
+### Conclusions
+1. **The format fix was decisive.** The gap to MOTHRAG collapsed from **−0.28 F1 / −0.40 EM** (Phase 0) to
+   **−0.06 F1 / −0.07 EM** — ~80 % closed with **zero architecture**, just the prompt + reasoner default.
+   Emphatic validation of measure-first.
+2. **MuSiQue reaches MOTHRAG parity** (F1 0.513 vs 0.505) — even though it was the "retrieval-bound" dataset.
+   Answer format was the dominant lever *everywhere*, including the hard one. (Its hit is still ~0.42, so
+   retrieval caps the ceiling — Phase 2 retrieval work would push it *past* MOTHRAG, not just to parity.)
+3. **`iterative` recovered but still lags** — F1 0.18→0.52 / 0.13→0.39 / 0.13→0.34 (the short-answer prompt
+   fixed its prose-narration collapse), yet it trails on hit: its follow-up loop gathers good evidence (best
+   citation coverage) but finds the answer less often. Not the default.
+4. **`decomposition` confirmed as the default** — best on HotpotQA + MuSiQue; `single_hop` still edges it on
+   2Wiki, within noise.
+
+Note: "hit" fell on some arms vs Phase 0 because Phase 0's verbose answers inflated it (a gold phrase appears
+*somewhere* in a long answer); with terse answers, hit ≈ correctness, and F1/EM are the trustworthy metrics.
+
+### Caveats
+Same as Phase 0: n = 200 (CI ≈ ±3.5 %); `gpt-4o-mini`, not Llama-3.3-70B; 384-d `gte-small`. A controlled
+match of MOTHRAG's reader/embedder would shift absolutes; the *relative* Phase-0→Phase-1 gain is robust.
+
+### What's next
+The cheap levers are nearly exhausted (~0.06 F1 off MOTHRAG). To go *past* it, **Phase 2** — and the data
+says **retrieval is now the ceiling** (hit 0.42–0.65): the bridge substrate (multi-query fusion + an LLM
+relevance-judge reranker) and stronger multi-hop, measured against this Phase-1 baseline. A stronger
+reader/embedder (the other Phase-1 lever, not yet pulled) is a parallel free check.
