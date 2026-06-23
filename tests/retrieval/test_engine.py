@@ -76,6 +76,15 @@ async def test_open_validates_fingerprint(repo):
         await RetrievalEngine.open(repo, _FakeEmbedder(fingerprint="other"))
 
 
+async def test_open_with_settings_wires_an_llm_for_the_bridge(repo):
+    await _index(repo)
+    # Built from Settings -> a (lazy, unused-unless-a-bridge-component-calls-it) LLM rides the context.
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(), Settings(_env_file=None, EMBEDDING_DIMENSION=3))
+    assert engine._llm is not None
+    # Settings-less open (the low-level seam) wires no LLM — the lean default path needs none.
+    assert (await RetrievalEngine.open(repo, _FakeEmbedder()))._llm is None
+
+
 async def test_search_ranks_nearest_with_provenance(repo):
     cids = await _index(repo)
     engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))

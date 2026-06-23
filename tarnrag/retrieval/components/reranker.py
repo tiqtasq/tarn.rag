@@ -14,11 +14,13 @@ from __future__ import annotations
 import asyncio
 from abc import abstractmethod
 from dataclasses import replace
-from typing import Literal
+from typing import Any, Literal
 
 from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import Component
 from tarnrag.core.exceptions import RetrievalError
+from tarnrag.core.parsing import extract_json
+from tarnrag.core.resources.llm import Prompt
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query
 
@@ -65,3 +67,63 @@ class CrossEncoderReranker(Reranker):
         ]
         rescored.sort(key=lambda r: r.score, reverse=True)
         return rescored
+
+
+_JUDGE_SYSTEM = (
+    "Score how relevant each numbered passage is for answering the question, on a 0–10 scale (10 = directly "
+    "contains the answer, 0 = irrelevant). Reply with a SINGLE JSON object and nothing else: "
+    '{"scores": [{"passage": <number>, "score": <0-10>}, ...]}, covering every passage by its number.'
+)
+
+
+class LlmJudgeReranker(Reranker):
+    """Bridge reranker: re-score the shortlist with an LLM relevance judge (query × passages, one batched
+    call), set the judged score, and re-order (deterministic tie-break: score desc, then chunk_id asc).
+    The LLM comes from ``ctx.llm`` — premium/economy tiers = swap the LLM spec. A passage the model doesn't
+    score keeps 0. An LLM call per query (opt-in, off the lean default)."""
+
+    class Config(Reranker.Config):
+        class_name: Literal["llm_judge"] = "llm_judge"
+        score_key: str = "llm_judge"  # key the judge score is surfaced under in component_scores
+
+    config: LlmJudgeReranker.Config
+
+    async def rerank(
+        self, query: Query, results: list[RetrievalResult], ctx: RetrievalContext
+    ) -> list[RetrievalResult]:
+        if not results:
+            return results
+        if ctx.llm is None:
+            raise RetrievalError(
+                "an llm_judge reranker is configured but the RetrievalContext has no LLM — the engine "
+                "injects it from `Settings.llm`; build the engine from Settings (or inject an llm)"
+            )
+        passages = "\n".join(f"[{i + 1}] {r.text}" for i, r in enumerate(results))
+        completion = await ctx.llm.complete(
+            Prompt(system=_JUDGE_SYSTEM, user=f"Question: {query.text}\n\nPassages:\n{passages}")
+        )
+        scores = self._parse_scores(completion.text, len(results))
+        rescored = [
+            replace(r, score=s, component_scores={**r.component_scores, self.config.score_key: s})
+            for r, s in zip(results, scores)
+        ]
+        rescored.sort(key=lambda r: (-r.score, r.chunk_id))
+        return rescored
+
+    @staticmethod
+    def _parse_scores(text: str, n: int) -> list[float]:
+        """Map the reply's ``{"scores": [{"passage", "score"}, …]}`` to a per-result score list (0.0 for
+        any passage the model omitted or scored out of range; bools rejected — they're ints in Python)."""
+        out = [0.0] * n
+        data = extract_json(text)
+        rows: Any = data.get("scores") if isinstance(data, dict) else None
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            p, s = row.get("passage"), row.get("score")
+            if isinstance(p, bool) or not isinstance(p, int) or not 1 <= p <= n:
+                continue
+            if isinstance(s, bool) or not isinstance(s, int | float):
+                continue
+            out[p - 1] = float(s)
+        return out

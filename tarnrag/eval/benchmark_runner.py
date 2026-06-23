@@ -57,6 +57,16 @@ MOTHRAG_PUBLISHED: dict[str, dict[str, float]] = {
     "musique": {"f1": 0.505, "em": 0.406},
 }
 
+# The Phase-2 bridge retrieval pipeline (vs the lean dense-only default): multi-query expansion + RRF, then
+# an LLM relevance judge. Both call ``ctx.llm`` (the engine injects it from Settings). Set as the
+# RETRIEVAL_PIPELINE spec to measure the bridge's effect on recall (hit) and downstream F1/EM.
+BRIDGE_RETRIEVAL: dict[str, object] = {
+    "class_name": "retrieval_pipeline",
+    "retrievers": [{"class_name": "multi_query"}],
+    "fuser": {"class_name": "identity"},
+    "reranker": {"class_name": "llm_judge"},
+}
+
 
 @asynccontextmanager
 async def _eval_engines(settings: Settings) -> AsyncIterator[tuple[IngestionEngine, RetrievalEngine]]:
