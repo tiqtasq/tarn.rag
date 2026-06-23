@@ -15,6 +15,7 @@ from tarnrag.core.components import ComponentFactory
 from tarnrag.core.engine.config import LICENSE_POLICY, RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
+from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.core.engine.engine import Engine
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.contracts import IndexMeta, RetrievalResult
@@ -43,15 +44,17 @@ class RetrievalEngine(Engine):
         searcher: Searcher,
         cross_encoder: CrossEncoder | None = None,
         license_policy: LicensePolicy | None = None,
+        llm: LanguageModel | None = None,
     ):
         """Pure data-holder: inject the resources (the read store + query embedder + an optional reranker +
-        an optional license policy) and the pre-built ``Searcher``. Build from ``Settings`` via
-        :meth:`open` / :meth:`create`."""
+        an optional license policy + an optional ``llm`` for the bridge components) and the pre-built
+        ``Searcher``. Build from ``Settings`` via :meth:`open` / :meth:`create`."""
         self.repository = repository
         self.embedder = embedder
         self._pipeline = searcher
         self._cross_encoder = cross_encoder
         self._license_policy = license_policy
+        self._llm = llm
 
     @staticmethod
     def build_searcher(settings: Settings | None = None) -> Searcher:
@@ -84,11 +87,14 @@ class RetrievalEngine(Engine):
         if conflict:
             raise RetrievalError(conflict)
         # The cross-encoder's model loads lazily, so building it here is cheap; it stays unused unless the
-        # configured pipeline has a reranker (a settings-less ``open`` has none).
+        # configured pipeline has a reranker (a settings-less ``open`` has none). Same for the LLM — built
+        # lazily (no key/network until ``complete``), unused unless a bridge component (multi_query /
+        # llm_judge) calls it; the lean default pipeline never does.
         cross_encoder = OnnxCrossEncoder.create(settings.rerank) if settings is not None else None
+        llm = LanguageModel.create(settings.llm) if settings is not None else None
         return cls(
             repository, embedder, cls.build_searcher(settings), cross_encoder,
-            cls.build_license_policy(settings),
+            cls.build_license_policy(settings), llm,
         )
 
     @classmethod
@@ -114,7 +120,9 @@ class RetrievalEngine(Engine):
     async def search(self, query: Query) -> list[RetrievalResult]:
         """Run the configured retrieval pipeline (retrieve [license/scope pre-filter] → fuse → hydrate →
         merge → rerank → top_k → assemble)."""
-        ctx = RetrievalContext(self.repository, self.embedder, self._cross_encoder, self._license_policy)
+        ctx = RetrievalContext(
+            self.repository, self.embedder, self._cross_encoder, self._license_policy, self._llm
+        )
         return await self._pipeline.search(query, ctx)
 
     async def search_text(

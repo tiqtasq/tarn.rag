@@ -20,19 +20,27 @@ from __future__ import annotations
 import argparse
 import asyncio
 
-from tarnrag.core.engine.config import get_settings
+from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
 from tarnrag.core.resources.llm import LanguageModel
-from tarnrag.eval.benchmark_runner import format_comparison, format_sweep, run_benchmark, sweep_benchmark
+from tarnrag.eval.benchmark_runner import (
+    BRIDGE_RETRIEVAL,
+    format_comparison,
+    format_sweep,
+    run_benchmark,
+    sweep_benchmark,
+)
 from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS
 
 
-async def _run(dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool) -> None:
+async def _run(dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool) -> None:
     settings = get_settings()
+    if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
+        settings.components[RETRIEVAL_PIPELINE] = BRIDGE_RETRIEVAL
     items = HF_LOADERS[dataset](limit=limit) if hf else LOADERS[dataset](path, limit=limit)
     llm = LanguageModel.create(settings.llm)
     print(
-        f"running {len(items)} {dataset} questions "
-        f"through reader={settings.llm.provider}:{settings.llm.model} …"
+        f"running {len(items)} {dataset} questions through reader={settings.llm.provider}:{settings.llm.model}"
+        f"{' + bridge retrieval' if bridge else ''} …"
     )
     if sweep:
         reports = await sweep_benchmark(items, llm, settings=settings)
@@ -54,12 +62,16 @@ def main(argv: list[str] | None = None) -> None:
         "--sweep", action="store_true",
         help="sweep the reasoners (single_hop / iterative / decomposition) instead of one configured run",
     )
+    parser.add_argument(
+        "--bridge", action="store_true",
+        help="use the Phase-2 bridge retrieval (multi-query expansion + LLM relevance judge) — needs an LLM",
+    )
     args = parser.parse_args(argv)
     if args.hf and args.dataset not in HF_LOADERS:
         parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
     if not args.hf and not args.path:
         parser.error("provide a dataset file path, or use --hf")
-    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep))
+    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge))
 
 
 if __name__ == "__main__":
