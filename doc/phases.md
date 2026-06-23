@@ -220,3 +220,54 @@ n=200, same prompts, `--sweep`), to see how much of the residual gap is the read
 This **reframes Phase 2**: not "catch up to MOTHRAG" (parity is reached) but "go beyond" — raise retrieval
 `hit` toward its ceiling (bridge substrate), with MuSiQue the clearest target. A controlled run on a
 Llama-3.3-70B endpoint would also pin the apples-to-apples number.
+
+---
+
+## Phase 2 — results: bridge substrate (2026-06-23)
+
+**Feature:** the bridge retrieval substrate (PR #73) — `multi_query` (LLM query expansion → dense per
+variant → RRF) + `llm_judge` (LLM relevance reranker). **Eval:** `--bridge --sweep`, same protocol as
+Phase 1 (`gpt-4o-mini` + `gte-small`, n=200, distractor), so the per-reasoner table overlays Phase 1's.
+Clean run, 0 failures.
+
+### Bridge results (n = 200 each)
+| dataset | reasoner | hit | F1 | EM |
+|---|---|---|---|---|
+| HotpotQA | `single_hop` | 0.590 | 0.716 | 0.585 |
+| HotpotQA | `iterative` | 0.497 | 0.582 | 0.470 |
+| HotpotQA | **`decomposition`** | 0.596 | **0.729** | 0.600 |
+| 2Wiki | `single_hop` | 0.659 | 0.649 | 0.575 |
+| 2Wiki | `iterative` | 0.291 | 0.295 | 0.245 |
+| 2Wiki | **`decomposition`** | 0.687 | **0.676** | 0.585 |
+| MuSiQue | `single_hop` | 0.410 | 0.486 | 0.375 |
+| MuSiQue | `iterative` | 0.300 | 0.340 | 0.275 |
+| MuSiQue | **`decomposition`** | 0.450 | **0.534** | 0.420 |
+
+### Δ vs Phase 1 (baseline dense retrieval), `decomposition` (the default)
+| dataset | hit | F1 | EM |
+|---|---|---|---|
+| HotpotQA | 0.574 → 0.596 (+0.022) | 0.705 → 0.729 (+0.024) | 0.570 → 0.600 (+0.030) |
+| 2Wiki | 0.643 → 0.687 (+0.044) | 0.641 → 0.676 (+0.035) | 0.565 → 0.585 (+0.020) |
+| MuSiQue | 0.445 → 0.450 (+0.005) | 0.513 → 0.534 (+0.021) | 0.390 → 0.420 (+0.030) |
+| **avg** | | **0.620 → 0.646 (+0.026)** | **0.503 → 0.535 (+0.032)** |
+
+### Conclusions
+1. **The bridge helps — modestly and consistently.** `decomposition` gains +0.026 avg F1 / +0.032 avg EM
+   (gpt-4o-mini); positive on every dataset. **MuSiQue `decomposition` now exceeds MOTHRAG F1** (0.534 vs
+   0.505) *even on gpt-4o-mini*. It closes ~40 % of the residual gpt-4o-mini→MOTHRAG F1 gap (−0.060 → −0.037).
+2. **`single_hop` benefits most** (+0.057 F1 HotpotQA, +0.040 MuSiQue) — it does *one* retrieval, so better
+   ranking helps it directly; `decomposition` already multi-retrieves per sub-question, so it gains less.
+3. **`iterative` + bridge regresses** — −0.098 F1 on 2Wiki (hit 0.418 → 0.291). Two query-reshaping
+   mechanisms (the iterative follow-up loop + multi-query/judge) interact badly. Caution: don't pair them.
+   (`iterative` isn't the default, so the headline is unaffected.)
+4. **The gains are small because distractor bounds the bridge.** Each question's store holds only ~10–20
+   passages, so the bridge can only re-rank that pool into the top-8 — it can't *recall* missing evidence.
+   That's why MuSiQue's `hit` barely moved (+0.005): its 4-hop depth isn't a ranking problem.
+
+### Verdict — fullwiki is the next gate
+The bridge's real value — recall over a large corpus — is **not exercised in distractor**. The modest but
+positive distractor gains confirm it works; the *order-of-magnitude* payoff needs the **fullwiki** setting
+(retrieve over the whole Wikipedia corpus, not a per-question pool). So the next required step before more
+retrieval architecture (γ-retrieval, ChainFilter) is **fullwiki ingestion + retrieval**, against which those
+levers — and the bridge itself — can actually show their worth. Building more retrieval cleverness against a
+20-passage pool would be optimizing the wrong setting.
