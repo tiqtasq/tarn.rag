@@ -8,12 +8,16 @@ from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.eval.benchmark_runner import (
     MOTHRAG_PUBLISHED,
+    build_corpus_index,
     format_comparison,
     format_sweep,
     run_benchmark,
+    run_over_corpus,
     sweep_benchmark,
+    sweep_over_corpus,
 )
 from tarnrag.eval.benchmarks import (
+    corpus_from_items,
     load_2wiki_hf,
     load_hotpotqa,
     load_hotpotqa_hf,
@@ -191,6 +195,49 @@ def test_load_musique_file(tmp_path):
     assert [it.query.text for it in items] == ["q1", "q2"]
     assert items[0].query.supporting == ["p"]
     assert len(load_musique(str(path), limit=1)) == 1
+
+
+def test_corpus_from_items_dedups_passages():
+    items = load_hotpotqa(FIXTURE)
+    corpus = corpus_from_items(items)
+    texts = [t for _, t in corpus]
+    assert len(texts) == len(set(texts))  # deduped by passage text
+    assert set(texts) == {text for it in items for _, text in it.passages}  # the whole union
+
+
+async def test_build_corpus_index_and_retrieve_only_run(tmp_path):
+    """The fullwiki-style path: ingest one shared corpus, then retrieve-only per question (no per-question
+    ingest). Offline via the hash embedder + a canned LLM."""
+    settings = _offline_settings()
+    corpus = corpus_from_items(load_hotpotqa(FIXTURE))
+    repo, embedder = await build_corpus_index(corpus, settings, db_path=str(tmp_path / "corpus.db"))
+    try:
+        items = load_hotpotqa(FIXTURE)
+        canned = '{"answer": "Eiffel Tower", "steps": [{"claim": "x", "cited": [1]}]}'
+        report = await run_over_corpus(items, StaticLanguageModel(canned), repo, embedder, settings=settings)
+        assert report.n == 3 and report.per_query[0].token_f1 == 1.0  # canned matches q1's gold
+
+        reports = await sweep_over_corpus(
+            items, StaticLanguageModel(canned), repo, embedder, reasoners=["single_hop"], settings=settings
+        )
+        assert set(reports) == {"single_hop"} and reports["single_hop"].n == 3
+    finally:
+        await repo.disconnect()
+
+
+async def test_corpus_index_is_cached(tmp_path):
+    """A second build over the same corpus reuses the index (no re-ingest) — so baseline-vs-bridge runs
+    share one (slow) embedding pass."""
+    settings = _offline_settings()
+    corpus = [("A", "alpha text one"), ("B", "beta text two")]
+    db = str(tmp_path / "c.db")
+    repo, _ = await build_corpus_index(corpus, settings, db_path=db)
+    n1 = len(await repo.list_documents())
+    await repo.disconnect()
+    repo2, _ = await build_corpus_index(corpus, settings, db_path=db)  # cached -> reuse
+    n2 = len(await repo2.list_documents())
+    await repo2.disconnect()
+    assert n1 == 2 and n2 == 2  # not re-ingested / duplicated
 
 
 async def test_safe_answer_guards_failures():

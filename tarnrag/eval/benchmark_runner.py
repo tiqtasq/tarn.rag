@@ -142,6 +142,77 @@ async def sweep_benchmark(
         return {name: _aggregate(pq) for name, pq in per_query.items()}
 
 
+# --------------------------------------------------------------------------- #
+# Shared-corpus (fullwiki-style) harness: ingest one corpus, retrieve-only per question.
+# --------------------------------------------------------------------------- #
+async def build_corpus_index(
+    corpus: list[tuple[str, str]], settings: Settings, *, db_path: str
+) -> tuple[DocumentRepository, Embedder]:
+    """Ingest the corpus once into a persistent store at ``db_path`` and return ``(repo, embedder)`` for the
+    retrieve-only run. **Cached**: if the store already holds the whole corpus (matching doc count) the
+    embedding is skipped and the existing index reused — so baseline-vs-bridge runs and reruns share one
+    build. A partial / stale store is cleared and rebuilt. The caller disconnects the returned repo."""
+    embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
+    repo = await DocumentRepository.create(
+        DatabaseSettings(document_url=f"sqlite:///{db_path}"), settings.EMBEDDING_DIMENSION
+    )
+    await IngestionEngine.ensure_index_meta(repo, embedder)
+    ingest = await IngestionEngine.create(settings, repository=repo, embedder=embedder)
+    existing = await ingest.list_documents()
+    if len(existing) == len(corpus):  # already indexed — reuse, skip the (slow) embedding
+        return repo, embedder
+    for summary in existing:  # clear a partial / stale build, then ingest fresh
+        await ingest.delete_document(summary.document_id)
+    await ingest.ingest_content(
+        [{"content": text, "title": title, "source_type": "text"} for title, text in corpus]
+    )
+    return repo, embedder
+
+
+async def run_over_corpus(
+    items: list[BenchItem],
+    llm: LanguageModel,
+    repo: DocumentRepository,
+    embedder: Embedder,
+    *,
+    settings: Settings,
+) -> GenEvalReport:
+    """Answer each item by retrieving over the *shared* pre-built corpus index (no per-question ingest) —
+    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely."""
+    retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
+    generation = GenerationEngine.assemble(retrieval, llm, settings)
+    per_query = []
+    for item in items:
+        result = await _safe_answer(generation.answer(Query(text=item.query.text, purpose=item.query.purpose)))
+        per_query.append(_score(item.query, result))
+    return _aggregate(per_query)
+
+
+async def sweep_over_corpus(
+    items: list[BenchItem],
+    llm: LanguageModel,
+    repo: DocumentRepository,
+    embedder: Embedder,
+    *,
+    reasoners: list[str] | None = None,
+    settings: Settings,
+) -> dict[str, GenEvalReport]:
+    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner."""
+    reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
+    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    factory = ComponentFactory.get()
+    retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
+    ctx = GenerationContext(retrieval, llm)
+    pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
+    per_query: dict[str, list] = {name: [] for name in pipelines}
+    for item in items:
+        query = Query(text=item.query.text, purpose=item.query.purpose)
+        for name, pipeline in pipelines.items():
+            result = await _safe_answer(pipeline.answer(query, ctx))
+            per_query[name].append(_score(item.query, result))
+    return {name: _aggregate(pq) for name, pq in per_query.items()}
+
+
 def format_comparison(reports: dict[str, GenEvalReport]) -> str:
     """A table of tarn.rag's F1 / EM per dataset against MOTHRAG's published numbers (+ deltas + averages).
     Keys are dataset names (``hotpotqa`` / ``2wiki`` / ``musique``)."""
