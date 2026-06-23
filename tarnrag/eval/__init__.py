@@ -10,6 +10,7 @@ from tarnrag.eval.benchmarks import (
     HF_LOADERS,
     LOADERS,
     BenchItem,
+    corpus_from_items,
     load_2wiki,
     load_2wiki_hf,
     load_hotpotqa,
@@ -18,11 +19,15 @@ from tarnrag.eval.benchmarks import (
     load_musique_hf,
 )
 from tarnrag.eval.benchmark_runner import (
+    BRIDGE_RETRIEVAL,
     MOTHRAG_PUBLISHED,
+    build_corpus_index,
     format_comparison,
     format_sweep,
     run_benchmark,
+    run_over_corpus,
     sweep_benchmark,
+    sweep_over_corpus,
 )
 from tarnrag.eval.dataset import EvalQuery, EvalSet
 from tarnrag.eval.generation import (
@@ -84,7 +89,12 @@ __all__ = [
     "HF_LOADERS",
     "run_benchmark",
     "sweep_benchmark",
+    "corpus_from_items",
+    "build_corpus_index",
+    "run_over_corpus",
+    "sweep_over_corpus",
     "format_comparison",
     "format_sweep",
     "MOTHRAG_PUBLISHED",
+    "BRIDGE_RETRIEVAL",
 ]

@@ -48,6 +48,21 @@ class BenchItem:
     passages: list[tuple[str, str]]
 
 
+def corpus_from_items(items: list[BenchItem]) -> list[tuple[str, str]]:
+    """The deduped union of all ``(title, text)`` passages across ``items`` — the shared corpus for the
+    fullwiki-style setting (retrieve over the whole pool, not a per-question one). Deduped by passage text
+    (first title kept); order stable (first occurrence). Build it from the *full* dev set, not the eval
+    slice, so the haystack is realistic even when only N questions are scored."""
+    seen: set[str] = set()
+    corpus: list[tuple[str, str]] = []
+    for item in items:
+        for title, text in item.passages:
+            if text not in seen:
+                seen.add(text)
+                corpus.append((title, text))
+    return corpus
+
+
 def _yes_no(answer: str) -> bool:
     return answer.strip().lower() in {"yes", "no", "noanswer"}
 

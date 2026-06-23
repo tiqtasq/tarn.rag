@@ -19,35 +19,68 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import (
     BRIDGE_RETRIEVAL,
+    build_corpus_index,
     format_comparison,
     format_sweep,
     run_benchmark,
+    run_over_corpus,
     sweep_benchmark,
+    sweep_over_corpus,
 )
-from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS
+from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 
 
-async def _run(dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool) -> None:
+async def _run(
+    dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool, corpus: str
+) -> None:
     settings = get_settings()
     if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
         settings.components[RETRIEVAL_PIPELINE] = BRIDGE_RETRIEVAL
-    items = HF_LOADERS[dataset](limit=limit) if hf else LOADERS[dataset](path, limit=limit)
     llm = LanguageModel.create(settings.llm)
+    tag = " + bridge" if bridge else ""
+    if corpus == "pool":
+        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag)
+    else:
+        await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag)
+
+
+async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
+    items = HF_LOADERS[dataset](limit=limit) if hf else LOADERS[dataset](path, limit=limit)
     print(
-        f"running {len(items)} {dataset} questions through reader={settings.llm.provider}:{settings.llm.model}"
-        f"{' + bridge retrieval' if bridge else ''} …"
+        f"running {len(items)} {dataset} questions (distractor) "
+        f"through reader={settings.llm.provider}:{settings.llm.model}{tag} …"
     )
     if sweep:
-        reports = await sweep_benchmark(items, llm, settings=settings)
-        print(format_sweep(dataset, reports))
+        print(format_sweep(dataset, await sweep_benchmark(items, llm, settings=settings)))
     else:
-        report = await run_benchmark(items, llm, settings=settings)
-        print(format_comparison({dataset: report}))
+        print(format_comparison({dataset: await run_benchmark(items, llm, settings=settings)}))
+
+
+async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
+    all_items = HF_LOADERS[dataset]() if hf else LOADERS[dataset](path)  # the FULL dev set -> the corpus
+    corpus = corpus_from_items(all_items)
+    eval_items = all_items[:limit] if limit else all_items
+    db_path = f"./docs/bench_{dataset}_pool.db"
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    print(f"building corpus index for {dataset}: {len(corpus)} passages -> {db_path} (cached) …")
+    repo, embedder = await build_corpus_index(corpus, settings, db_path=db_path)
+    try:
+        print(
+            f"running {len(eval_items)} {dataset} questions over the shared corpus "
+            f"through reader={settings.llm.provider}:{settings.llm.model}{tag} …"
+        )
+        if sweep:
+            print(format_sweep(dataset, await sweep_over_corpus(eval_items, llm, repo, embedder, settings=settings)))
+        else:
+            print(format_comparison({dataset: await run_over_corpus(eval_items, llm, repo, embedder, settings=settings)}))
+    finally:
+        await repo.disconnect()
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -66,12 +99,17 @@ def main(argv: list[str] | None = None) -> None:
         "--bridge", action="store_true",
         help="use the Phase-2 bridge retrieval (multi-query expansion + LLM relevance judge) — needs an LLM",
     )
+    parser.add_argument(
+        "--corpus", choices=["distractor", "pool"], default="distractor",
+        help="retrieval setting: 'distractor' (per-question pool, default) or 'pool' (one shared corpus "
+             "built from the whole dev set — the fullwiki-style setting; built once + cached)",
+    )
     args = parser.parse_args(argv)
     if args.hf and args.dataset not in HF_LOADERS:
         parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
     if not args.hf and not args.path:
         parser.error("provide a dataset file path, or use --hf")
-    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge))
+    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge, args.corpus))
 
 
 if __name__ == "__main__":
