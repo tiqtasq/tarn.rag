@@ -51,6 +51,19 @@ def example_db(example_file: str) -> Path:
     return (Path(data_dir) / here.name if data_dir else here) / "rag_docs.db"
 
 
+def load_config(yaml_path: str | Path) -> Settings:
+    """Load a Part II YAML config into ``Settings`` (the same file the console runs), redirecting the
+    SQLite store into ``EXAMPLES_DATA_DIR`` when it is set — so a *test* run uses an isolated store while
+    a human run writes to the path the config declares. The config is authoritative for everything else
+    (embedding, pipelines), so the redirected store stays embedding-compatible with the original."""
+    settings = Settings.from_file(yaml_path)
+    data_dir = os.environ.get("EXAMPLES_DATA_DIR")
+    if data_dir:
+        db_name = Path(settings.database.document_url.split("///")[-1]).name
+        settings.database.document_url = f"sqlite:///{Path(data_dir) / db_name}"
+    return settings
+
+
 def base_settings(db_path: Path, **overrides: object) -> Settings:
     """Default embedded/SQLite settings shared by every example.
 
