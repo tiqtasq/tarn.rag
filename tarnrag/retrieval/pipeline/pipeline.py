@@ -24,7 +24,7 @@ from tarnrag.retrieval.components.merger import Merger
 from tarnrag.retrieval.components.reranker import Reranker
 from tarnrag.retrieval.components.retriever import RetrievalContext, Retriever
 from tarnrag.retrieval.pipeline.searcher import Searcher
-from tarnrag.retrieval.types import Query
+from tarnrag.retrieval.types import Query, SearchTrace
 
 
 class RetrievalPipeline(Searcher):
@@ -55,10 +55,15 @@ class RetrievalPipeline(Searcher):
             factory.create_as(self.config.reranker, Reranker) if self.config.reranker else None
         )
 
-    async def search(self, query: Query, ctx: RetrievalContext) -> list[RetrievalResult]:
+    async def search(
+        self, query: Query, ctx: RetrievalContext, trace: SearchTrace | None = None
+    ) -> list[RetrievalResult]:
         self._ensure_children()
         lists = await asyncio.gather(*(r.retrieve(query, ctx) for r in self._retrievers))
-        per_retriever = dict(zip(self._retriever_keys(), lists))
+        keys = self._retriever_keys()
+        per_retriever = dict(zip(keys, lists))
+        if trace is not None:
+            trace.record_retrievers(keys, lists)
         # Candidates are already license/scope-filtered inside each retriever (over-fetched), so the
         # fused set is permitted; merge / rerank, then top_k.
         fused = self._fuser.fuse(per_retriever)
@@ -68,11 +73,20 @@ class RetrievalPipeline(Searcher):
             for h in fused
             if (rec := records.get(h.chunk_id)) is not None
         ]
+        if trace is not None:
+            trace.record_stage("fused", results)
         if self._merger is not None:
             results = await self._merger.merge(results, ctx)
+            if trace is not None:
+                trace.record_stage("merged", results)
         if self._reranker is not None:
             results = await self._reranker.rerank(query, results, ctx)
-        return results[: query.top_k]
+            if trace is not None:
+                trace.record_stage("reranked", results)
+        final = results[: query.top_k]
+        if trace is not None:
+            trace.record_stage("final", final)
+        return final
 
     def _retriever_keys(self) -> list[str]:
         """A distinct key per retriever (for the per-retriever candidate map + the fused

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from tarnrag.contracts import Annotation, ChunkFilter, MethodRef
+from tarnrag.contracts import Annotation, Candidate, ChunkFilter, MethodRef, RetrievalResult
 
 
 class Purpose(str, Enum):
@@ -58,3 +58,55 @@ class Query:
         """The method scope as a tuple of refs, or ``None`` for ``ALL`` (the whole index) — normalizes the
         ``list[MethodRef] | str`` sentinel union in one place, so callers don't branch on the ALL string."""
         return None if self.scope == ALL else tuple(self.scope)
+
+
+# ---------------- the explain trace (the data behind RetrievalEngine.explain / TarnRag.explain) ----------
+
+
+@dataclass
+class RetrieverCandidates:
+    """One retriever's ranked candidates *before* fusion: its key (the configured ``name`` or the
+    ``class_name``) and the raw, engine-specific hits (distance for dense KNN, BM25 for sparse)."""
+
+    key: str
+    candidates: list[Candidate]
+
+
+@dataclass
+class SearchStage:
+    """A named snapshot of the ranked results at one point in the pipeline — ``fused`` → optional
+    ``merged`` → optional ``reranked`` → ``final``. Diffing the chunk-id order of two consecutive stages
+    is how a UI shows what merging or reranking *moved*."""
+
+    name: str
+    results: list[RetrievalResult]
+
+
+@dataclass
+class SearchTrace:
+    """The recorded inner workings of one retrieval — what ``RetrievalEngine.explain`` / ``TarnRag.explain``
+    return. Output-free data a UI renders: the per-retriever candidate lists before fusion, the ranked
+    results at every pipeline stage, and the routing decision when a ``RoutingRetrievalPipeline`` dispatched.
+
+    A ``Searcher`` populates it when it is passed as ``search``'s ``trace`` argument (``None`` ⇒ no tracing,
+    the hot path). ``results`` is the final ranking — identical to what ``retrieve`` would return."""
+
+    query: Query
+    per_retriever: list[RetrieverCandidates] = field(default_factory=list)
+    stages: list[SearchStage] = field(default_factory=list)
+    routing: tuple[str, str] | None = None  # (query_type, route_key) when a router dispatched
+
+    def record_retrievers(self, keys: list[str], candidate_lists: list[list[Candidate]]) -> None:
+        """Snapshot each retriever's pre-fusion candidates (paired key → candidate list)."""
+        self.per_retriever = [
+            RetrieverCandidates(key, list(cands)) for key, cands in zip(keys, candidate_lists)
+        ]
+
+    def record_stage(self, name: str, results: list[RetrievalResult]) -> None:
+        """Snapshot the ranked results at a named stage (a copy, so a later stage doesn't mutate it)."""
+        self.stages.append(SearchStage(name, list(results)))
+
+    @property
+    def results(self) -> list[RetrievalResult]:
+        """The final ranked results (the last recorded stage) — what ``retrieve`` would return."""
+        return self.stages[-1].results if self.stages else []
