@@ -9,7 +9,7 @@ import io
 from rich.console import Console as RichConsole
 
 from tarnrag.console import Console
-from tarnrag.contracts import Candidate, ChunkProvenance, RetrievalResult
+from tarnrag.contracts import Candidate, ChunkProvenance, CorpusStatus, RetrievalResult
 from tarnrag.generation.types import Citation, GenerationResult, ProofStep
 from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
 
@@ -131,3 +131,15 @@ def test_trace_view_includes_overfetch_filter_summary_and_score_legend():
     assert "pre-filter" in text and "EXECUTION" in text and "scope=ALL" in text  # the license/scope filter
     assert "cosine distance" in text                           # the score legend (dense semantics)
     assert "result details" in text and "public_domain" in text  # the details table is appended
+
+
+def test_create_status_view_summarizes_the_corpus():
+    status = CorpusStatus(
+        document_count=12, chunk_count=19, embedding_count=19, total_chars=3000,
+        min_chars=149, max_chars=400, mean_chars=250.0, median_chars=246.0, mean_chunks_per_doc=1.58,
+    )
+    text = _render(Console.create_status_view(status))
+    assert "documents" in text and "12" in text
+    assert "chunks" in text and "19" in text
+    assert "median 246" in text and "max 400" in text          # the doc-length distribution line
+    assert "3,000" in text                                     # total chars, thousands-separated

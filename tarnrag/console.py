@@ -12,6 +12,7 @@ the config. Then type commands at the ``tarn>`` prompt::
     ingest <path> ...    ingest (or RE-ingest) files; a directory ingests the files in it. The document
                          id is the filename stem, so re-ingesting a file replaces it.
     docs                 list ingested documents (id, chunks, embeddings)
+    status               summarize the corpus — counts + document-length stats
     delete <id>          delete a document and everything derived from it
     retrieve <query>     retrieval only — the ranked passages
     explain <query>      retrieval with its inner workings — each retriever's candidates before fusion,
@@ -44,7 +45,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from tarnrag.contracts import RetrievalResult
+from tarnrag.contracts import CorpusStatus, RetrievalResult
 from tarnrag.generation.types import GenerationResult
 from tarnrag.report import Report, Severity
 from tarnrag.retrieval.types import RetrieverCandidates, SearchTrace
@@ -60,6 +61,7 @@ class Console:
     _COMMANDS = [
         ("ingest <path> ...", "ingest (or re-ingest) files; a directory ingests the files in it"),
         ("docs", "list the ingested documents"),
+        ("status", "summarize the corpus — counts + document-length stats"),
         ("delete <id>", "delete a document and everything derived from it"),
         ("retrieve <query>", "retrieval only — the ranked passages"),
         ("explain <query>", "retrieval with its inner workings — per-retriever candidates, per-stage ranking"),
@@ -87,6 +89,7 @@ class Console:
             "help": self._do_help,
             "ingest": self._do_ingest,
             "docs": self._do_docs,
+            "status": self._do_status,
             "delete": self._do_delete,
             "retrieve": self._do_retrieve,
             "explain": self._do_explain,
@@ -156,6 +159,11 @@ class Console:
                 table.add_row(d.document_id, str(d.chunk_count), str(d.embedding_count))
             self._out.print(table)
             self._out.print(f"[dim]{len(outcome.value)} document(s)[/]")
+        self._render_report(outcome.report)
+
+    async def _do_status(self, _arg: str) -> None:
+        outcome = await self._tarn.status()
+        self._out.print(self.create_status_view(outcome.value))
         self._render_report(outcome.report)
 
     async def _do_delete(self, arg: str) -> None:
@@ -334,6 +342,27 @@ class Console:
             for c in step.citations:
                 node.add(f"[dim]cite[/] {escape(Console._cite(c))}")
         return Group(panel, tree)
+
+    @staticmethod
+    def create_status_view(status: CorpusStatus) -> Table:
+        """Summarize the corpus in the document repository: document / chunk / embedding counts and the
+        document-length distribution (min · median · mean · max, in characters)."""
+        table = Table(
+            title="corpus", show_edge=False, header_style="bold", title_justify="left", title_style="green"
+        )
+        table.add_column("metric", style="cyan")
+        table.add_column("value", justify="right")
+        table.add_row("documents", str(status.document_count))
+        table.add_row("chunks", str(status.chunk_count))
+        table.add_row("embeddings", str(status.embedding_count))
+        table.add_row("chunks / doc (mean)", f"{status.mean_chunks_per_doc:.1f}")
+        table.add_row(
+            "doc length (chars)",
+            f"min {status.min_chars} · median {status.median_chars:.0f} · "
+            f"mean {status.mean_chars:.0f} · max {status.max_chars}",
+        )
+        table.add_row("total chars", f"{status.total_chars:,}")
+        return table
 
     @staticmethod
     def _movement(chunk_id: str, index: int, prev_order: list[str]) -> str:
