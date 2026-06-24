@@ -40,6 +40,7 @@ from rich.text import Text
 from rich.tree import Tree
 
 from tarnrag.contracts import RetrievalResult
+from tarnrag.generation.types import GenerationResult
 from tarnrag.report import Report, Severity
 from tarnrag.retrieval.types import RetrieverCandidates, SearchTrace
 from tarnrag.tarnrag import TarnRag
@@ -185,22 +186,7 @@ class Console:
             self._out.print("usage: ask <query>", style="dim")
             return
         outcome = await self._tarn.ask(arg)
-        result = outcome.value
-        if result.abstained:
-            self._out.print(Panel(escape(result.answer), title="abstained", border_style="yellow"))
-        else:
-            border = "green" if result.grounded else "yellow"
-            label = "grounded" if result.grounded else "not fully grounded"
-            self._out.print(
-                Panel(escape(result.answer), title=f"answer  ([{border}]{label}[/])", border_style=border)
-            )
-            tree = Tree("[bold]proof[/]")
-            for step in result.proof:
-                mark = "[green]✓[/]" if step.grounded else "[red]✗[/]"
-                node = tree.add(f"{mark} {escape(step.claim)}")
-                for c in step.citations:
-                    node.add(f"[dim]cite[/] {escape(self._cite(c))}")
-            self._out.print(tree)
+        self._out.print(self.create_answer_view(outcome.value))
         self._render_report(outcome.report)
 
     # ---------------- rendering (static factory methods — reusable without a live session) ----------------
@@ -262,6 +248,24 @@ class Console:
             parts.append(Console.create_results_table(stage.results, prev_order=prev_order, title=stage.name))
             prev_order = [r.chunk_id for r in stage.results]
         return Group(*parts)
+
+    @staticmethod
+    def create_answer_view(result: GenerationResult) -> Panel | Group:
+        """Build the grounded-answer view: the answer panel (green when fully grounded, yellow otherwise)
+        and — unless the model abstained — the proof tree, each claim marked ✓/✗ with its citations.
+        Backs the ``ask`` command and is reusable by the example runner."""
+        if result.abstained:
+            return Panel(escape(result.answer), title="abstained", border_style="yellow")
+        border = "green" if result.grounded else "yellow"
+        label = "grounded" if result.grounded else "not fully grounded"
+        panel = Panel(escape(result.answer), title=f"answer  ([{border}]{label}[/])", border_style=border)
+        tree = Tree("[bold]proof[/]")
+        for step in result.proof:
+            mark = "[green]✓[/]" if step.grounded else "[red]✗[/]"
+            node = tree.add(f"{mark} {escape(step.claim)}")
+            for c in step.citations:
+                node.add(f"[dim]cite[/] {escape(Console._cite(c))}")
+        return Group(panel, tree)
 
     @staticmethod
     def _movement(chunk_id: str, index: int, prev_order: list[str]) -> str:
