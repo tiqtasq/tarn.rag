@@ -41,9 +41,10 @@ python -m examples.part_ii.example_00.run
 Both need the embedding model: `python scripts/fetch_model.py` (once).
 
 `ask` additionally needs the generation reader (configured in `config.yaml`): install the LLM backend
-(`pip install '.[openai]'`) and put your OpenAI key in the **`OPENAI_LLM_KEY`** env var (the config names
-that var, so the key never lives in a file). Retrieval/`explain` need neither — the LLM is built lazily on
-the first `ask`.
+(`pip install '.[openai]'`) and provide your OpenAI key in **`OPENAI_LLM_KEY`** — either export it, or put
+it in a `.env` at the repo root (the console and the example runner load `.env` automatically). The config
+names that var, so the key never lives in a config file. Retrieval/`explain` need neither — the LLM is
+built lazily on the first `ask`.
 
 ## The "no defaults" rule
 

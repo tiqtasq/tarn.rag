@@ -36,14 +36,14 @@ onnx = ["onnxruntime", "tokenizers", "huggingface_hub"]  # local ONNX embedding 
 embeddings-api = ["httpx"]  # HTTP embedding-API backends (OpenAI / Voyage / Gemini)
 generation = ["anthropic"]  # the generation LanguageModel backend (Claude, official SDK)
 openai = ["httpx"]  # OpenAI-compatible /chat/completions LLM backend (OpenAI / vLLM / Together / …)
-console = ["rich"]  # the interactive console UI (the `tarnrag` command / python -m tarnrag.console)
+console = ["rich", "python-dotenv"]  # interactive console UI + .env loading (secrets like the LLM key)
 parsers = ["pypdf", "pdfplumber", "beautifulsoup4"]  # document loaders (permissive)
 docling = ["docling"]  # high-fidelity layout-aware PDF extraction (heavy; pulls docling-core + models)
 benchmarks = ["datasets"]  # load the MOTHRAG benchmarks (HotpotQA/…) from HuggingFace for eval/benchmarks
 # Convenience: the common single-process / embedded runtime (local ONNX embedder, parsers, generation,
 # OpenAI/API readers + embedders, console). Heavy / infra backends (postgres, queue, docling) stay opt-in.
 all = ["tarn-rag[onnx,parsers,embeddings-api,generation,openai,console]"]
-dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx", "rich"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "httpx", "rich", "python-dotenv"]
 
 [project.scripts]
 # Interactive console REPL. Needs the `console` extra: pip install 'tarn-rag[console]'

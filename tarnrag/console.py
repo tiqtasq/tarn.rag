@@ -418,10 +418,22 @@ async def _main(config_path: str) -> None:
         await Console(tarn).run()
 
 
+def _load_dotenv() -> None:
+    """Load a ``.env`` (searched from the cwd up) into the environment so secrets like the LLM key are
+    picked up in this interactive session — a no-op without ``python-dotenv``. The config file stays
+    authoritative (pydantic ranks the loaded YAML above env vars); this only supplies what it omits."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv()
+
+
 def main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
         raise SystemExit("usage: python -m tarnrag.console <config.json>")
+    _load_dotenv()
     asyncio.run(_main(argv[0]))
 
 
