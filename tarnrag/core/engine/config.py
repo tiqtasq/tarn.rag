@@ -12,9 +12,12 @@ Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -251,6 +254,28 @@ class Settings(BaseSettings):
                 "or switch to MODE='distributed')"
             )
         return self
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> Settings:
+        """Load a ``Settings`` from a JSON **or YAML** config file, selected by extension
+        (``.json`` / ``.yaml`` / ``.yml``). The file is authoritative: the ambient ``.env`` is ignored
+        (``_env_file=None``) so the same config is reproducible everywhere; OS env vars still supplement
+        (e.g. an LLM API key)."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        if suffix in (".yaml", ".yml"):
+            data = yaml.safe_load(text)
+        elif suffix == ".json":
+            data = json.loads(text)
+        else:
+            raise ValueError(
+                f"unsupported config extension {path.suffix!r} for {path} — use .json, .yaml, or .yml"
+            )
+        if not isinstance(data, dict):
+            kind = "empty" if data is None else type(data).__name__
+            raise ValueError(f"config {path} must be a mapping of settings, got {kind}")
+        return cls(_env_file=None, **data)
 
 
 @lru_cache

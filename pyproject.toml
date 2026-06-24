@@ -25,6 +25,7 @@ dependencies = [
     "aiosqlite",
     "numpy",
     "sqlite-vec",  # §8 retrieval index (dense KNN) on the SQLite/embedded path
+    "pyyaml",  # YAML/JSON config loading (Settings.from_file) — a core capability
 ]
 
 [project.optional-dependencies]

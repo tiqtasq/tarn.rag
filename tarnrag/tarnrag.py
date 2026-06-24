@@ -21,7 +21,6 @@ first ``ask``. Use it directly::
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -43,11 +42,11 @@ class TarnRag:
     """An ingestion + retrieval + generation session over one store (see the module docstring)."""
 
     def __init__(self, settings: Settings | str | Path, llm: LanguageModel | None = None) -> None:
-        """``settings`` is a ready ``Settings`` or the path to a JSON config to load (the ambient ``.env``
-        is ignored — the file is authoritative; OS env vars still supplement, e.g. the LLM key). ``llm``
-        may be injected (tests / a custom backend)."""
+        """``settings`` is a ready ``Settings`` or the path to a JSON/YAML config to load (the ambient
+        ``.env`` is ignored — the file is authoritative; OS env vars still supplement, e.g. the LLM key).
+        ``llm`` may be injected (tests / a custom backend)."""
         if not isinstance(settings, Settings):
-            settings = Settings(_env_file=None, **json.loads(Path(settings).read_text()))
+            settings = Settings.from_file(settings)
         self.settings = settings
         self._injected_llm = llm
         self._repository: DocumentRepository | None = None

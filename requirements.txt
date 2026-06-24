@@ -4,6 +4,7 @@ pydantic>=2.13.4
 pydantic-settings>=2.14.1
 sqlalchemy>=2.0.50
 sqlite-vec>=0.1.9
+pyyaml>=6.0
 pypdf>=6.12.2
 pdfplumber>=0.11.9
 beautifulsoup4>=4.14.3
