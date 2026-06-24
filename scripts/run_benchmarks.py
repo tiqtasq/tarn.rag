@@ -38,7 +38,7 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 
 async def _run(
     dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
-    corpus: str, corpus_limit: int | None, concurrency: int,
+    corpus: str, corpus_limit: int | None, concurrency: int, reasoners: list[str] | None,
 ) -> None:
     settings = get_settings()
     if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
@@ -46,24 +46,26 @@ async def _run(
     llm = LanguageModel.create(settings.llm)
     tag = " + bridge" if bridge else ""
     if corpus == "pool":
-        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency)
+        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency, reasoners)
     else:
-        await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag)
+        await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag, reasoners)
 
 
-async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
+async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag, reasoners) -> None:
     items = HF_LOADERS[dataset](limit=limit) if hf else LOADERS[dataset](path, limit=limit)
     print(
         f"running {len(items)} {dataset} questions (distractor) "
         f"through reader={settings.llm.provider}:{settings.llm.model}{tag} …"
     )
     if sweep:
-        print(format_sweep(dataset, await sweep_benchmark(items, llm, settings=settings)))
+        print(format_sweep(dataset, await sweep_benchmark(items, llm, reasoners=reasoners, settings=settings)))
     else:
         print(format_comparison({dataset: await run_benchmark(items, llm, settings=settings)}))
 
 
-async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency) -> None:
+async def _run_over_pool(
+    dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency, reasoners
+) -> None:
     # The corpus is built from the first ``corpus_limit`` dev questions (all of them if None) — sized larger
     # than the eval slice so the eval questions' gold passages are in the haystack. A moderate corpus_limit
     # keeps the (per-doc) build tractable while still making retrieval miss-able.
@@ -84,7 +86,7 @@ async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, co
         )
         if sweep:
             reports = await sweep_over_corpus(
-                eval_items, llm, repo, embedder, settings=settings, concurrency=concurrency
+                eval_items, llm, repo, embedder, reasoners=reasoners, settings=settings, concurrency=concurrency
             )
             print(format_sweep(dataset, reports))
         else:
@@ -127,6 +129,11 @@ def main(argv: list[str] | None = None) -> None:
         help="with --corpus pool: how many questions to answer in parallel (the LLM calls are I/O-bound, "
              "so this overlaps their latency; bounded by the API rate limit)",
     )
+    parser.add_argument(
+        "--reasoners", type=lambda s: [r.strip() for r in s.split(",") if r.strip()], default=None,
+        help="with --sweep: comma-separated reasoner class_names to sweep (e.g. "
+             "'decomposition,grounded_retrieval'); defaults to single_hop,iterative,decomposition",
+    )
     args = parser.parse_args(argv)
     if args.hf and args.dataset not in HF_LOADERS:
         parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
@@ -135,7 +142,7 @@ def main(argv: list[str] | None = None) -> None:
     asyncio.run(
         _run(
             args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge,
-            args.corpus, args.corpus_limit, args.concurrency,
+            args.corpus, args.corpus_limit, args.concurrency, args.reasoners,
         )
     )
 
