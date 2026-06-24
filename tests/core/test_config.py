@@ -15,6 +15,28 @@ def test_defaults_and_groups():
     assert s.database.document_url.startswith("sqlite")  # zero-config embedded default
 
 
+def test_llm_key_env_var_defaults_to_the_provider_standard():
+    from tarnrag.core.engine.config import LLMSettings
+
+    assert LLMSettings(provider="anthropic").key_env_var() == "ANTHROPIC_API_KEY"
+    assert LLMSettings(provider="openai").key_env_var() == "OPENAI_API_KEY"
+    assert LLMSettings(provider="openai", api_key_env="OPENAI_LLM_KEY").key_env_var() == "OPENAI_LLM_KEY"
+
+
+def test_llm_resolved_api_key_prefers_explicit_then_the_named_env_var(monkeypatch):
+    from tarnrag.core.engine.config import LLMSettings
+
+    monkeypatch.delenv("OPENAI_LLM_KEY", raising=False)
+    llm = LLMSettings(provider="openai", api_key_env="OPENAI_LLM_KEY")
+    assert llm.resolved_api_key() == ""  # nothing set anywhere
+
+    monkeypatch.setenv("OPENAI_LLM_KEY", "sk-from-custom-var")
+    assert llm.resolved_api_key() == "sk-from-custom-var"  # read from the configured env var
+
+    explicit = LLMSettings(provider="openai", api_key="sk-explicit", api_key_env="OPENAI_LLM_KEY")
+    assert explicit.resolved_api_key() == "sk-explicit"  # an explicit key wins over the env var
+
+
 def test_nested_env_loading(monkeypatch):
     monkeypatch.setenv("EMBEDDING__MODEL", "my/model")
     monkeypatch.setenv("EMBEDDING__BATCH_SIZE", "8")

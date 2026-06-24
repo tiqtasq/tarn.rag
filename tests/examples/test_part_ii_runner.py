@@ -10,8 +10,17 @@ from __future__ import annotations
 from tarnrag import TarnRag
 from tarnrag.core.engine.config import DatabaseSettings, EmbeddingSettings, Settings
 
-from examples.common import corpus
+from examples.common import corpus, load_config
 from examples.part_ii._runner import Runner
+
+
+def test_example_00_base_config_is_explicit_and_complete():
+    """The base config fully specifies all three pipelines + the OpenAI reader (no model needed to load)."""
+    s = load_config("examples/part_ii/example_00/config.yaml")
+    assert s.components["ingestion_pipeline"]["stages"][0]["routes"] == {"md": {"class_name": "markdown"}}
+    assert s.components["retrieval_pipeline"]["retrievers"][0]["class_name"] == "dense"
+    assert s.components["generation_pipeline"]["reasoner"]["class_name"] == "single_hop"
+    assert s.llm.provider == "openai" and s.llm.key_env_var() == "OPENAI_LLM_KEY"
 
 
 def _hash_settings(tmp_path) -> Settings:

@@ -21,7 +21,6 @@ first ``ask``. Use it directly::
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from tarnrag.contracts import CorpusStatus, RetrievalResult
@@ -165,9 +164,10 @@ class TarnRag:
         return self._generation
 
     def _build_llm(self) -> LanguageModel:
-        if not (self.settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY")):
+        if not self.settings.llm.resolved_api_key():
             raise RuntimeError(
-                "generation needs an LLM key — set ANTHROPIC_API_KEY (the provider/model are in the config)"
+                f"generation needs an LLM key — set {self.settings.llm.key_env_var()} "
+                "(the provider / model are in the config)"
             )
         return LanguageModel.create(self.settings.llm)
 

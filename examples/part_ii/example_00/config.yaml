@@ -46,6 +46,18 @@ embedding:
 database:
   document_url: sqlite:///./examples/part_ii/store/base.db
 
+# --- the generation reader (the LLM behind `ask`) -----------------------------
+# Built lazily on the first `ask`, so a retrieve-only session never needs a key.
+# The key is NEVER in this file — only the NAME of the env var that holds it.
+llm:
+  provider: openai                 # OpenAI, or any OpenAI-compatible /chat/completions endpoint
+  model: gpt-4o-mini               # the reader model (swap for any model your key can call)
+  api_key_env: OPENAI_LLM_KEY      # read the key from this env var (not the standard OPENAI_API_KEY)
+  api_base_url: ""                 # "" = OpenAI's endpoint; set to a vLLM / Together / Groq / … URL
+  temperature: 0.0                 # deterministic answers
+  max_tokens: 1024
+  api_timeout: 60.0
+
 components:
   # --- ingestion: the DAG that turns each .md file into embedded chunks --------
   ingestion_pipeline:
@@ -80,4 +92,11 @@ components:
   # Explicit even though this corpus is all one license class, so the retrieval path is fully specified.
   license_policy: { class_name: default_license }
 
-  # (No generation_pipeline here — generation enters in Act B, Example 06.)
+  # --- generation: the simplest reader (Act B exercises + elaborates this) -----
+  # The complete baseline so `ask` is fully specified, not left to a default. Example 07 adds the
+  # grounding check + abstain; Example 08 swaps in a multi-hop (decomposition) reasoner.
+  generation_pipeline:
+    class_name: generation_pipeline
+    reasoner: { class_name: single_hop, top_k: 4 }   # one retrieve→read pass (cheapest)
+    assembler: { class_name: provenance }            # answer + a provenance-bearing proof tree
+    # no grounding_checker / abstain yet — added in Example 07
