@@ -13,6 +13,7 @@ ensemble / bridge / ChainFilter) — but a baseline of where tarn.rag's current 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from collections.abc import AsyncIterator, Awaitable
@@ -176,16 +177,25 @@ async def run_over_corpus(
     embedder: Embedder,
     *,
     settings: Settings,
+    concurrency: int = 8,
 ) -> GenEvalReport:
     """Answer each item by retrieving over the *shared* pre-built corpus index (no per-question ingest) —
-    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely."""
+    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely. Questions
+    run with bounded ``concurrency`` — they're independent + read-only over the shared corpus, so the
+    (I/O-bound) LLM calls overlap; results are order-independent, so the aggregate is unchanged."""
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     generation = GenerationEngine.assemble(retrieval, llm, settings)
-    per_query = []
-    for item in items:
-        result = await _safe_answer(generation.answer(Query(text=item.query.text, purpose=item.query.purpose)))
-        per_query.append(_score(item.query, result))
-    return _aggregate(per_query)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
+            )
+        return _score(item.query, result)
+
+    per_query = await asyncio.gather(*(_one(item) for item in items))  # gather preserves item order
+    return _aggregate(list(per_query))
 
 
 async def sweep_over_corpus(
@@ -196,43 +206,53 @@ async def sweep_over_corpus(
     *,
     reasoners: list[str] | None = None,
     settings: Settings,
+    concurrency: int = 8,
 ) -> dict[str, GenEvalReport]:
-    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner."""
+    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner.
+    Each (item, reasoner) runs with bounded ``concurrency`` (independent + read-only over the shared corpus)."""
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
     specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
     factory = ComponentFactory.get()
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     ctx = GenerationContext(retrieval, llm)
     pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(name: str, pipeline: GenerationPipeline, item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                pipeline.answer(Query(text=item.query.text, purpose=item.query.purpose), ctx)
+            )
+        return name, _score(item.query, result)
+
+    tasks = [_one(name, p, item) for item in items for name, p in pipelines.items()]
     per_query: dict[str, list] = {name: [] for name in pipelines}
-    for item in items:
-        query = Query(text=item.query.text, purpose=item.query.purpose)
-        for name, pipeline in pipelines.items():
-            result = await _safe_answer(pipeline.answer(query, ctx))
-            per_query[name].append(_score(item.query, result))
+    for name, scored in await asyncio.gather(*tasks):  # item-major order preserved per reasoner
+        per_query[name].append(scored)
     return {name: _aggregate(pq) for name, pq in per_query.items()}
 
 
 def format_comparison(reports: dict[str, GenEvalReport]) -> str:
     """A table of tarn.rag's F1 / EM per dataset against MOTHRAG's published numbers (+ deltas + averages).
     Keys are dataset names (``hotpotqa`` / ``2wiki`` / ``musique``)."""
-    header = f"{'dataset':<12}{'n':>6}{'F1':>8}{'F1*':>8}{'ΔF1':>8}{'EM':>8}{'EM*':>8}{'ΔEM':>8}"
-    lines = [header, "-" * len(header), "(* = MOTHRAG published, Llama-3.3-70B reader)"]
-    f1s, ems, mf1s, mems = [], [], [], []
+    header = f"{'dataset':<12}{'n':>6}{'hit':>8}{'F1':>8}{'F1*':>8}{'ΔF1':>8}{'EM':>8}{'EM*':>8}{'ΔEM':>8}"
+    lines = [header, "-" * len(header), "(* = MOTHRAG published, Llama-3.3-70B reader; hit = answer recall)"]
+    hits, f1s, ems, mf1s, mems = [], [], [], [], []
     for name, r in reports.items():
         m = MOTHRAG_PUBLISHED.get(name, {})
         mf1, mem = m.get("f1", float("nan")), m.get("em", float("nan"))
         lines.append(
-            f"{name:<12}{r.n:>6}{r.token_f1:>8.3f}{mf1:>8.3f}{r.token_f1 - mf1:>+8.3f}"
+            f"{name:<12}{r.n:>6}{r.content_hit:>8.3f}{r.token_f1:>8.3f}{mf1:>8.3f}{r.token_f1 - mf1:>+8.3f}"
             f"{r.exact_match:>8.3f}{mem:>8.3f}{r.exact_match - mem:>+8.3f}"
         )
+        hits.append(r.content_hit)
         f1s.append(r.token_f1)
         ems.append(r.exact_match)
         mf1s.append(mf1)
         mems.append(mem)
     if reports:
         lines.append(
-            f"{'AVG':<12}{'':>6}{_avg(f1s):>8.3f}{_avg(mf1s):>8.3f}{_avg(f1s) - _avg(mf1s):>+8.3f}"
+            f"{'AVG':<12}{'':>6}{_avg(hits):>8.3f}{_avg(f1s):>8.3f}{_avg(mf1s):>8.3f}{_avg(f1s) - _avg(mf1s):>+8.3f}"
             f"{_avg(ems):>8.3f}{_avg(mems):>8.3f}{_avg(ems) - _avg(mems):>+8.3f}"
         )
     return "\n".join(lines)
