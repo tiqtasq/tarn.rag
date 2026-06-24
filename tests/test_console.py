@@ -8,7 +8,7 @@ import io
 
 from rich.console import Console as RichConsole
 
-from tarnrag.console import results_table, trace_view
+from tarnrag.console import Console
 from tarnrag.contracts import Candidate, RetrievalResult
 from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
 
@@ -32,7 +32,7 @@ def test_results_table_shows_a_column_per_component_score():
         _result("c1", "storage tank inspection", 0.9, {"dense": 0.8, "sparse": 0.5}, "tank-inspection"),
         _result("c2", "quokka marsupial", 0.4, {"dense": 0.4}, "quokka"),
     ]
-    text = _render(results_table(rows))
+    text = _render(Console.create_results_table(rows))
     assert "dense" in text and "sparse" in text          # one column per component present
     assert "tank-inspection" in text and "quokka" in text
     assert "0.800" in text                               # the dense component score, formatted
@@ -42,14 +42,14 @@ def test_results_table_shows_a_column_per_component_score():
 def test_results_table_movement_column_marks_rank_changes():
     a = _result("a", "alpha", 0.9, {"dense": 0.9}, "doc-a")
     b = _result("b", "bravo", 0.8, {"dense": 0.8}, "doc-b")
-    text = _render(results_table([a, b], prev_order=["b", "a"]))  # was [b, a], now [a, b]
+    text = _render(Console.create_results_table([a, b], prev_order=["b", "a"]))  # was [b, a], now [a, b]
     assert "Δ" in text
     assert "▲1" in text and "▼1" in text                 # a moved up one, b moved down one
 
 
 def test_results_table_movement_marks_a_newly_appeared_row():
     parent = _result("parent", "merged section", 0.9, {"dense": 0.9}, "compressor-startup")
-    text = _render(results_table([parent], prev_order=["leaf1", "leaf2"]))
+    text = _render(Console.create_results_table([parent], prev_order=["leaf1", "leaf2"]))
     assert "＋" in text                                  # the auto-merged parent wasn't a retrieved leaf
 
 
@@ -67,7 +67,7 @@ def test_trace_view_renders_query_routing_retrievers_and_stages():
         stages=[SearchStage("fused", fused), SearchStage("final", fused[:1])],
         routing=("semantic", "default"),
     )
-    text = _render(trace_view(trace))
+    text = _render(Console.create_trace_view(trace))
     assert "how to inspect a tank" in text               # the query
     assert "routed" in text and "semantic" in text and "default" in text  # routing decision
     assert "dense" in text and "sparse" in text          # per-retriever sections
