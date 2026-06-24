@@ -329,3 +329,26 @@ break it with heuristic grounding. Open levers: (a) **LLM grounding** (sharper g
 re-retrieval — cheap config try), (b) **ChainFilter** (the heavy §6 item: OpenIE triples + chain density),
 or (c) bank it — tarn.rag is at MOTHRAG parity on distractor; the realistic-pool multi-hop recall is a hard
 frontier that incremental levers (bridge, embedder, γ-heuristic) only nudge.
+
+### γ with LLM grounding — the bottleneck is re-retrieval, not the signal (2026-06-24)
+
+Re-ran γ with `--grounding llm_grounding` (sharper claim-gap detection) vs decomposition, same protocol:
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.610 | 0.495 |
+| grounded_retrieval (γ, **llm_grounding**) | 0.486 | 0.596 | 0.480 |
+
+**LLM grounding made γ worse, not better** (−0.014 F1 vs decomposition; below γ-heuristic's 0.621 F1). So the
+weak link is **not** the grounding signal — it's the re-retrieval itself: claim-as-query dense retrieval still
+can't surface the question-dissimilar bridge passage, and the extra hops add context noise. **γ-retrieval is
+spent** as a pool lever.
+
+### Phase 3 verdict (final)
+Every measured lever — bridge, stronger reader, stronger embedder, γ-heuristic, γ-llm — only *nudges* the
+pool's hit ≈ 0.51 multi-hop recall ceiling. The multi-hop retrieval problem (the 2nd-hop passage isn't similar
+to the question) is a **genuine hard frontier** that incremental retrieval tricks don't crack. The honest
+state: **tarn.rag matches MOTHRAG on distractor with a lean, differentiated stack** (offline / layout
+provenance / license filtering); the realistic-pool multi-hop recall gap is characterized and bounded. The
+only untried lever is **ChainFilter** (OpenIE triples + chain density — heavy, uncertain payoff against a
+ceiling 5 levers couldn't move).
