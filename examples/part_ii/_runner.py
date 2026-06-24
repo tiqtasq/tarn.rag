@@ -55,6 +55,15 @@ class Runner:
         for issue in outcome.report.issues:
             self._out.print(f"[yellow]{issue.severity.value}[/] {issue.subject}: {issue.message}")
 
+    async def ensure_corpus(self, *paths: str | Path) -> None:
+        """Ingest the corpus only if the store is empty — so the shared base store is built once (the
+        console flow / Example 00), while a standalone example run still works. Idempotent either way."""
+        docs = (await self._tarn.docs()).value
+        if docs:
+            self._out.print(f"[dim]corpus already present · {len(docs)} documents[/]")
+        else:
+            await self.ingest_corpus(*paths)
+
     async def show_retrieval(
         self, query: str, *, gold: str | None = None, label: str | None = None, top_k: int = 8
     ) -> bool | None:
