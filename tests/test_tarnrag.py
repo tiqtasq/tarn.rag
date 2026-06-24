@@ -58,6 +58,28 @@ def test_init_loads_settings_from_a_path(tmp_path):
     assert TarnRag(str(cfg)).settings.EMBEDDING_DIMENSION == 384  # str
 
 
+def test_init_loads_settings_from_a_yaml_path(tmp_path):
+    """A YAML config loads the same way a JSON one does — the loader dispatches on the extension. YAML's
+    comments are why the example configs use it; the parsed mapping is identical to the JSON form."""
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(
+        "# a commented config\n"
+        "EMBEDDING_DIMENSION: 384\n"
+        "database:\n"
+        "  document_url: sqlite:///x.db  # the §8 index store\n"
+    )
+    settings = TarnRag(cfg).settings
+    assert settings.EMBEDDING_DIMENSION == 384 and "x.db" in settings.database.document_url
+
+
+def test_from_file_rejects_an_unknown_extension(tmp_path):
+    """An unsupported extension fails loudly (not silently as JSON) — the message names the accepted set."""
+    cfg = tmp_path / "c.toml"
+    cfg.write_text("EMBEDDING_DIMENSION = 384")
+    with pytest.raises(ValueError, match="unsupported config extension"):
+        Settings.from_file(cfg)
+
+
 async def test_open_wires_shared_resources_then_close_releases(tmp_path):
     """The composition root, end to end without a model: ``__init__`` leaves the engines unbuilt; the
     context manager's ``open`` builds the repository + embedder once and the retrieval engine over them;
