@@ -12,9 +12,9 @@ file in it. This design note lives here, one level up, on purpose.
 
 | Doc | Engineered for | Key tokens / hook |
 |-----|----------------|-------------------|
-| `tank-inspection.md` | **Lexical/rare-token** miss (P2-01 dense fails → P2-02 sparse fixes) | `API 653`, `UT`, inspection intervals |
+| `tank-inspection.md` | Lexical / exact-term content (`API 653`, `UT`) — but note `gte-small` handles these fine on this corpus, so they are **not** a dense failure | `API 653`, `UT`, inspection intervals |
 | `tank-corrosion.md` | **Paraphrase/semantic** win (dense good case) | "loses metal to corrosion" ↔ "rusting" |
-| `pump-maintenance.md` | **Paraphrase/semantic** win (P2-01 dense good; sparse misses) | "centrifugal pump … before restarting" ↔ "rotary fluid machine … power up" |
+| `pump-maintenance.md` | **P2-01** both directions: paraphrase → dense win (sparse misses), AND the opaque part number `XQ-9920-A` → **dense miss** (no meaning to embed; sparse exact-matches → P2-02 hybrid fixes) | "rotary fluid machine … power up"; `XQ-9920-A` |
 | `pump-cavitation.md` | **Rerank target** — the true answer (P2-02 wrong → P2-03 rerank fixes) | "prevent cavitation", `NPSH` |
 | `pump-vibration.md` | **Rerank distractor** — shares "cavitation"/"noise" but doesn't answer prevention | "cavitation also produces … noise" |
 | `compressor-startup.md` | **Auto-merge** — in the structure-aware store, the `## Startup procedure` section's 2 paragraphs become ≥2 sibling leaves under a section parent; a section-matching query returns several fragments that auto-merge consolidates into the parent (P2-03 fragmented → P2-04 merge fixes) | startup steps across two paragraphs |
