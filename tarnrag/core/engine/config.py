@@ -17,6 +17,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -259,19 +260,11 @@ class Settings(BaseSettings):
         """Load a ``Settings`` from a JSON **or YAML** config file, selected by extension
         (``.json`` / ``.yaml`` / ``.yml``). The file is authoritative: the ambient ``.env`` is ignored
         (``_env_file=None``) so the same config is reproducible everywhere; OS env vars still supplement
-        (e.g. an LLM API key). YAML is parsed lazily — it needs PyYAML (``pip install 'tarn-rag[console]'``)
-        — so the JSON/embedded path carries no extra dependency."""
+        (e.g. an LLM API key)."""
         path = Path(path)
         suffix = path.suffix.lower()
         text = path.read_text(encoding="utf-8")
         if suffix in (".yaml", ".yml"):
-            try:
-                import yaml
-            except ModuleNotFoundError as exc:  # actionable hint, like the console's `rich` guard
-                raise ModuleNotFoundError(
-                    "reading a YAML config needs PyYAML — install it with "
-                    "`pip install pyyaml` (or `pip install 'tarn-rag[console]'`)"
-                ) from exc
             data = yaml.safe_load(text)
         elif suffix == ".json":
             data = json.loads(text)
