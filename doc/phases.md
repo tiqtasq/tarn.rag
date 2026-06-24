@@ -309,3 +309,23 @@ tarn.rag is at MOTHRAG parity on **distractor** (lean stack + gpt-4o); the **poo
 retrieval ceiling. The levers that actually attack it are the §6 items *not* redundant with decomposition:
 **γ-driven re-retrieval** (a failed grounding check triggers a follow-up search using what's been read — it
 can find the missing hop) and, heavier, ChainFilter. Phase 3 = **γ-driven re-retrieval**.
+
+---
+
+## Phase 3 — results: γ-driven re-retrieval (2026-06-24)
+
+`GroundedRetrievalReasoner` (`grounded_retrieval`) — retrieve → read → grounding-check; an ungrounded claim
+triggers a follow-up search *for that claim* (the bridge passage), then re-read. Eval: pool ~10K, gte-small,
+gpt-4o-mini, n=200, **heuristic** grounding (the LLM-free default).
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.613 | 0.500 |
+| **grounded_retrieval (γ, heuristic)** | **0.508** | **0.621** | **0.510** |
+
+**Verdict: a small, partly-within-noise positive** (+0.027 hit; F1/EM within the n=200 ~±0.02–0.03 floor —
+decomposition read 0.633 last run vs 0.613 here). γ-retrieval *nudges* the multi-hop ceiling but doesn't
+break it with heuristic grounding. Open levers: (a) **LLM grounding** (sharper gap detection → better-targeted
+re-retrieval — cheap config try), (b) **ChainFilter** (the heavy §6 item: OpenIE triples + chain density),
+or (c) bank it — tarn.rag is at MOTHRAG parity on distractor; the realistic-pool multi-hop recall is a hard
+frontier that incremental levers (bridge, embedder, γ-heuristic) only nudge.
