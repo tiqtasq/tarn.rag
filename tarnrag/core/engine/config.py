@@ -13,6 +13,7 @@ Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Literal
@@ -112,11 +113,23 @@ class LLMSettings(BaseModel):
     # api_base_url to point at vLLM / Together / Groq / … e.g. for a Llama-3.3-70B reader).
     provider: Literal["anthropic", "openai"] = "anthropic"
     model: str = "claude-sonnet-4-6"
-    api_key: str = ""  # falls back to the provider's env var (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+    api_key: str = ""  # the key itself (avoid in files); else read from the env var named by api_key_env
+    api_key_env: str = ""  # name of the env var holding the key; "" → the provider's standard var
     api_base_url: str = ""  # falls back to the provider's default endpoint
     api_timeout: float = 60.0
     max_tokens: int = 1024
     temperature: float = 0.0
+
+    def key_env_var(self) -> str:
+        """The environment variable the API key is read from — the configured ``api_key_env`` if set, else
+        the provider's standard (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``)."""
+        standard = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+        return self.api_key_env or standard[self.provider]
+
+    def resolved_api_key(self) -> str:
+        """The API key in effect: the explicit ``api_key``, else the value of :meth:`key_env_var`. Keeps the
+        secret out of config files — only the env var *name* is configured, never the key itself."""
+        return self.api_key or os.environ.get(self.key_env_var(), "")
 
 
 class DatabaseSettings(BaseModel):

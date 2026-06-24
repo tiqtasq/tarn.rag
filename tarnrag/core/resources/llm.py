@@ -69,7 +69,7 @@ class LanguageModel(Resource):
             raise ValueError(f"unknown LLM provider {llm.provider!r}; choose from {sorted(providers)}")
         return provider(
             model=llm.model,
-            api_key=llm.api_key,
+            api_key=llm.resolved_api_key(),  # explicit key, else the env var named by llm.api_key_env
             base_url=llm.api_base_url,
             max_tokens=llm.max_tokens,
             temperature=llm.temperature,
