@@ -13,6 +13,7 @@ ensemble / bridge / ChainFilter) — but a baseline of where tarn.rag's current 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from collections.abc import AsyncIterator, Awaitable
@@ -176,16 +177,25 @@ async def run_over_corpus(
     embedder: Embedder,
     *,
     settings: Settings,
+    concurrency: int = 8,
 ) -> GenEvalReport:
     """Answer each item by retrieving over the *shared* pre-built corpus index (no per-question ingest) —
-    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely."""
+    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely. Questions
+    run with bounded ``concurrency`` — they're independent + read-only over the shared corpus, so the
+    (I/O-bound) LLM calls overlap; results are order-independent, so the aggregate is unchanged."""
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     generation = GenerationEngine.assemble(retrieval, llm, settings)
-    per_query = []
-    for item in items:
-        result = await _safe_answer(generation.answer(Query(text=item.query.text, purpose=item.query.purpose)))
-        per_query.append(_score(item.query, result))
-    return _aggregate(per_query)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
+            )
+        return _score(item.query, result)
+
+    per_query = await asyncio.gather(*(_one(item) for item in items))  # gather preserves item order
+    return _aggregate(list(per_query))
 
 
 async def sweep_over_corpus(
@@ -196,20 +206,29 @@ async def sweep_over_corpus(
     *,
     reasoners: list[str] | None = None,
     settings: Settings,
+    concurrency: int = 8,
 ) -> dict[str, GenEvalReport]:
-    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner."""
+    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner.
+    Each (item, reasoner) runs with bounded ``concurrency`` (independent + read-only over the shared corpus)."""
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
     specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
     factory = ComponentFactory.get()
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     ctx = GenerationContext(retrieval, llm)
     pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(name: str, pipeline: GenerationPipeline, item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                pipeline.answer(Query(text=item.query.text, purpose=item.query.purpose), ctx)
+            )
+        return name, _score(item.query, result)
+
+    tasks = [_one(name, p, item) for item in items for name, p in pipelines.items()]
     per_query: dict[str, list] = {name: [] for name in pipelines}
-    for item in items:
-        query = Query(text=item.query.text, purpose=item.query.purpose)
-        for name, pipeline in pipelines.items():
-            result = await _safe_answer(pipeline.answer(query, ctx))
-            per_query[name].append(_score(item.query, result))
+    for name, scored in await asyncio.gather(*tasks):  # item-major order preserved per reasoner
+        per_query[name].append(scored)
     return {name: _aggregate(pq) for name, pq in per_query.items()}
 
 
