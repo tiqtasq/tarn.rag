@@ -229,9 +229,10 @@ class Console:
     @staticmethod
     def create_trace_view(trace: SearchTrace) -> Group:
         """Build the full explain breakdown of a :class:`~tarnrag.retrieval.types.SearchTrace`: the query
-        (and routing decision), each retriever's candidates before fusion, then the ranking at every
-        pipeline stage (``fused`` → ``merged`` → ``reranked`` → ``final``) with component scores and the
-        inter-stage movement. Pure rendering — it returns a renderable; the caller prints it."""
+        (and routing decision), the over-fetch / license-scope pre-filter in effect, each retriever's
+        candidates before fusion, the ranking at every pipeline stage (``fused`` → ``merged`` →
+        ``reranked`` → ``final``) with component scores + inter-stage movement, and a details table of the
+        identity/provenance carried on each final result. Pure rendering — returns a renderable."""
         by_id = {r.chunk_id: r for stage in trace.stages for r in stage.results}
         parts: list = [Text.assemble(("query: ", "bold"), trace.query.text)]
         if trace.routing is not None:
@@ -239,15 +240,72 @@ class Console:
             parts.append(
                 Text(f"routed: query_type={query_type or '∅'} → route {route!r}", style="magenta")
             )
+        parts.append(Console._params_summary(trace.query))
         if trace.per_retriever:
             parts.append(Text("\nretrievers (before fusion)", style="bold"))
             parts += [Console._candidates_table(rc, by_id) for rc in trace.per_retriever]
         parts.append(Text("\npipeline stages", style="bold"))
+        parts.append(Console._score_legend(trace.results))
         prev_order: list[str] | None = None
         for stage in trace.stages:
             parts.append(Console.create_results_table(stage.results, prev_order=prev_order, title=stage.name))
             prev_order = [r.chunk_id for r in stage.results]
+        if trace.results:
+            parts.append(Text("\nresult details", style="bold"))
+            parts.append(Console.create_details_table(trace.results))
         return Group(*parts)
+
+    @staticmethod
+    def create_details_table(results: list[RetrievalResult]) -> Table:
+        """The identity + provenance carried on each result but omitted from the ranking tables: the chunk
+        id, document, section (its header path), locator, and license class. Most are richer once
+        structure-aware chunking / enrichment are on; here they show what the pipeline produced beyond
+        rank and score."""
+        table = Table(show_edge=False, header_style="bold", title_justify="left", title_style="green")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("chunk", style="dim", no_wrap=True)
+        table.add_column("document", style="cyan")
+        table.add_column("section")
+        table.add_column("locator")
+        table.add_column("license", style="dim")
+        for rank, r in enumerate(results, 1):
+            header_path = r.provenance.header_path if r.provenance else []
+            section = " › ".join(header_path) if header_path else "—"
+            table.add_row(
+                str(rank), r.chunk_id[:8], escape(r.document_id), escape(section),
+                escape(r.locator or "—"), escape(r.license_class),
+            )
+        return table
+
+    @staticmethod
+    def _params_summary(query) -> Text:
+        """A dim line: the over-fetch targets and the license/scope pre-filter the retrievers apply (which
+        chunks a query may even see) — intermediate context the result tables don't show."""
+        scope = "ALL" if query.scope == "ALL" else f"{len(query.scope)} method(s)"
+        grounding = " · grounding-required" if query.purpose.value == "GENERATION_GROUNDING" else ""
+        return Text(
+            f"over-fetch: dense top-{query.dense_k}, sparse top-{query.sparse_k}  ·  "
+            f"pre-filter: purpose={query.purpose.value}, scope={scope}{grounding}",
+            style="dim",
+        )
+
+    @staticmethod
+    def _score_legend(results: list[RetrievalResult]) -> Text:
+        """Explain the numbers once: the fused ``score`` ranks the list (higher first), while each
+        component column is that retriever's *raw* score, which may run the other way (dense is a cosine
+        distance — lower is nearer)."""
+        notes = {
+            "dense": "cosine distance, lower = nearer",
+            "sparse": "BM25, higher = stronger",
+            "cross_encoder": "reranker relevance, higher = better",
+        }
+        components: list[str] = []
+        for r in results:
+            for key in r.component_scores:
+                if key not in components:
+                    components.append(key)
+        legend = "  ·  ".join(f"{c}: {notes.get(c, 'raw score')}" for c in components)
+        return Text(f"score = fused rank (higher first){'  ·  ' + legend if legend else ''}", style="dim")
 
     @staticmethod
     def create_answer_view(result: GenerationResult) -> Panel | Group:
@@ -285,7 +343,8 @@ class Console:
         """One retriever's pre-fusion candidates — rank, the raw engine score (distance for dense, BM25
         for sparse), and the document/passage (resolved from the hydrated stage results when available)."""
         table = Table(
-            title=rc.key, show_edge=False, header_style="dim", title_justify="left", title_style="cyan"
+            title=f"{rc.key} · {len(rc.candidates)} candidates", show_edge=False, header_style="dim",
+            title_justify="left", title_style="cyan",
         )
         table.add_column("rank", justify="right", style="dim")
         table.add_column("raw", justify="right")
