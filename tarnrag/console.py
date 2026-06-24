@@ -14,6 +14,8 @@ the config. Then type commands at the ``tarn>`` prompt::
     docs                 list ingested documents (id, chunks, embeddings)
     delete <id>          delete a document and everything derived from it
     retrieve <query>     retrieval only — the ranked passages
+    explain <query>      retrieval with its inner workings — each retriever's candidates before fusion,
+                         the ranking at every pipeline stage (with component scores), and any routing
     ask <query>          retrieval + generation — the grounded answer + its proof tree
     help                 show the commands
     quit                 exit
@@ -28,13 +30,16 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from rich.console import Console as RichConsole
+from rich.console import Console as RichConsole, Group
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich.tree import Tree
 
+from tarnrag.contracts import RetrievalResult
 from tarnrag.report import Report, Severity
+from tarnrag.retrieval.types import RetrieverCandidates, SearchTrace
 from tarnrag.tarnrag import TarnRag
 
 _out = RichConsole()
@@ -44,6 +49,7 @@ _COMMANDS = [
     ("docs", "list the ingested documents"),
     ("delete <id>", "delete a document and everything derived from it"),
     ("retrieve <query>", "retrieval only — the ranked passages"),
+    ("explain <query>", "retrieval with its inner workings — per-retriever candidates, per-stage ranking"),
     ("ask <query>", "retrieval + generation — the grounded answer + its proof tree"),
     ("help", "show this list"),
     ("quit", "exit"),
@@ -68,6 +74,7 @@ class Console:
             "docs": self._do_docs,
             "delete": self._do_delete,
             "retrieve": self._do_retrieve,
+            "explain": self._do_explain,
             "ask": self._do_ask,
         }
         while True:
@@ -155,14 +162,18 @@ class Console:
         if not outcome.value:
             _out.print("[yellow]no results — ingest some documents first[/]")
         else:
-            table = Table(show_edge=False, header_style="bold")
-            table.add_column("#", justify="right", style="dim")
-            table.add_column("score", justify="right")
-            table.add_column("document", style="cyan")
-            table.add_column("passage")
-            for rank, r in enumerate(outcome.value, 1):
-                table.add_row(str(rank), f"{r.score:.3f}", r.document_id, escape(_snippet(r.text)))
-            _out.print(table)
+            _out.print(results_table(outcome.value))
+        _render_report(outcome.report)
+
+    async def _do_explain(self, arg: str) -> None:
+        if not arg:
+            _out.print("usage: explain <query>", style="dim")
+            return
+        outcome = await self._tarn.explain(arg)
+        if not outcome.value.results:
+            _out.print("[yellow]no results — ingest some documents first[/]")
+        else:
+            _out.print(trace_view(outcome.value))
         _render_report(outcome.report)
 
     async def _do_ask(self, arg: str) -> None:
@@ -187,6 +198,93 @@ class Console:
                     node.add(f"[dim]cite[/] {escape(_cite(c))}")
             _out.print(tree)
         _render_report(outcome.report)
+
+
+def results_table(
+    results: list[RetrievalResult], *, prev_order: list[str] | None = None, title: str | None = None
+) -> Table:
+    """A ranked-results table: ``#``, the fused ``score``, one column per **component score** present
+    (dense / sparse / cross_encoder / …), the document, and a passage snippet. When ``prev_order`` (the
+    chunk-id order of the previous stage) is given, a ``Δ`` column shows how each row *moved* — what
+    merging or reranking did. Shared by the ``retrieve`` table and ``explain``'s per-stage tables, and
+    reusable by the example runner."""
+    components: list[str] = []
+    for r in results:
+        for key in r.component_scores:
+            if key not in components:
+                components.append(key)
+    table = Table(
+        title=title, show_edge=False, header_style="bold", title_justify="left", title_style="green"
+    )
+    table.add_column("#", justify="right", style="dim")
+    if prev_order is not None:
+        table.add_column("Δ", justify="center")
+    table.add_column("score", justify="right")
+    for key in components:
+        table.add_column(key, justify="right", style="dim")
+    table.add_column("document", style="cyan")
+    table.add_column("passage")
+    for rank, r in enumerate(results, 1):
+        row = [str(rank)]
+        if prev_order is not None:
+            row.append(_movement(r.chunk_id, rank - 1, prev_order))
+        row.append(f"{r.score:.3f}")
+        row += [f"{r.component_scores[k]:.3f}" if k in r.component_scores else "" for k in components]
+        row += [escape(r.document_id), escape(_snippet(r.text, 60))]
+        table.add_row(*row)
+    return table
+
+
+def _movement(chunk_id: str, index: int, prev_order: list[str]) -> str:
+    """How a result moved from the previous stage: ``▲n`` up, ``▼n`` down, ``·`` unchanged, ``＋`` newly
+    appeared (e.g. an auto-merged section parent that wasn't a retrieved leaf)."""
+    if chunk_id not in prev_order:
+        return "[green]＋[/]"
+    delta = prev_order.index(chunk_id) - index
+    if delta > 0:
+        return f"[green]▲{delta}[/]"
+    if delta < 0:
+        return f"[red]▼{-delta}[/]"
+    return "[dim]·[/]"
+
+
+def _candidates_table(rc: RetrieverCandidates, by_id: dict[str, RetrievalResult]) -> Table:
+    """One retriever's pre-fusion candidates — rank, the raw engine score (distance for dense, BM25 for
+    sparse), and the document/passage (resolved from the hydrated stage results when available)."""
+    table = Table(
+        title=rc.key, show_edge=False, header_style="dim", title_justify="left", title_style="cyan"
+    )
+    table.add_column("rank", justify="right", style="dim")
+    table.add_column("raw", justify="right")
+    table.add_column("document", style="cyan")
+    table.add_column("passage")
+    for c in rc.candidates:
+        hit = by_id.get(c.chunk_id)
+        document = escape(hit.document_id) if hit else escape(c.chunk_id)
+        passage = escape(_snippet(hit.text, 50)) if hit else "[dim]—[/]"
+        table.add_row(str(c.rank), f"{c.raw_score:.3f}", document, passage)
+    return table
+
+
+def trace_view(trace: SearchTrace) -> Group:
+    """Render a :class:`~tarnrag.retrieval.types.SearchTrace` as the full explain breakdown: the query
+    (and routing decision), each retriever's candidates before fusion, then the ranking at every pipeline
+    stage (``fused`` → ``merged`` → ``reranked`` → ``final``) with component scores and the inter-stage
+    movement. Pure rendering — it returns a renderable; the caller prints it (UI layer, not the facade)."""
+    by_id = {r.chunk_id: r for stage in trace.stages for r in stage.results}
+    parts: list = [Text.assemble(("query: ", "bold"), trace.query.text)]
+    if trace.routing is not None:
+        query_type, route = trace.routing
+        parts.append(Text(f"routed: query_type={query_type or '∅'} → route {route!r}", style="magenta"))
+    if trace.per_retriever:
+        parts.append(Text("\nretrievers (before fusion)", style="bold"))
+        parts += [_candidates_table(rc, by_id) for rc in trace.per_retriever]
+    parts.append(Text("\npipeline stages", style="bold"))
+    prev_order: list[str] | None = None
+    for stage in trace.stages:
+        parts.append(results_table(stage.results, prev_order=prev_order, title=stage.name))
+        prev_order = [r.chunk_id for r in stage.results]
+    return Group(*parts)
 
 
 def _render_report(report: Report) -> None:
