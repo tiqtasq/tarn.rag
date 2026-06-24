@@ -10,6 +10,7 @@ from rich.console import Console as RichConsole
 
 from tarnrag.console import Console
 from tarnrag.contracts import Candidate, RetrievalResult
+from tarnrag.generation.types import Citation, GenerationResult, ProofStep
 from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
 
 
@@ -73,3 +74,31 @@ def test_trace_view_renders_query_routing_retrievers_and_stages():
     assert "dense" in text and "sparse" in text          # per-retriever sections
     assert "fused" in text and "final" in text           # the per-stage tables
     assert "tank-inspection" in text                     # candidate hydrated from the stage results
+
+
+def test_create_answer_view_grounded_shows_answer_and_proof():
+    result = GenerationResult(
+        answer="Service the mechanical seal first.",
+        proof=[
+            ProofStep(
+                claim="Check the mechanical seal",
+                citations=[Citation(chunk_id="c1", document_id="pump-maintenance", header_path=["Centrifugal pump maintenance"])],
+                grounded=True,
+            ),
+            ProofStep(claim="Confirm shaft alignment", citations=[], grounded=False),
+        ],
+        grounded=True,
+    )
+    text = _render(Console.create_answer_view(result))
+    assert "Service the mechanical seal first." in text
+    assert "grounded" in text
+    assert "Check the mechanical seal" in text and "Confirm shaft alignment" in text
+    assert "✓" in text and "✗" in text                   # per-step grounding marks
+    assert "Centrifugal pump maintenance" in text        # the citation's header path
+
+
+def test_create_answer_view_abstained_shows_only_the_refusal():
+    result = GenerationResult(answer="I don't have evidence for that.", abstained=True)
+    text = _render(Console.create_answer_view(result))
+    assert "abstained" in text
+    assert "I don't have evidence for that." in text
