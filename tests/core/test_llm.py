@@ -169,6 +169,45 @@ async def test_openai_retries_transport_errors_to_exhaustion(monkeypatch):
     assert calls["n"] == OpenAILanguageModel.RETRY_ATTEMPTS
 
 
+def test_retry_after_is_honored_and_capped():
+    import httpx
+
+    def resp(headers):
+        return httpx.Response(429, headers=headers, request=httpx.Request("POST", "http://x/v1"))
+
+    ra = OpenAILanguageModel._retry_after
+    assert ra(resp({"retry-after": "5"}), 1.0) == 5.0  # honored over the exponential default
+    assert ra(resp({"retry-after": "999"}), 1.0) == OpenAILanguageModel.RETRY_MAX_DELAY  # capped
+    assert ra(resp({}), 2.0) == 2.0  # absent -> exponential fallback
+    assert ra(resp({"retry-after": "soon"}), 2.0) == 2.0  # HTTP-date / unparseable -> fallback
+
+
+async def test_openai_waits_retry_after_then_succeeds(monkeypatch):
+    import httpx
+
+    waits: list[float] = []
+
+    async def _capture(d):
+        waits.append(d)
+
+    monkeypatch.setattr("asyncio.sleep", _capture)
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    calls = {"n": 0}
+
+    async def flaky(url, body, headers):
+        calls["n"] += 1
+        if calls["n"] == 1:  # rate-limited once, with a Retry-After
+            req = httpx.Request("POST", url)
+            raise httpx.HTTPStatusError(
+                "429", request=req, response=httpx.Response(429, headers={"retry-after": "7"}, request=req)
+            )
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    lm._post = flaky
+    out = await lm.complete(Prompt(user="hi"))
+    assert out.text == "ok" and waits == [7.0]  # waited exactly Retry-After, not the 1.0 default
+
+
 async def test_openai_post_roundtrips_via_httpx():
     """The real ``_post`` path (httpx) exercised end-to-end with a mock transport — no network."""
     import json

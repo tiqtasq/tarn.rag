@@ -126,7 +126,8 @@ class OpenAILanguageModel(LanguageModel):
     API_KEY_ENV = "OPENAI_API_KEY"
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
     RETRY_STATUS = frozenset({429, 500, 502, 503, 504, 529})  # transient: rate-limit / overloaded / 5xx
-    RETRY_ATTEMPTS = 4
+    RETRY_ATTEMPTS = 8  # enough to ride out sustained rate-limiting (429s) on a batch run
+    RETRY_MAX_DELAY = 30.0  # cap per-wait (exponential backoff or a server Retry-After)
 
     def __init__(
         self,
@@ -170,9 +171,10 @@ class OpenAILanguageModel(LanguageModel):
         )
 
     async def _post_retrying(self, url: str, body: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-        """``_post`` with exponential backoff on transient failures (429 / 5xx / timeouts). Over a long batch
-        (e.g. the eval sweep — thousands of calls) a single transient error is near-certain, so retry rather
-        than lose the run; client errors (4xx) and the final attempt propagate."""
+        """``_post`` with backoff on transient failures (429 / 5xx / timeouts). Over a long batch (e.g. the
+        eval sweep — thousands of calls) a transient error is near-certain, so retry rather than lose the
+        run. On a 429 the server's ``Retry-After`` is honored (wait exactly as told, not a guess); otherwise
+        exponential backoff (capped). Client errors (4xx) and the final attempt propagate."""
         import httpx
 
         delay = 1.0
@@ -183,12 +185,26 @@ class OpenAILanguageModel(LanguageModel):
             except httpx.HTTPStatusError as e:
                 if e.response.status_code not in self.RETRY_STATUS or last:
                     raise
+                wait = self._retry_after(e.response, delay)
             except (httpx.TimeoutException, httpx.TransportError):
                 if last:
                     raise
-            await asyncio.sleep(delay)
-            delay *= 2
+                wait = delay
+            await asyncio.sleep(wait)
+            delay = min(delay * 2, self.RETRY_MAX_DELAY)
         raise RuntimeError("unreachable: the retry loop returns or raises")  # pragma: no cover
+
+    @classmethod
+    def _retry_after(cls, response: Any, default: float) -> float:
+        """The server's ``Retry-After`` (seconds), capped at ``RETRY_MAX_DELAY`` — honored on 429 so we wait
+        exactly as told instead of guessing; falls back to the exponential ``default`` when absent/unparseable."""
+        raw = response.headers.get("retry-after")
+        if raw:
+            try:
+                return min(float(raw), cls.RETRY_MAX_DELAY)
+            except ValueError:
+                pass
+        return default
 
     # ---------------- the one stubbable seam ----------------
 
