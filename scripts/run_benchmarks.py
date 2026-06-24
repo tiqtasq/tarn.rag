@@ -37,7 +37,8 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 
 
 async def _run(
-    dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool, corpus: str
+    dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
+    corpus: str, corpus_limit: int | None,
 ) -> None:
     settings = get_settings()
     if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
@@ -45,7 +46,7 @@ async def _run(
     llm = LanguageModel.create(settings.llm)
     tag = " + bridge" if bridge else ""
     if corpus == "pool":
-        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag)
+        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit)
     else:
         await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag)
 
@@ -62,11 +63,14 @@ async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag) -
         print(format_comparison({dataset: await run_benchmark(items, llm, settings=settings)}))
 
 
-async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
-    all_items = HF_LOADERS[dataset]() if hf else LOADERS[dataset](path)  # the FULL dev set -> the corpus
+async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit) -> None:
+    # The corpus is built from the first ``corpus_limit`` dev questions (all of them if None) — sized larger
+    # than the eval slice so the eval questions' gold passages are in the haystack. A moderate corpus_limit
+    # keeps the (per-doc) build tractable while still making retrieval miss-able.
+    all_items = HF_LOADERS[dataset](limit=corpus_limit) if hf else LOADERS[dataset](path, limit=corpus_limit)
     corpus = corpus_from_items(all_items)
     eval_items = all_items[:limit] if limit else all_items
-    db_path = f"./docs/bench_{dataset}_pool.db"
+    db_path = f"./docs/bench_{dataset}_pool_{corpus_limit or 'full'}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building corpus index for {dataset}: {len(corpus)} passages -> {db_path} (cached) …")
     repo, embedder = await build_corpus_index(corpus, settings, db_path=db_path)
@@ -102,14 +106,21 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--corpus", choices=["distractor", "pool"], default="distractor",
         help="retrieval setting: 'distractor' (per-question pool, default) or 'pool' (one shared corpus "
-             "built from the whole dev set — the fullwiki-style setting; built once + cached)",
+             "built from the dev set — the fullwiki-style setting; built once + cached)",
+    )
+    parser.add_argument(
+        "--corpus-limit", type=int, default=None,
+        help="with --corpus pool: build the corpus from only the first N dev questions (a moderate haystack "
+             "the per-doc ingest can build in reasonable time); defaults to the whole dev set",
     )
     args = parser.parse_args(argv)
     if args.hf and args.dataset not in HF_LOADERS:
         parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
     if not args.hf and not args.path:
         parser.error("provide a dataset file path, or use --hf")
-    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge, args.corpus))
+    asyncio.run(
+        _run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge, args.corpus, args.corpus_limit)
+    )
 
 
 if __name__ == "__main__":
