@@ -32,6 +32,11 @@ from __future__ import annotations
 import asyncio
 import sys
 
+try:  # importing `readline` gives input() up/down history + line editing (Linux/macOS stdlib)
+    import readline  # noqa: F401
+except ImportError:  # pragma: no cover — e.g. Windows without pyreadline3; the REPL still works
+    pass
+
 from rich.console import Console as RichConsole, Group
 from rich.markup import escape
 from rich.panel import Panel
@@ -63,16 +68,21 @@ class Console:
         ("quit", "exit"),
     ]
 
+    # The prompt is read with the builtin input() (so readline's history/editing applies); the colour is
+    # raw ANSI wrapped in \001..\002 so readline counts only the visible width when it redraws the line.
+    _PROMPT = "\001\033[1;36m\002tarn> \001\033[0m\002"
+
     def __init__(self, tarn: TarnRag) -> None:
         self._tarn = tarn
         self._out = RichConsole()
+        self._prompt = self._PROMPT if sys.stdout.isatty() else "tarn> "  # plain when piped (no raw ANSI)
 
     async def run(self) -> None:
         """Read commands at the ``tarn>`` prompt until EOF / quit."""
         self._out.print(
             f"[bold]tarn.rag console[/]  [dim]{escape(self._tarn.settings.database.document_url)}[/]"
         )
-        self._out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.\n")
+        self._out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.  [dim](↑/↓ for history)[/]\n")
         handlers = {
             "help": self._do_help,
             "ingest": self._do_ingest,
@@ -84,7 +94,7 @@ class Console:
         }
         while True:
             try:
-                line = (await asyncio.to_thread(self._out.input, "[bold cyan]tarn>[/] ")).strip()
+                line = (await asyncio.to_thread(input, self._prompt)).strip()
             except (EOFError, KeyboardInterrupt):
                 self._out.print()
                 break
