@@ -150,6 +150,23 @@ class DocumentFacts:
 
 
 @dataclass(frozen=True)
+class CorpusStatus:
+    """A snapshot of the whole document repository: document / chunk / embedding counts and the
+    distribution of document length (in characters). The corpus-level companion to ``DocumentFacts``
+    (which is per-document) — the read model behind a ``status`` summary."""
+
+    document_count: int
+    chunk_count: int
+    embedding_count: int
+    total_chars: int
+    min_chars: int
+    max_chars: int
+    mean_chars: float
+    median_chars: float
+    mean_chunks_per_doc: float
+
+
+@dataclass(frozen=True)
 class MethodRef:
     """
     Reference to an indexed method — id plus optional version (``None`` → latest in the index).

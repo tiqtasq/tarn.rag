@@ -6,6 +6,7 @@ subclasses supply only the Postgres/SQLite specifics via a small set of hooks.
 
 from __future__ import annotations
 
+import statistics
 import uuid
 from abc import abstractmethod
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,7 @@ from tarnrag.contracts import (
     ChunkProvenance,
     ChunkRecord,
     ChunkStore,
+    CorpusStatus,
     Document,
     DocumentFacts,
     DocumentFactsSource,
@@ -561,6 +563,32 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             ).scalar_one()
             embedding_count = await self._count_doc_embeddings(conn, document_id)
         return DocumentFacts(True, chunk_count, embedding_count)
+
+    async def corpus_stats(self) -> CorpusStatus:
+        """A whole-repository snapshot: document / chunk / embedding counts plus the distribution of
+        document length in characters (min / median / mean / max / total). The read model behind the
+        console's ``status``."""
+        docs = await self.list_documents()  # per-document chunk + embedding counts (no N+1)
+        lengths = sorted(await self._document_lengths())
+        n = len(lengths)
+        chunk_count = sum(d["chunk_count"] for d in docs)
+        return CorpusStatus(
+            document_count=len(docs),
+            chunk_count=chunk_count,
+            embedding_count=sum(d["embedding_count"] for d in docs),
+            total_chars=sum(lengths),
+            min_chars=lengths[0] if n else 0,
+            max_chars=lengths[-1] if n else 0,
+            mean_chars=sum(lengths) / n if n else 0.0,
+            median_chars=statistics.median(lengths) if n else 0.0,
+            mean_chunks_per_doc=chunk_count / len(docs) if docs else 0.0,
+        )
+
+    async def _document_lengths(self) -> list[int]:
+        """The character length of each document's stored content (``func.length`` — dialect-agnostic)."""
+        async with self.engine.connect() as conn:
+            rows = (await conn.execute(select(func.length(self.documents.c.content)))).all()
+        return [row[0] or 0 for row in rows]
 
     async def documents_by_content_hash(self, content_hash: str) -> list[str]:
         """Public document_ids whose stored content_hash matches — content dedup."""

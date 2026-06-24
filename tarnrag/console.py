@@ -12,6 +12,7 @@ the config. Then type commands at the ``tarn>`` prompt::
     ingest <path> ...    ingest (or RE-ingest) files; a directory ingests the files in it. The document
                          id is the filename stem, so re-ingesting a file replaces it.
     docs                 list ingested documents (id, chunks, embeddings)
+    status               summarize the corpus — counts + document-length stats
     delete <id>          delete a document and everything derived from it
     retrieve <query>     retrieval only — the ranked passages
     explain <query>      retrieval with its inner workings — each retriever's candidates before fusion,
@@ -32,6 +33,11 @@ from __future__ import annotations
 import asyncio
 import sys
 
+try:  # importing `readline` gives input() up/down history + line editing (Linux/macOS stdlib)
+    import readline  # noqa: F401
+except ImportError:  # pragma: no cover — e.g. Windows without pyreadline3; the REPL still works
+    pass
+
 from rich.console import Console as RichConsole, Group
 from rich.markup import escape
 from rich.panel import Panel
@@ -39,7 +45,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.tree import Tree
 
-from tarnrag.contracts import RetrievalResult
+from tarnrag.contracts import CorpusStatus, RetrievalResult
 from tarnrag.generation.types import GenerationResult
 from tarnrag.report import Report, Severity
 from tarnrag.retrieval.types import RetrieverCandidates, SearchTrace
@@ -55,6 +61,7 @@ class Console:
     _COMMANDS = [
         ("ingest <path> ...", "ingest (or re-ingest) files; a directory ingests the files in it"),
         ("docs", "list the ingested documents"),
+        ("status", "summarize the corpus — counts + document-length stats"),
         ("delete <id>", "delete a document and everything derived from it"),
         ("retrieve <query>", "retrieval only — the ranked passages"),
         ("explain <query>", "retrieval with its inner workings — per-retriever candidates, per-stage ranking"),
@@ -63,20 +70,26 @@ class Console:
         ("quit", "exit"),
     ]
 
+    # The prompt is read with the builtin input() (so readline's history/editing applies); the colour is
+    # raw ANSI wrapped in \001..\002 so readline counts only the visible width when it redraws the line.
+    _PROMPT = "\001\033[1;36m\002tarn> \001\033[0m\002"
+
     def __init__(self, tarn: TarnRag) -> None:
         self._tarn = tarn
         self._out = RichConsole()
+        self._prompt = self._PROMPT if sys.stdout.isatty() else "tarn> "  # plain when piped (no raw ANSI)
 
     async def run(self) -> None:
         """Read commands at the ``tarn>`` prompt until EOF / quit."""
         self._out.print(
             f"[bold]tarn.rag console[/]  [dim]{escape(self._tarn.settings.database.document_url)}[/]"
         )
-        self._out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.\n")
+        self._out.print("Type [cyan]help[/], or [cyan]quit[/] to exit.  [dim](↑/↓ for history)[/]\n")
         handlers = {
             "help": self._do_help,
             "ingest": self._do_ingest,
             "docs": self._do_docs,
+            "status": self._do_status,
             "delete": self._do_delete,
             "retrieve": self._do_retrieve,
             "explain": self._do_explain,
@@ -84,7 +97,7 @@ class Console:
         }
         while True:
             try:
-                line = (await asyncio.to_thread(self._out.input, "[bold cyan]tarn>[/] ")).strip()
+                line = (await asyncio.to_thread(input, self._prompt)).strip()
             except (EOFError, KeyboardInterrupt):
                 self._out.print()
                 break
@@ -146,6 +159,11 @@ class Console:
                 table.add_row(d.document_id, str(d.chunk_count), str(d.embedding_count))
             self._out.print(table)
             self._out.print(f"[dim]{len(outcome.value)} document(s)[/]")
+        self._render_report(outcome.report)
+
+    async def _do_status(self, _arg: str) -> None:
+        outcome = await self._tarn.status()
+        self._out.print(self.create_status_view(outcome.value))
         self._render_report(outcome.report)
 
     async def _do_delete(self, arg: str) -> None:
@@ -229,9 +247,10 @@ class Console:
     @staticmethod
     def create_trace_view(trace: SearchTrace) -> Group:
         """Build the full explain breakdown of a :class:`~tarnrag.retrieval.types.SearchTrace`: the query
-        (and routing decision), each retriever's candidates before fusion, then the ranking at every
-        pipeline stage (``fused`` → ``merged`` → ``reranked`` → ``final``) with component scores and the
-        inter-stage movement. Pure rendering — it returns a renderable; the caller prints it."""
+        (and routing decision), the over-fetch / license-scope pre-filter in effect, each retriever's
+        candidates before fusion, the ranking at every pipeline stage (``fused`` → ``merged`` →
+        ``reranked`` → ``final``) with component scores + inter-stage movement, and a details table of the
+        identity/provenance carried on each final result. Pure rendering — returns a renderable."""
         by_id = {r.chunk_id: r for stage in trace.stages for r in stage.results}
         parts: list = [Text.assemble(("query: ", "bold"), trace.query.text)]
         if trace.routing is not None:
@@ -239,15 +258,72 @@ class Console:
             parts.append(
                 Text(f"routed: query_type={query_type or '∅'} → route {route!r}", style="magenta")
             )
+        parts.append(Console._params_summary(trace.query))
         if trace.per_retriever:
             parts.append(Text("\nretrievers (before fusion)", style="bold"))
             parts += [Console._candidates_table(rc, by_id) for rc in trace.per_retriever]
         parts.append(Text("\npipeline stages", style="bold"))
+        parts.append(Console._score_legend(trace.results))
         prev_order: list[str] | None = None
         for stage in trace.stages:
             parts.append(Console.create_results_table(stage.results, prev_order=prev_order, title=stage.name))
             prev_order = [r.chunk_id for r in stage.results]
+        if trace.results:
+            parts.append(Text("\nresult details", style="bold"))
+            parts.append(Console.create_details_table(trace.results))
         return Group(*parts)
+
+    @staticmethod
+    def create_details_table(results: list[RetrievalResult]) -> Table:
+        """The identity + provenance carried on each result but omitted from the ranking tables: the chunk
+        id, document, section (its header path), locator, and license class. Most are richer once
+        structure-aware chunking / enrichment are on; here they show what the pipeline produced beyond
+        rank and score."""
+        table = Table(show_edge=False, header_style="bold", title_justify="left", title_style="green")
+        table.add_column("#", justify="right", style="dim")
+        table.add_column("chunk", style="dim", no_wrap=True)
+        table.add_column("document", style="cyan")
+        table.add_column("section")
+        table.add_column("locator")
+        table.add_column("license", style="dim")
+        for rank, r in enumerate(results, 1):
+            header_path = r.provenance.header_path if r.provenance else []
+            section = " › ".join(header_path) if header_path else "—"
+            table.add_row(
+                str(rank), r.chunk_id[:8], escape(r.document_id), escape(section),
+                escape(r.locator or "—"), escape(r.license_class),
+            )
+        return table
+
+    @staticmethod
+    def _params_summary(query) -> Text:
+        """A dim line: the over-fetch targets and the license/scope pre-filter the retrievers apply (which
+        chunks a query may even see) — intermediate context the result tables don't show."""
+        scope = "ALL" if query.scope == "ALL" else f"{len(query.scope)} method(s)"
+        grounding = " · grounding-required" if query.purpose.value == "GENERATION_GROUNDING" else ""
+        return Text(
+            f"over-fetch: dense top-{query.dense_k}, sparse top-{query.sparse_k}  ·  "
+            f"pre-filter: purpose={query.purpose.value}, scope={scope}{grounding}",
+            style="dim",
+        )
+
+    @staticmethod
+    def _score_legend(results: list[RetrievalResult]) -> Text:
+        """Explain the numbers once: the fused ``score`` ranks the list (higher first), while each
+        component column is that retriever's *raw* score, which may run the other way (dense is a cosine
+        distance — lower is nearer)."""
+        notes = {
+            "dense": "cosine distance, lower = nearer",
+            "sparse": "BM25, higher = stronger",
+            "cross_encoder": "reranker relevance, higher = better",
+        }
+        components: list[str] = []
+        for r in results:
+            for key in r.component_scores:
+                if key not in components:
+                    components.append(key)
+        legend = "  ·  ".join(f"{c}: {notes.get(c, 'raw score')}" for c in components)
+        return Text(f"score = fused rank (higher first){'  ·  ' + legend if legend else ''}", style="dim")
 
     @staticmethod
     def create_answer_view(result: GenerationResult) -> Panel | Group:
@@ -268,6 +344,27 @@ class Console:
         return Group(panel, tree)
 
     @staticmethod
+    def create_status_view(status: CorpusStatus) -> Table:
+        """Summarize the corpus in the document repository: document / chunk / embedding counts and the
+        document-length distribution (min · median · mean · max, in characters)."""
+        table = Table(
+            title="corpus", show_edge=False, header_style="bold", title_justify="left", title_style="green"
+        )
+        table.add_column("metric", style="cyan")
+        table.add_column("value", justify="right")
+        table.add_row("documents", str(status.document_count))
+        table.add_row("chunks", str(status.chunk_count))
+        table.add_row("embeddings", str(status.embedding_count))
+        table.add_row("chunks / doc (mean)", f"{status.mean_chunks_per_doc:.1f}")
+        table.add_row(
+            "doc length (chars)",
+            f"min {status.min_chars} · median {status.median_chars:.0f} · "
+            f"mean {status.mean_chars:.0f} · max {status.max_chars}",
+        )
+        table.add_row("total chars", f"{status.total_chars:,}")
+        return table
+
+    @staticmethod
     def _movement(chunk_id: str, index: int, prev_order: list[str]) -> str:
         """How a result moved from the previous stage: ``▲n`` up, ``▼n`` down, ``·`` unchanged, ``＋``
         newly appeared (e.g. an auto-merged section parent that wasn't a retrieved leaf)."""
@@ -285,7 +382,8 @@ class Console:
         """One retriever's pre-fusion candidates — rank, the raw engine score (distance for dense, BM25
         for sparse), and the document/passage (resolved from the hydrated stage results when available)."""
         table = Table(
-            title=rc.key, show_edge=False, header_style="dim", title_justify="left", title_style="cyan"
+            title=f"{rc.key} · {len(rc.candidates)} candidates", show_edge=False, header_style="dim",
+            title_justify="left", title_style="cyan",
         )
         table.add_column("rank", justify="right", style="dim")
         table.add_column("raw", justify="right")

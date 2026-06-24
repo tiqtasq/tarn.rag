@@ -9,7 +9,7 @@ import io
 from rich.console import Console as RichConsole
 
 from tarnrag.console import Console
-from tarnrag.contracts import Candidate, RetrievalResult
+from tarnrag.contracts import Candidate, ChunkProvenance, CorpusStatus, RetrievalResult
 from tarnrag.generation.types import Citation, GenerationResult, ProofStep
 from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
 
@@ -102,3 +102,44 @@ def test_create_answer_view_abstained_shows_only_the_refusal():
     text = _render(Console.create_answer_view(result))
     assert "abstained" in text
     assert "I don't have evidence for that." in text
+
+
+def test_create_details_table_surfaces_chunk_id_section_locator_and_license():
+    r = RetrievalResult(
+        chunk_id="abcdef1234567890", text="t", score=0.9, component_scores={"dense": 0.3},
+        document_id="tank-inspection", source_kind="document", standard_id=None,
+        locator="§6.4", license_class="public_domain",
+        provenance=ChunkProvenance(content_hash="x", header_path=["Tank inspection", "Shell thickness"]),
+    )
+    text = _render(Console.create_details_table([r]))
+    assert "abcdef12" in text                     # the chunk id, shortened to 8 chars
+    assert "tank-inspection" in text
+    assert "Shell thickness" in text              # the section header path
+    assert "§6.4" in text                         # the locator
+    assert "public_domain" in text                # the license class
+
+
+def test_trace_view_includes_overfetch_filter_summary_and_score_legend():
+    fused = [_result("c1", "storage tank inspection", 0.9, {"dense": 0.30, "sparse": 0.5}, "tank-inspection")]
+    trace = SearchTrace(
+        query=Query(text="q", top_k=1),
+        per_retriever=[RetrieverCandidates("dense", [Candidate("c1", 1, 0.30)])],
+        stages=[SearchStage("fused", fused), SearchStage("final", fused)],
+    )
+    text = _render(Console.create_trace_view(trace))
+    assert "over-fetch" in text and "top-50" in text           # the over-fetch targets
+    assert "pre-filter" in text and "EXECUTION" in text and "scope=ALL" in text  # the license/scope filter
+    assert "cosine distance" in text                           # the score legend (dense semantics)
+    assert "result details" in text and "public_domain" in text  # the details table is appended
+
+
+def test_create_status_view_summarizes_the_corpus():
+    status = CorpusStatus(
+        document_count=12, chunk_count=19, embedding_count=19, total_chars=3000,
+        min_chars=149, max_chars=400, mean_chars=250.0, median_chars=246.0, mean_chunks_per_doc=1.58,
+    )
+    text = _render(Console.create_status_view(status))
+    assert "documents" in text and "12" in text
+    assert "chunks" in text and "19" in text
+    assert "median 246" in text and "max 400" in text          # the doc-length distribution line
+    assert "3,000" in text                                     # total chars, thousands-separated

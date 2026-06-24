@@ -24,7 +24,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from tarnrag.contracts import RetrievalResult
+from tarnrag.contracts import CorpusStatus, RetrievalResult
 from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
@@ -113,6 +113,12 @@ class TarnRag:
     async def docs(self) -> Outcome[list[DocumentSummary]]:
         """Every ingested document (id + chunk / embedding counts)."""
         return Outcome(await (await self._ingestion_engine()).list_documents())
+
+    async def status(self) -> Outcome[CorpusStatus]:
+        """A snapshot of the document repository — document / chunk / embedding counts and the
+        document-length distribution. Read-only: it queries the shared store directly, so it never builds
+        the ingestion machinery."""
+        return Outcome(await self._repository.corpus_stats())
 
     async def delete(self, document_id: str) -> Outcome[bool]:
         """Delete a document and everything derived from it. The value is False if it wasn't known."""
