@@ -85,6 +85,10 @@ class LlmJudgeReranker(Reranker):
     class Config(Reranker.Config):
         class_name: Literal["llm_judge"] = "llm_judge"
         score_key: str = "llm_judge"  # key the judge score is surfaced under in component_scores
+        top_n: int = 20  # judge only the top-N incoming candidates — bounds the prompt + cost at corpus
+        # scale (multi-query over a large corpus can hand the reranker 100+ candidates), and the judge is
+        # sharper over a shortlist. The tail keeps its first-pass order below the judged shortlist; it never
+        # reaches ``top_k`` (≪ top_n), so nothing is lost.
 
     config: LlmJudgeReranker.Config
 
@@ -98,17 +102,18 @@ class LlmJudgeReranker(Reranker):
                 "an llm_judge reranker is configured but the RetrievalContext has no LLM — the engine "
                 "injects it from `Settings.llm`; build the engine from Settings (or inject an llm)"
             )
-        passages = "\n".join(f"[{i + 1}] {r.text}" for i, r in enumerate(results))
+        shortlist, tail = results[: self.config.top_n], results[self.config.top_n :]
+        passages = "\n".join(f"[{i + 1}] {r.text}" for i, r in enumerate(shortlist))
         completion = await ctx.llm.complete(
             Prompt(system=_JUDGE_SYSTEM, user=f"Question: {query.text}\n\nPassages:\n{passages}")
         )
-        scores = self._parse_scores(completion.text, len(results))
+        scores = self._parse_scores(completion.text, len(shortlist))
         rescored = [
             replace(r, score=s, component_scores={**r.component_scores, self.config.score_key: s})
-            for r, s in zip(results, scores)
+            for r, s in zip(shortlist, scores)
         ]
         rescored.sort(key=lambda r: (-r.score, r.chunk_id))
-        return rescored
+        return rescored + tail  # judged shortlist first; the unjudged tail trails (never reaches top_k)
 
     @staticmethod
     def _parse_scores(text: str, n: int) -> list[float]:

@@ -111,6 +111,22 @@ async def test_llm_judge_ignores_out_of_range_and_non_numeric_scores():
     assert [r.chunk_id for r in out] == ["b", "a"]  # b=3, a stayed 0 (non-numeric ignored; 5 out of range)
 
 
+async def test_llm_judge_caps_at_top_n():
+    results = [_result(f"c{i}", f"passage text {i}") for i in range(5)]
+    captured = {}
+
+    def judge(prompt):
+        captured["user"] = prompt.user
+        return json.dumps({"scores": [{"passage": 1, "score": 3}, {"passage": 2, "score": 9}]})
+
+    out = await LlmJudgeReranker(LlmJudgeReranker.Config(top_n=2)).rerank(
+        Query(text="q"), results, _ctx(store=None, llm=StaticLanguageModel(judge))
+    )
+    assert captured["user"].count("] passage text") == 2  # only the top-2 were sent to the judge
+    assert [r.chunk_id for r in out[:2]] == ["c1", "c0"]  # judged: c1=9, then c0=3
+    assert [r.chunk_id for r in out[2:]] == ["c2", "c3", "c4"]  # unjudged tail, first-pass order
+
+
 async def test_llm_judge_requires_an_llm():
     with pytest.raises(RetrievalError, match="no LLM"):
         await LlmJudgeReranker(LlmJudgeReranker.Config()).rerank(

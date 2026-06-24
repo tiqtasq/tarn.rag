@@ -216,23 +216,24 @@ async def sweep_over_corpus(
 def format_comparison(reports: dict[str, GenEvalReport]) -> str:
     """A table of tarn.rag's F1 / EM per dataset against MOTHRAG's published numbers (+ deltas + averages).
     Keys are dataset names (``hotpotqa`` / ``2wiki`` / ``musique``)."""
-    header = f"{'dataset':<12}{'n':>6}{'F1':>8}{'F1*':>8}{'ΔF1':>8}{'EM':>8}{'EM*':>8}{'ΔEM':>8}"
-    lines = [header, "-" * len(header), "(* = MOTHRAG published, Llama-3.3-70B reader)"]
-    f1s, ems, mf1s, mems = [], [], [], []
+    header = f"{'dataset':<12}{'n':>6}{'hit':>8}{'F1':>8}{'F1*':>8}{'ΔF1':>8}{'EM':>8}{'EM*':>8}{'ΔEM':>8}"
+    lines = [header, "-" * len(header), "(* = MOTHRAG published, Llama-3.3-70B reader; hit = answer recall)"]
+    hits, f1s, ems, mf1s, mems = [], [], [], [], []
     for name, r in reports.items():
         m = MOTHRAG_PUBLISHED.get(name, {})
         mf1, mem = m.get("f1", float("nan")), m.get("em", float("nan"))
         lines.append(
-            f"{name:<12}{r.n:>6}{r.token_f1:>8.3f}{mf1:>8.3f}{r.token_f1 - mf1:>+8.3f}"
+            f"{name:<12}{r.n:>6}{r.content_hit:>8.3f}{r.token_f1:>8.3f}{mf1:>8.3f}{r.token_f1 - mf1:>+8.3f}"
             f"{r.exact_match:>8.3f}{mem:>8.3f}{r.exact_match - mem:>+8.3f}"
         )
+        hits.append(r.content_hit)
         f1s.append(r.token_f1)
         ems.append(r.exact_match)
         mf1s.append(mf1)
         mems.append(mem)
     if reports:
         lines.append(
-            f"{'AVG':<12}{'':>6}{_avg(f1s):>8.3f}{_avg(mf1s):>8.3f}{_avg(f1s) - _avg(mf1s):>+8.3f}"
+            f"{'AVG':<12}{'':>6}{_avg(hits):>8.3f}{_avg(f1s):>8.3f}{_avg(mf1s):>8.3f}{_avg(f1s) - _avg(mf1s):>+8.3f}"
             f"{_avg(ems):>8.3f}{_avg(mems):>8.3f}{_avg(ems) - _avg(mems):>+8.3f}"
         )
     return "\n".join(lines)
