@@ -23,7 +23,7 @@ from tarnrag.storage.repository import DocumentRepository
 from tarnrag.retrieval.components.license_policy import LicensePolicy
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.pipeline.searcher import Searcher
-from tarnrag.retrieval.types import Query
+from tarnrag.retrieval.types import Query, SearchTrace
 
 _DEFAULT_PIPELINE: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser
 _DEFAULT_LICENSE_POLICY: dict[str, Any] = {"class_name": "default_license"}  # ModusQ §5.6
@@ -117,16 +117,32 @@ class RetrievalEngine(Engine):
             raise ValueError("inject both repository and embedder, or neither")
         return await cls.open(repository, embedder, settings)
 
+    def _context(self) -> RetrievalContext:
+        """The ``(store, embedder, cross-encoder, license policy, llm)`` the pipeline runs against."""
+        return RetrievalContext(
+            self.repository, self.embedder, self._cross_encoder, self._license_policy, self._llm
+        )
+
     async def search(self, query: Query) -> list[RetrievalResult]:
         """Run the configured retrieval pipeline (retrieve [license/scope pre-filter] → fuse → hydrate →
         merge → rerank → top_k → assemble)."""
-        ctx = RetrievalContext(
-            self.repository, self.embedder, self._cross_encoder, self._license_policy, self._llm
-        )
-        return await self._pipeline.search(query, ctx)
+        return await self._pipeline.search(query, self._context())
 
     async def search_text(
         self, text: str, *, top_k: int = 8, dense_k: int = 50
     ) -> list[RetrievalResult]:
         """Convenience over :meth:`search`: build a :class:`Query` from a raw string."""
         return await self.search(Query(text=text, top_k=top_k, dense_k=dense_k))
+
+    async def explain(self, query: Query) -> SearchTrace:
+        """Like :meth:`search`, but returns the recorded :class:`SearchTrace` — the pipeline's intermediate
+        stages (each retriever's candidates before fusion, the fused / merged / reranked / final rankings,
+        and any routing decision) — instead of only the final results. The data behind ``TarnRag.explain``
+        and the console's ``explain`` command; ``trace.results`` is the same ranking ``search`` returns."""
+        trace = SearchTrace(query=query)
+        await self._pipeline.search(query, self._context(), trace)
+        return trace
+
+    async def explain_text(self, text: str, *, top_k: int = 8, dense_k: int = 50) -> SearchTrace:
+        """Convenience over :meth:`explain`: build a :class:`Query` from a raw string."""
+        return await self.explain(Query(text=text, top_k=top_k, dense_k=dense_k))

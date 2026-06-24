@@ -35,6 +35,7 @@ from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.engine.engine import RetrievalEngine
+from tarnrag.retrieval.types import SearchTrace
 from tarnrag.storage.repository import DocumentRepository
 
 
@@ -121,6 +122,15 @@ class TarnRag:
         """Retrieval only — the ranked, provenance-bearing passages. ``top_k`` mirrors the engine's
         ``search_text`` default."""
         return Outcome(await self._retrieval.search_text(query, top_k=top_k))
+
+    async def explain(self, query: str, *, top_k: int = 8) -> Outcome[SearchTrace]:
+        """Retrieval with its inner workings exposed — the same ranked results ``retrieve`` returns
+        (``trace.results``) plus the :class:`~tarnrag.retrieval.types.SearchTrace` a UI renders to explain
+        *why*: each retriever's candidates before fusion, the ranking at every pipeline stage
+        (fused → merged → reranked → final) with per-component scores, and any routing decision.
+        Output-free like the rest of the facade — it returns the data; a UI (the console's ``explain``)
+        renders it."""
+        return Outcome(await self._retrieval.explain_text(query, top_k=top_k))
 
     async def ask(self, query: str) -> Outcome[GenerationResult]:
         """Retrieval + generation — a grounded answer with a proof tree. Needs an LLM."""
