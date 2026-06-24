@@ -271,3 +271,41 @@ positive distractor gains confirm it works; the *order-of-magnitude* payoff need
 retrieval architecture (γ-retrieval, ChainFilter) is **fullwiki ingestion + retrieval**, against which those
 levers — and the bridge itself — can actually show their worth. Building more retrieval cleverness against a
 20-passage pool would be optimizing the wrong setting.
+
+---
+
+## Phase 2.5 — shared-corpus (pool) investigation (2026-06-24)
+
+Built the shared-corpus harness (one persistent index, retrieve-only per question; `--corpus pool`), plus
+the supporting hardening: **bounded concurrency** for the eval (~7× — the LLM calls are I/O-bound), an
+**`llm_judge` shortlist cap** (corpus retrieval hands the reranker 100+ candidates), the OpenAI retry
+**honoring `Retry-After`**, and a per-embedder index cache key. Ran HotpotQA over a **~10K-passage pool**
+(1,000 dev questions, deduped), decomposition, n=200.
+
+### Results (pool ~10K, decomposition)
+| variant | hit | F1 | EM |
+|---|---|---|---|
+| gte-small + gpt-4o-mini (baseline) | 0.508 | 0.633 | 0.515 |
+| + bridge (multi-query + judge) | 0.497 | 0.632 | 0.515 |
+| gte-small + **gpt-4o** | 0.541 | 0.653 | 0.540 |
+| **text-embedding-3-small** (1536-d) + mini | 0.514 | 0.644 | 0.515 |
+| *MOTHRAG* | — | *0.781* | *0.648* |
+
+(Distractor reference: gte-small + gpt-4o-mini decomposition was hit 0.574 / F1 0.705.)
+
+### Conclusions
+1. **`hit` is stuck at ~0.51–0.54 across every lever** — bridge, reader, and a much stronger embedder all
+   hit the same wall. So the recall ceiling is **not** embedder quality, the reader, or query expansion.
+2. **The bridge is redundant with decomposition** (flat) — decomposition already expands the query.
+3. **The reader is modest on the pool** (gpt-4o +0.02 F1 vs distractor's +0.06) — it can only answer what's
+   retrieved, and retrieval misses ~half.
+4. **A stronger embedder is flat** (te3-small ≈ gte-small) — so we did *not* pursue a local strong embedder.
+5. The wall is the **multi-hop retrieval problem**: HotpotQA's 2nd-hop passage isn't similar to the
+   *question* (it's similar to the 1st hop's *answer*), so dense retrieval can't surface it — no matter the
+   embedder. The cheap levers (reader / embedder / bridge) are **spent** on the realistic pool setting.
+
+### Verdict → Phase 3
+tarn.rag is at MOTHRAG parity on **distractor** (lean stack + gpt-4o); the **pool** gap is the multi-hop
+retrieval ceiling. The levers that actually attack it are the §6 items *not* redundant with decomposition:
+**γ-driven re-retrieval** (a failed grounding check triggers a follow-up search using what's been read — it
+can find the missing hop) and, heavier, ChainFilter. Phase 3 = **γ-driven re-retrieval**.
