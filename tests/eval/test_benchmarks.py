@@ -256,6 +256,20 @@ async def test_run_over_corpus_concurrency_preserves_results(tmp_path):
         await repo.disconnect()
 
 
+def test_reasoner_spec_grounding_override():
+    from tarnrag.eval.benchmark_runner import _reasoner_spec
+
+    assert _reasoner_spec("decomposition", None) == {
+        "class_name": "generation_pipeline", "reasoner": {"class_name": "decomposition"}
+    }
+    # grounding overrides only the grounded_retrieval reasoner's checker
+    assert _reasoner_spec("grounded_retrieval", "llm_grounding")["reasoner"]["grounding_checker"] == {
+        "class_name": "llm_grounding"
+    }
+    assert "grounding_checker" not in _reasoner_spec("decomposition", "llm_grounding")["reasoner"]
+    assert "grounding_checker" not in _reasoner_spec("grounded_retrieval", None)["reasoner"]
+
+
 async def test_safe_answer_guards_failures():
     """A per-question failure yields an empty result (scored a miss) instead of crashing the sweep; a
     success passes through."""
