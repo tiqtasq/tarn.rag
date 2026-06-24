@@ -34,6 +34,10 @@ class Runner:
         self._tarn = tarn
         self._out = RichConsole()
 
+    def note(self, text: str) -> None:
+        """Print a dim one-line observation (e.g. a count) alongside the rendered probes."""
+        self._out.print(f"[dim]→ {text}[/]")
+
     def banner(self, title: str, *, shows: str, fails: str | None = None, fixed_next: str | None = None) -> None:
         """Frame a step: what it demonstrates, what still fails here, and what the next step changes to
         fix it. The three lines are the spine of the ladder — every step has a ``shows``; an intermediate
