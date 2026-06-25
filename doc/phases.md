@@ -377,3 +377,24 @@ FTS5 index is built at ingest). Pool ~10K, decomposition, gpt-4o-mini, n=200, sa
 rebuild): the best cost/benefit lever found on the pool. It doesn't *break* the multi-hop ceiling (BM25 can't
 surface a bridge entity absent from the question), but it's a worthwhile default. Enabled via `--hybrid`
 (`HYBRID_RETRIEVAL`).
+
+### Option 2 (PR-1) — layout-aware retrieval on TAT-QA (2026-06-24)
+
+The MOTHRAG setting can't test tarn.rag's differentiators. TAT-QA (financial **table** + **paragraphs**,
+with an `answer_from` ∈ table/text/table-text label) can: build one shared corpus of every table + paragraph,
+then for each extractive question measure **source-hit@k** (did the top-k include the gold answer-source
+element), segmented by where the answer lives. 100 records → 612 elements, 334 extractive queries, gte-small.
+
+| segment | dense | hybrid | Δ |
+|---|---|---|---|
+| table | 0.779 | 0.853 | +0.074 |
+| table-text | 0.855 | 0.945 | +0.090 |
+| text | 0.938 | 0.953 | +0.015 |
+| **overall** | 0.865 | 0.922 | +0.057 |
+
+**Findings:** (1) **dense has a table deficit** — tables 0.779 vs text 0.938 (a 0.16 gap): cell tokens embed
+weakly against a NL question. (2) **hybrid's real home is tables** — BM25 matches exact cell tokens, lifting
+table/table-text far more than text (+0.074 / +0.090 vs +0.015); hybrid's +0.057 overall here dwarfs its
++0.015 F1 on Wikipedia QA. The differentiated setting reveals a lever the benchmark hid. Run via
+`scripts/run_layout_eval.py`. Next (Option 2 PR-2): attribution precision (LLM-judge / `grounded_rate`) on
+TAT-QA; later, ingest tables through the native structured path (Table elements) instead of rendered text.
