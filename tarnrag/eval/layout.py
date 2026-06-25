@@ -16,14 +16,26 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 
-from tarnrag.core.engine.config import DatabaseSettings, Settings
+from tarnrag.core.engine.config import GENERATION_PIPELINE, DatabaseSettings, Settings
 from tarnrag.core.resources.embedder import Embedder
+from tarnrag.core.resources.llm import LanguageModel
+from tarnrag.eval.benchmark_runner import _safe_answer
+from tarnrag.eval.generation import GenEvalQuery, GenEvalReport, _aggregate, _score
+from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.retrieval.engine.engine import RetrievalEngine
 from tarnrag.retrieval.types import Query
 from tarnrag.storage.repository import DocumentRepository
 
 _EXTRACTIVE = frozenset({"span", "multi-span"})  # arithmetic/count have no retrievable source span
+
+# Attribution measurement: read the answer with a single_hop reasoner, then have an LLM judge whether each
+# cited span supports its claim (grounding). ``grounded_rate`` is the answer-level attribution precision.
+_ATTRIBUTION_PIPELINE = {
+    "class_name": "generation_pipeline",
+    "reasoner": {"class_name": "single_hop"},
+    "grounding_checker": {"class_name": "llm_grounding"},
+}
 
 
 @dataclass
@@ -155,4 +167,63 @@ def format_source_hit(report: SourceHitReport, *, tag: str = "") -> str:
     for seg, (n, hit) in report.by_segment.items():
         lines.append(f"{seg:<14}{n:>6}{hit:>12.3f}")
     lines.append(f"{'OVERALL':<14}{report.n:>6}{report.source_hit:>12.3f}")
+    return "\n".join(lines)
+
+
+def _to_eval_query(q: TatQaQuery) -> GenEvalQuery:
+    """A TAT-QA query as a labeled ``GenEvalQuery`` — gold answer span(s) drive F1/EM (max over them), and
+    ``query_type`` carries ``answer_from`` so attribution can be segmented by table vs text."""
+    answers = list(q.answers)
+    return GenEvalQuery(
+        text=q.question,
+        answer=answers[0] if answers else "",
+        answer_aliases=answers[1:],
+        answer_contains=answers,
+        supporting=answers,  # citation coverage = is the gold answer span present in the cited evidence
+        query_type=q.answer_from,
+    )
+
+
+async def tatqa_attribution(
+    queries: list[TatQaQuery],
+    llm: LanguageModel,
+    repo: DocumentRepository,
+    embedder: Embedder,
+    *,
+    settings: Settings,
+    concurrency: int = 8,
+) -> tuple[GenEvalReport, dict[str, GenEvalReport]]:
+    """Answer each question over the shared corpus and have an LLM judge the citations: returns the overall
+    ``GenEvalReport`` (F1/EM + ``grounded_rate`` = attribution precision + ``citation_coverage``) and one per
+    ``answer_from`` segment — so a table-vs-text attribution gap is visible. Bounded ``concurrency``."""
+    settings.components[GENERATION_PIPELINE] = _ATTRIBUTION_PIPELINE
+    retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
+    generation = GenerationEngine.assemble(retrieval, llm, settings)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(q: TatQaQuery):
+        eq = _to_eval_query(q)
+        async with sem:
+            result = await _safe_answer(generation.answer(Query(text=eq.text, purpose=eq.purpose)))
+        return q.answer_from, _score(eq, result)
+
+    scored = await asyncio.gather(*(_one(q) for q in queries))
+    overall = _aggregate([s for _, s in scored])
+    by_segment = {
+        seg: _aggregate([s for sg, s in scored if sg == seg])
+        for seg in sorted({q.answer_from for q in queries})
+    }
+    return overall, by_segment
+
+
+def format_attribution(overall: GenEvalReport, by_segment: dict[str, GenEvalReport]) -> str:
+    """Render attribution: F1 / EM / attrib (grounded_rate) / cite (citation_coverage), per segment + overall."""
+    head = f"{'segment':<14}{'n':>5}{'F1':>8}{'EM':>8}{'attrib':>8}{'cite':>8}"
+
+    def row(name: str, r: GenEvalReport) -> str:
+        return f"{name:<14}{r.n:>5}{r.token_f1:>8.3f}{r.exact_match:>8.3f}{r.grounded_rate:>8.3f}{r.citation_coverage:>8.3f}"
+
+    lines = ["TAT-QA attribution (single_hop + llm_grounding)", head, "-" * 51]
+    lines += [row(seg, r) for seg, r in by_segment.items()]
+    lines.append(row("OVERALL", overall))
     return "\n".join(lines)
