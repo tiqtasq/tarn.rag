@@ -398,3 +398,24 @@ table/table-text far more than text (+0.074 / +0.090 vs +0.015); hybrid's +0.057
 +0.015 F1 on Wikipedia QA. The differentiated setting reveals a lever the benchmark hid. Run via
 `scripts/run_layout_eval.py`. Next (Option 2 PR-2): attribution precision (LLM-judge / `grounded_rate`) on
 TAT-QA; later, ingest tables through the native structured path (Table elements) instead of rendered text.
+
+### Option 2 (PR-2) — attribution precision on TAT-QA (2026-06-25)
+
+Beyond *finding* the source (PR-1), does the answer *attribute* to it? Answer each extractive question with a
+`single_hop` reader over hybrid retrieval, then have an LLM judge whether each cited span supports its claim
+(`grounding_checker: llm_grounding`). `grounded_rate` = attribution precision; `citation_coverage` = is the
+gold answer span present in the cited evidence. n=334, gte-small + gpt-4o-mini.
+
+| segment | n | F1 | EM | attrib | cite |
+|---|---|---|---|---|---|
+| table | 95 | 0.509 | 0.379 | 0.884 | 0.732 |
+| table-text | 110 | 0.571 | 0.427 | 0.936 | 0.706 |
+| text | 129 | 0.595 | 0.349 | 0.992 | 0.884 |
+| **overall** | 334 | 0.563 | 0.383 | 0.943 | 0.782 |
+
+**Findings:** (1) **attribution precision is high (0.94 overall)** — when tarn.rag answers, the cited spans
+support the claim 94% of the time. (2) **A consistent table penalty across every metric** — F1 0.51 vs 0.60,
+attribution 0.88 vs 0.99, citation-coverage 0.73 vs 0.88 (table vs text). Tables are systematically harder to
+answer *and* attribute, which points at the **linearized-table representation** (rendered to text) as the
+next lever — the motivation for ingesting tables through the native structured `Table`-element path (a
+follow-up). Run via `scripts/run_layout_eval.py --attribution`.

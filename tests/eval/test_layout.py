@@ -2,11 +2,14 @@
 over the real ingest → retrieve loop driven by the model-free ``hash`` embedder (offline, no network)."""
 
 from tarnrag.core.engine.config import Settings
+from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.eval.layout import (
     build_tatqa_index,
+    format_attribution,
     format_source_hit,
     load_tatqa,
     render_table,
+    tatqa_attribution,
     tatqa_source_hit,
 )
 
@@ -58,5 +61,20 @@ async def test_source_hit_runs_over_the_index(tmp_path):
         assert set(report.by_segment) == {"table", "text"}  # segmented by answer_from
         assert report.by_segment["table"][0] == 1 and report.by_segment["text"][0] == 1  # one query each
         assert "OVERALL" in format_source_hit(report, tag="[DENSE]")
+    finally:
+        await repo.disconnect()
+
+
+async def test_attribution_runs_and_segments(tmp_path):
+    settings = Settings(_env_file=None, embedding={"provider": "hash"})
+    corpus, queries = load_tatqa(ROWS)
+    repo, embedder = await build_tatqa_index(corpus, settings, db_path=str(tmp_path / "t.db"))
+    try:
+        # the canned answer matches the table question's gold ($10); single_hop reads it, llm_grounding judges
+        llm = StaticLanguageModel('{"answer": "$10", "steps": [{"claim": "Revenue was $10", "cited": [1]}]}')
+        overall, by_seg = await tatqa_attribution(queries, llm, repo, embedder, settings=settings, concurrency=2)
+        assert overall.n == 2 and set(by_seg) == {"table", "text"}  # segmented by answer_from
+        assert 0.0 <= overall.grounded_rate <= 1.0 and 0.0 <= overall.token_f1 <= 1.0
+        assert "OVERALL" in format_attribution(overall, by_seg)
     finally:
         await repo.disconnect()
