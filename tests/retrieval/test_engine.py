@@ -13,7 +13,7 @@ from tarnrag.retrieval import (
     AutoMerger, CrossEncoderReranker, DefaultLicensePolicy, Query, RetrievalContext, RetrievalEngine,
     RetrievalError, RetrievalPipeline,
 )
-from tarnrag.retrieval.types import Purpose
+from tarnrag.retrieval.types import Purpose, SearchTrace
 
 FINGERPRINT = "fp-123"
 
@@ -365,6 +365,56 @@ def test_identity_fusion_orders_best_first():
     }
     hits = IdentityFuser(IdentityFuser.Config()).fuse(per_retriever)
     assert [h.chunk_id for h in hits] == ["a", "z"]  # rank 1 ('a') before rank 2 ('z'), not input order
+
+
+async def test_create_rejects_a_single_injected_dependency(repo):
+    """``create`` shares a store/embedder when *both* are injected; one alone is a wiring error."""
+    settings = Settings(_env_file=None, EMBEDDING_DIMENSION=3)
+    with pytest.raises(ValueError, match="both repository and embedder"):
+        await RetrievalEngine.create(settings, repository=repo)  # embedder omitted
+    with pytest.raises(ValueError, match="both repository and embedder"):
+        await RetrievalEngine.create(settings, embedder=_FakeEmbedder())  # repository omitted
+
+
+async def test_create_without_injection_builds_its_own_store(tmp_path):
+    """With neither injected, ``create`` builds the repository + embedder from Settings, then validates via
+    ``open`` (here the fresh store has no index yet, so it refuses) — exercising the build branch."""
+    settings = Settings(
+        _env_file=None, EMBEDDING_DIMENSION=3, embedding={"provider": "hash"},
+        database={"document_url": f"sqlite:///{tmp_path}/x.db"},
+    )
+    with pytest.raises(RetrievalError, match="not been built"):
+        await RetrievalEngine.create(settings)
+
+
+async def test_explain_records_the_pipeline_trace(repo):
+    cids = await _index(repo)
+    engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
+    trace = await engine.explain(Query(text="tank inspection", top_k=2))
+    assert [r.chunk_id for r in trace.results] == cids  # trace.results == what search returns
+    names = [s.name for s in trace.stages]
+    assert names[0] == "fused" and names[-1] == "final"  # the recorded stages
+    assert trace.per_retriever  # per-retriever candidates recorded
+    trace2 = await engine.explain_text("tank inspection", top_k=2)  # the string convenience
+    assert [r.chunk_id for r in trace2.results] == cids
+
+
+async def test_pipeline_trace_records_merged_and_reranked_stages(repo):
+    """A trace through a full pipeline (merger + reranker) records every stage — covering the trace branches
+    for fused / merged / reranked / final."""
+    await _index_tree(repo)
+    pipe = RetrievalPipeline(
+        RetrievalPipeline.Config(
+            retrievers=[{"class_name": "dense"}], fuser={"class_name": "identity"},
+            merger={"class_name": "auto_merge"}, reranker={"class_name": "cross_encoder"},
+        )
+    )
+    ce = _FakeCrossEncoder({"Safety: wear PPE and inspect the tank.": 0.9})  # the merged parent's text
+    ctx = RetrievalContext(store=repo, embedder=_FakeEmbedder(query_vec=(1.0, 1.0, 0.0)), cross_encoder=ce)
+    trace = SearchTrace(query=Query(text="ppe tank", top_k=5))
+    await pipe.search(Query(text="ppe tank", top_k=5), ctx, trace)
+    names = [s.name for s in trace.stages]
+    assert names == ["fused", "merged", "reranked", "final"]  # every stage snapshot recorded
 
 
 async def test_pipeline_reranks_with_cross_encoder(repo):
