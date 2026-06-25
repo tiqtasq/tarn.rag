@@ -256,6 +256,15 @@ async def test_run_over_corpus_concurrency_preserves_results(tmp_path):
         await repo.disconnect()
 
 
+def test_hybrid_retrieval_spec_builds():
+    from tarnrag.core.components import ComponentFactory
+    from tarnrag.eval.benchmark_runner import HYBRID_RETRIEVAL
+    from tarnrag.retrieval.pipeline.pipeline import RetrievalPipeline
+
+    pipeline = ComponentFactory.get().create_as(HYBRID_RETRIEVAL, RetrievalPipeline)
+    assert pipeline is not None  # dense + sparse retrievers, RRF fuser — a valid retrieval pipeline
+
+
 def test_reasoner_spec_grounding_override():
     from tarnrag.eval.benchmark_runner import _reasoner_spec
 

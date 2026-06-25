@@ -68,6 +68,15 @@ BRIDGE_RETRIEVAL: dict[str, object] = {
     "reranker": {"class_name": "llm_judge"},
 }
 
+# Hybrid retrieval (vs the lean dense-only default): dense KNN + sparse BM25, RRF-fused. BM25 matches exact
+# entity tokens — the multi-hop *bridge* entity that's lexically present but embeds weakly against the
+# question — so it targets the dense-only recall ceiling directly, at no LLM cost.
+HYBRID_RETRIEVAL: dict[str, object] = {
+    "class_name": "retrieval_pipeline",
+    "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+    "fuser": {"class_name": "rrf"},
+}
+
 
 @asynccontextmanager
 async def _eval_engines(settings: Settings) -> AsyncIterator[tuple[IngestionEngine, RetrievalEngine]]:
