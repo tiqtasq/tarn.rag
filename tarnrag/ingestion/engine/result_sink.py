@@ -89,10 +89,9 @@ class DocumentResultSink(_BufferingSink):
     """
 
     async def _persist(self, results: list[Any]) -> None:
-        for item in results:
-            doc_id = await self.repo.store_document(
-                Document(content=item.content, metadata=item.metadata)
-            )
+        docs = [Document(content=item.content, metadata=item.metadata) for item in results]
+        doc_ids = await self.repo.store_documents(docs)  # one transaction for the whole batch
+        for item, doc_id in zip(results, doc_ids):
             item.metadata["doc_id"] = doc_id
 
 

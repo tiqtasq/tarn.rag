@@ -419,3 +419,29 @@ attribution 0.88 vs 0.99, citation-coverage 0.73 vs 0.88 (table vs text). Tables
 answer *and* attribute, which points at the **linearized-table representation** (rendered to text) as the
 next lever — the motivation for ingesting tables through the native structured `Table`-element path (a
 follow-up). Run via `scripts/run_layout_eval.py --attribution`.
+
+---
+
+## Option 3 — bulk-ingest throughput (2026-06-25)
+
+The per-doc ingest path gated every corpus build this session (~2/s). Profiling a 100-doc ingest (offline
+hash embedder, isolating orchestration from embedding) found **~64 `engine.begin()` transactions per
+document** — transaction-count *overhead* (~5 ms each of asyncio+SQLAlchemy machinery; not fsync, not the
+inserts, which total ~1 s). Two causes:
+1. the embedded queue dispatched **one document at a time** (`Batch([job])`), so each doc ran the DAG solo;
+2. **two per-doc loops** persisted per document even within a batch — `DocumentResultSink._persist`
+   (`store_document` per doc) and the orchestrator's `_record` (status per job, per stage).
+
+**Fix (two parts):**
+- **Batched dispatch** — `InMemoryJobQueue` groups a wave's queued jobs by `stage_name` into homogeneous
+  `Batch`es (capped at `max_batch_size`), so a stage runs over many docs at once (the worker/sink already
+  supported multi-job batches). On a batch failure it re-runs each job solo, preserving per-job
+  at-least-once / dead-letter semantics.
+- **Bulk-persist** the two hot loops — `store_documents` (one transaction for the batch's documents) and
+  `record_jobs` (one transaction for the batch's status rows), reusing the exact per-row logic.
+
+**Result** (300 docs, offline): **3.6 → 9.4 docs/s, ~2.6×**. Equivalence verified — the batched + bulk index
+is identical to the per-doc index (same documents, chunks, embeddings); only the transaction count drops.
+Batched dispatch also batches the **Embed** stage, so API embedders make far fewer requests (the cost that
+made the te3 corpus build take ~2.6 h). Remaining floor: per-row inserts + ~5 stages; further wins would need
+cross-stage batching.

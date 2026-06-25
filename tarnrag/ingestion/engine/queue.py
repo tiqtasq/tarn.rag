@@ -57,11 +57,12 @@ class InMemoryJobQueue(JobEnqueuer, JobConsumer):
     does NOT guarantee ordering — tests must not rely on it.
     """
 
-    def __init__(self, requeue_on_error: bool = True, max_attempts: int = 3):
+    def __init__(self, requeue_on_error: bool = True, max_attempts: int = 3, max_batch_size: int = 256):
         self._jobs: asyncio.Queue[tuple[IngestionJob, int]] = asyncio.Queue()
         self._handler: JobHandler | None = None
         self.requeue_on_error = requeue_on_error
         self.max_attempts = max_attempts
+        self.max_batch_size = max_batch_size  # jobs grouped per dispatch (one stage runs over many docs at once)
         self.dead_letters: list[IngestionJob] = []
 
     async def enqueue(self, job: IngestionJob) -> None:
@@ -71,20 +72,41 @@ class InMemoryJobQueue(JobEnqueuer, JobConsumer):
         self._handler = handler
 
     async def run(self) -> None:
-        """Drain all jobs (including any enqueued while handling) and stop — so tests
-        terminate. Use as the test entrypoint instead of a forever loop."""
+        """Drain all jobs (including any enqueued while handling) and stop — so tests terminate. Each wave
+        drains the currently-queued jobs and **dispatches them in homogeneous batches** (grouped by
+        ``stage_name``, capped at ``max_batch_size``), so a stage runs over many documents at once — Embed
+        batches their chunks, and each sink commits once per batch instead of once per document. The DAG
+        advance re-enqueues next-stage jobs, which the next wave picks up."""
         assert self._handler is not None, "set_handler() before run()"
         while not self._jobs.empty():
-            job, attempts = await self._jobs.get()
-            try:
-                await self._handler(Batch([job]))  # one job per dispatch today
-            except Exception:
-                if not self.requeue_on_error:
-                    raise
+            wave: list[tuple[IngestionJob, int]] = []
+            while not self._jobs.empty():
+                wave.append(self._jobs.get_nowait())  # snapshot the current queue (this stage-wave)
+            by_stage: dict[str, list[tuple[IngestionJob, int]]] = {}
+            for entry in wave:
+                by_stage.setdefault(entry[0].stage_name, []).append(entry)
+            for stage_jobs in by_stage.values():
+                for i in range(0, len(stage_jobs), self.max_batch_size):
+                    await self._dispatch(stage_jobs[i : i + self.max_batch_size])
+
+    async def _dispatch(self, batch: list[tuple[IngestionJob, int]]) -> None:
+        """Dispatch one homogeneous batch. On failure with requeue, **isolate**: re-run each job solo so a
+        single bad job doesn't penalize the rest — preserving the per-job at-least-once / dead-letter
+        semantics (a solo failure requeues that job or, past ``max_attempts``, dead-letters it)."""
+        try:
+            await self._handler(Batch([job for job, _ in batch]))
+        except Exception:
+            if not self.requeue_on_error:
+                raise
+            if len(batch) == 1:
+                job, attempts = batch[0]
                 if attempts + 1 >= self.max_attempts:
                     self.dead_letters.append(job)
                 else:
                     await self._jobs.put((job, attempts + 1))
+            else:  # a batched failure — re-run each job alone to find (and isolate) the culprit
+                for entry in batch:
+                    await self._dispatch([entry])
 
 
 class PgQueuerJobQueue(JobEnqueuer, JobConsumer):

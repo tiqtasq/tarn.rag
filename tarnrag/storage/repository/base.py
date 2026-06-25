@@ -359,6 +359,20 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             )
             return doc_id
 
+    async def store_documents(self, docs: list[Document]) -> list[str]:
+        """Bulk ``store_document``: upsert every document — each replacing its derived chunks/search indexes
+        — in **one** transaction, so a batch of documents costs a single commit instead of one per document
+        (the ingest hot path). Reuses the exact per-document logic; result is identical to looping
+        ``store_document``."""
+        async with self.engine.begin() as conn:
+            ids: list[str] = []
+            for doc in docs:
+                doc_id = await self._upsert_document(conn, self._doc_values(doc))
+                await self._clear_chunk_index(conn, doc_id)
+                await conn.execute(self.chunks.delete().where(self.chunks.c.document_id == doc_id))
+                ids.append(doc_id)
+            return ids
+
     async def store_document_with_chunks(
         self, doc: Document, chunks: list[Chunk]
     ) -> tuple[str, list[str]]:
@@ -520,6 +534,19 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                 {"status": status, "error": error, "updated_at": func.now()},
                 insert_extra={"document_id": document_id, "stage_name": stage_name},
             )
+
+    async def record_jobs(
+        self, jobs: list[tuple[str, str, str]], status: str, error: str | None = None
+    ) -> None:
+        """Bulk ``record_job``: upsert many jobs' status rows in **one** transaction — one commit per batch of
+        jobs instead of one per job (the ingest hot path). ``jobs`` is ``(document_id, job_id, stage_name)``."""
+        async with self.engine.begin() as conn:
+            for document_id, job_id, stage_name in jobs:
+                await self._upsert(
+                    conn, self.job_status, self.job_status.c.job_id, job_id,
+                    {"status": status, "error": error, "updated_at": func.now()},
+                    insert_extra={"document_id": document_id, "stage_name": stage_name},
+                )
 
     async def document_jobs(self, document_id: str) -> list[dict[str, Any]]:
         """Debug-only per-job breakdown for one document."""
