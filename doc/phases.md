@@ -352,3 +352,28 @@ state: **tarn.rag matches MOTHRAG on distractor with a lean, differentiated stac
 provenance / license filtering); the realistic-pool multi-hop recall gap is characterized and bounded. The
 only untried lever is **ChainFilter** (OpenIE triples + chain density — heavy, uncertain payoff against a
 ceiling 5 levers couldn't move).
+
+---
+
+## Post-MOTHRAG performance plan
+
+Stepping back from the benchmark chase: "performance" is several axes, and the MOTHRAG setting (multi-hop
+Wikipedia QA) doesn't exercise tarn.rag's differentiators (offline / layout provenance / licensing). Four
+options, in order: (1) hybrid retrieval, (2) differentiators (attribution + layout, on real docs), (3)
+systems (bulk-ingest throughput + latency), (4) robustness / eval on real data.
+
+### Option 1 — hybrid retrieval (dense + BM25, RRF) (2026-06-24)
+
+The whole pool push was dense-only. BM25 matches exact entity tokens (the bridge entity that embeds weakly
+against the question), so hybrid targets the dense-only recall ceiling — at no LLM cost, and no rebuild (the
+FTS5 index is built at ingest). Pool ~10K, decomposition, gpt-4o-mini, n=200, same session:
+
+| retrieval | hit | F1 | EM |
+|---|---|---|---|
+| dense (baseline) | 0.497 | 0.623 | 0.505 |
+| **hybrid (dense + BM25, RRF)** | **0.508** | **0.638** | **0.510** |
+
+**+0.011 hit / +0.015 F1 / +0.005 EM** — small but consistent across all three, and **free** (no LLM, no
+rebuild): the best cost/benefit lever found on the pool. It doesn't *break* the multi-hop ceiling (BM25 can't
+surface a bridge entity absent from the question), but it's a worthwhile default. Enabled via `--hybrid`
+(`HYBRID_RETRIEVAL`).

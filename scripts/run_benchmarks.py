@@ -25,6 +25,7 @@ from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import (
     BRIDGE_RETRIEVAL,
+    HYBRID_RETRIEVAL,
     build_corpus_index,
     format_comparison,
     format_sweep,
@@ -39,12 +40,17 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 async def _run(
     dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
     corpus: str, corpus_limit: int | None, concurrency: int, reasoners: list[str] | None, grounding: str | None,
+    hybrid: bool,
 ) -> None:
     settings = get_settings()
+    tag = ""
     if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
         settings.components[RETRIEVAL_PIPELINE] = BRIDGE_RETRIEVAL
+        tag = " + bridge"
+    if hybrid:  # dense + sparse BM25, RRF-fused (overrides --bridge if both given)
+        settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL
+        tag = " + hybrid"
     llm = LanguageModel.create(settings.llm)
-    tag = " + bridge" if bridge else ""
     if corpus == "pool":
         await _run_over_pool(
             dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency, reasoners, grounding
@@ -115,6 +121,11 @@ def main(argv: list[str] | None = None) -> None:
         help="sweep the reasoners (single_hop / iterative / decomposition) instead of one configured run",
     )
     parser.add_argument(
+        "--hybrid", action="store_true",
+        help="retrieve with dense + sparse BM25, RRF-fused (vs the dense-only default); needs the corpus's "
+             "FTS index, which ingestion already builds",
+    )
+    parser.add_argument(
         "--bridge", action="store_true",
         help="use the Phase-2 bridge retrieval (multi-query expansion + LLM relevance judge) — needs an LLM",
     )
@@ -151,6 +162,7 @@ def main(argv: list[str] | None = None) -> None:
         _run(
             args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge,
             args.corpus, args.corpus_limit, args.concurrency, args.reasoners, args.grounding,
+            args.hybrid,
         )
     )
 
