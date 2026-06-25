@@ -23,6 +23,7 @@ from rich.rule import Rule
 
 from tarnrag import TarnRag
 from tarnrag.console import Console as View
+from tarnrag.generation import GenerationResult
 
 
 class Runner:
@@ -86,12 +87,18 @@ class Runner:
         self._out.print(f"{verdict} gold phrase {gold!r} in the top {top_k}")
         return ok
 
-    async def show_answer(self, query: str, *, label: str | None = None) -> None:
-        """Run ``ask`` for one probe and render the grounded answer + its proof tree (needs an LLM key —
-        ``ANTHROPIC_API_KEY``). Used by the generation act of the ladder."""
+    async def show_answer(self, query: str, *, gold: str | None = None, label: str | None = None) -> GenerationResult:
+        """Run ``ask`` for one probe and render the grounded answer + its proof tree (needs the LLM key in
+        ``OPENAI_LLM_KEY``). With a ``gold`` phrase, also print a HIT/MISS verdict (the phrase appears in the
+        answer, case-insensitive). Returns the full result so a caller can inspect ``grounded`` /
+        ``abstained``. Used by the generation act of the ladder."""
         self._out.print(Rule(self._probe_title(query, label), align="left", style="cyan"))
         result = (await self._tarn.ask(query)).value
         self._out.print(View.create_answer_view(result))
+        if gold is not None:
+            ok = gold.lower() in result.answer.lower()
+            self._out.print(f"{'[green]HIT [/]' if ok else '[red]MISS[/]'} gold phrase {gold!r} in the answer")
+        return result
 
     @staticmethod
     def _probe_title(query: str, label: str | None) -> str:
