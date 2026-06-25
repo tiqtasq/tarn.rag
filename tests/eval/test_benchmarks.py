@@ -240,6 +240,45 @@ async def test_corpus_index_is_cached(tmp_path):
     assert n1 == 2 and n2 == 2  # not re-ingested / duplicated
 
 
+async def test_run_over_corpus_concurrency_preserves_results(tmp_path):
+    """Bounded concurrency overlaps the I/O-bound calls without changing the (order-independent) result."""
+    settings = _offline_settings()
+    corpus = corpus_from_items(load_hotpotqa(FIXTURE))
+    repo, embedder = await build_corpus_index(corpus, settings, db_path=str(tmp_path / "c.db"))
+    try:
+        items = load_hotpotqa(FIXTURE)
+        lm = StaticLanguageModel('{"answer": "Eiffel Tower", "steps": [{"claim": "x", "cited": [1]}]}')
+        seq = await run_over_corpus(items, lm, repo, embedder, settings=settings, concurrency=1)
+        par = await run_over_corpus(items, lm, repo, embedder, settings=settings, concurrency=4)
+        assert seq.n == par.n == 3
+        assert [r.token_f1 for r in seq.per_query] == [r.token_f1 for r in par.per_query]  # same per-item
+    finally:
+        await repo.disconnect()
+
+
+def test_hybrid_retrieval_spec_builds():
+    from tarnrag.core.components import ComponentFactory
+    from tarnrag.eval.benchmark_runner import HYBRID_RETRIEVAL
+    from tarnrag.retrieval.pipeline.pipeline import RetrievalPipeline
+
+    pipeline = ComponentFactory.get().create_as(HYBRID_RETRIEVAL, RetrievalPipeline)
+    assert pipeline is not None  # dense + sparse retrievers, RRF fuser — a valid retrieval pipeline
+
+
+def test_reasoner_spec_grounding_override():
+    from tarnrag.eval.benchmark_runner import _reasoner_spec
+
+    assert _reasoner_spec("decomposition", None) == {
+        "class_name": "generation_pipeline", "reasoner": {"class_name": "decomposition"}
+    }
+    # grounding overrides only the grounded_retrieval reasoner's checker
+    assert _reasoner_spec("grounded_retrieval", "llm_grounding")["reasoner"]["grounding_checker"] == {
+        "class_name": "llm_grounding"
+    }
+    assert "grounding_checker" not in _reasoner_spec("decomposition", "llm_grounding")["reasoner"]
+    assert "grounding_checker" not in _reasoner_spec("grounded_retrieval", None)["reasoner"]
+
+
 async def test_safe_answer_guards_failures():
     """A per-question failure yields an empty result (scored a miss) instead of crashing the sweep; a
     success passes through."""

@@ -271,3 +271,151 @@ positive distractor gains confirm it works; the *order-of-magnitude* payoff need
 retrieval architecture (γ-retrieval, ChainFilter) is **fullwiki ingestion + retrieval**, against which those
 levers — and the bridge itself — can actually show their worth. Building more retrieval cleverness against a
 20-passage pool would be optimizing the wrong setting.
+
+---
+
+## Phase 2.5 — shared-corpus (pool) investigation (2026-06-24)
+
+Built the shared-corpus harness (one persistent index, retrieve-only per question; `--corpus pool`), plus
+the supporting hardening: **bounded concurrency** for the eval (~7× — the LLM calls are I/O-bound), an
+**`llm_judge` shortlist cap** (corpus retrieval hands the reranker 100+ candidates), the OpenAI retry
+**honoring `Retry-After`**, and a per-embedder index cache key. Ran HotpotQA over a **~10K-passage pool**
+(1,000 dev questions, deduped), decomposition, n=200.
+
+### Results (pool ~10K, decomposition)
+| variant | hit | F1 | EM |
+|---|---|---|---|
+| gte-small + gpt-4o-mini (baseline) | 0.508 | 0.633 | 0.515 |
+| + bridge (multi-query + judge) | 0.497 | 0.632 | 0.515 |
+| gte-small + **gpt-4o** | 0.541 | 0.653 | 0.540 |
+| **text-embedding-3-small** (1536-d) + mini | 0.514 | 0.644 | 0.515 |
+| *MOTHRAG* | — | *0.781* | *0.648* |
+
+(Distractor reference: gte-small + gpt-4o-mini decomposition was hit 0.574 / F1 0.705.)
+
+### Conclusions
+1. **`hit` is stuck at ~0.51–0.54 across every lever** — bridge, reader, and a much stronger embedder all
+   hit the same wall. So the recall ceiling is **not** embedder quality, the reader, or query expansion.
+2. **The bridge is redundant with decomposition** (flat) — decomposition already expands the query.
+3. **The reader is modest on the pool** (gpt-4o +0.02 F1 vs distractor's +0.06) — it can only answer what's
+   retrieved, and retrieval misses ~half.
+4. **A stronger embedder is flat** (te3-small ≈ gte-small) — so we did *not* pursue a local strong embedder.
+5. The wall is the **multi-hop retrieval problem**: HotpotQA's 2nd-hop passage isn't similar to the
+   *question* (it's similar to the 1st hop's *answer*), so dense retrieval can't surface it — no matter the
+   embedder. The cheap levers (reader / embedder / bridge) are **spent** on the realistic pool setting.
+
+### Verdict → Phase 3
+tarn.rag is at MOTHRAG parity on **distractor** (lean stack + gpt-4o); the **pool** gap is the multi-hop
+retrieval ceiling. The levers that actually attack it are the §6 items *not* redundant with decomposition:
+**γ-driven re-retrieval** (a failed grounding check triggers a follow-up search using what's been read — it
+can find the missing hop) and, heavier, ChainFilter. Phase 3 = **γ-driven re-retrieval**.
+
+---
+
+## Phase 3 — results: γ-driven re-retrieval (2026-06-24)
+
+`GroundedRetrievalReasoner` (`grounded_retrieval`) — retrieve → read → grounding-check; an ungrounded claim
+triggers a follow-up search *for that claim* (the bridge passage), then re-read. Eval: pool ~10K, gte-small,
+gpt-4o-mini, n=200, **heuristic** grounding (the LLM-free default).
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.613 | 0.500 |
+| **grounded_retrieval (γ, heuristic)** | **0.508** | **0.621** | **0.510** |
+
+**Verdict: a small, partly-within-noise positive** (+0.027 hit; F1/EM within the n=200 ~±0.02–0.03 floor —
+decomposition read 0.633 last run vs 0.613 here). γ-retrieval *nudges* the multi-hop ceiling but doesn't
+break it with heuristic grounding. Open levers: (a) **LLM grounding** (sharper gap detection → better-targeted
+re-retrieval — cheap config try), (b) **ChainFilter** (the heavy §6 item: OpenIE triples + chain density),
+or (c) bank it — tarn.rag is at MOTHRAG parity on distractor; the realistic-pool multi-hop recall is a hard
+frontier that incremental levers (bridge, embedder, γ-heuristic) only nudge.
+
+### γ with LLM grounding — the bottleneck is re-retrieval, not the signal (2026-06-24)
+
+Re-ran γ with `--grounding llm_grounding` (sharper claim-gap detection) vs decomposition, same protocol:
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.610 | 0.495 |
+| grounded_retrieval (γ, **llm_grounding**) | 0.486 | 0.596 | 0.480 |
+
+**LLM grounding made γ worse, not better** (−0.014 F1 vs decomposition; below γ-heuristic's 0.621 F1). So the
+weak link is **not** the grounding signal — it's the re-retrieval itself: claim-as-query dense retrieval still
+can't surface the question-dissimilar bridge passage, and the extra hops add context noise. **γ-retrieval is
+spent** as a pool lever.
+
+### Phase 3 verdict (final)
+Every measured lever — bridge, stronger reader, stronger embedder, γ-heuristic, γ-llm — only *nudges* the
+pool's hit ≈ 0.51 multi-hop recall ceiling. The multi-hop retrieval problem (the 2nd-hop passage isn't similar
+to the question) is a **genuine hard frontier** that incremental retrieval tricks don't crack. The honest
+state: **tarn.rag matches MOTHRAG on distractor with a lean, differentiated stack** (offline / layout
+provenance / license filtering); the realistic-pool multi-hop recall gap is characterized and bounded. The
+only untried lever is **ChainFilter** (OpenIE triples + chain density — heavy, uncertain payoff against a
+ceiling 5 levers couldn't move).
+
+---
+
+## Post-MOTHRAG performance plan
+
+Stepping back from the benchmark chase: "performance" is several axes, and the MOTHRAG setting (multi-hop
+Wikipedia QA) doesn't exercise tarn.rag's differentiators (offline / layout provenance / licensing). Four
+options, in order: (1) hybrid retrieval, (2) differentiators (attribution + layout, on real docs), (3)
+systems (bulk-ingest throughput + latency), (4) robustness / eval on real data.
+
+### Option 1 — hybrid retrieval (dense + BM25, RRF) (2026-06-24)
+
+The whole pool push was dense-only. BM25 matches exact entity tokens (the bridge entity that embeds weakly
+against the question), so hybrid targets the dense-only recall ceiling — at no LLM cost, and no rebuild (the
+FTS5 index is built at ingest). Pool ~10K, decomposition, gpt-4o-mini, n=200, same session:
+
+| retrieval | hit | F1 | EM |
+|---|---|---|---|
+| dense (baseline) | 0.497 | 0.623 | 0.505 |
+| **hybrid (dense + BM25, RRF)** | **0.508** | **0.638** | **0.510** |
+
+**+0.011 hit / +0.015 F1 / +0.005 EM** — small but consistent across all three, and **free** (no LLM, no
+rebuild): the best cost/benefit lever found on the pool. It doesn't *break* the multi-hop ceiling (BM25 can't
+surface a bridge entity absent from the question), but it's a worthwhile default. Enabled via `--hybrid`
+(`HYBRID_RETRIEVAL`).
+
+### Option 2 (PR-1) — layout-aware retrieval on TAT-QA (2026-06-24)
+
+The MOTHRAG setting can't test tarn.rag's differentiators. TAT-QA (financial **table** + **paragraphs**,
+with an `answer_from` ∈ table/text/table-text label) can: build one shared corpus of every table + paragraph,
+then for each extractive question measure **source-hit@k** (did the top-k include the gold answer-source
+element), segmented by where the answer lives. 100 records → 612 elements, 334 extractive queries, gte-small.
+
+| segment | dense | hybrid | Δ |
+|---|---|---|---|
+| table | 0.779 | 0.853 | +0.074 |
+| table-text | 0.855 | 0.945 | +0.090 |
+| text | 0.938 | 0.953 | +0.015 |
+| **overall** | 0.865 | 0.922 | +0.057 |
+
+**Findings:** (1) **dense has a table deficit** — tables 0.779 vs text 0.938 (a 0.16 gap): cell tokens embed
+weakly against a NL question. (2) **hybrid's real home is tables** — BM25 matches exact cell tokens, lifting
+table/table-text far more than text (+0.074 / +0.090 vs +0.015); hybrid's +0.057 overall here dwarfs its
++0.015 F1 on Wikipedia QA. The differentiated setting reveals a lever the benchmark hid. Run via
+`scripts/run_layout_eval.py`. Next (Option 2 PR-2): attribution precision (LLM-judge / `grounded_rate`) on
+TAT-QA; later, ingest tables through the native structured path (Table elements) instead of rendered text.
+
+### Option 2 (PR-2) — attribution precision on TAT-QA (2026-06-25)
+
+Beyond *finding* the source (PR-1), does the answer *attribute* to it? Answer each extractive question with a
+`single_hop` reader over hybrid retrieval, then have an LLM judge whether each cited span supports its claim
+(`grounding_checker: llm_grounding`). `grounded_rate` = attribution precision; `citation_coverage` = is the
+gold answer span present in the cited evidence. n=334, gte-small + gpt-4o-mini.
+
+| segment | n | F1 | EM | attrib | cite |
+|---|---|---|---|---|---|
+| table | 95 | 0.509 | 0.379 | 0.884 | 0.732 |
+| table-text | 110 | 0.571 | 0.427 | 0.936 | 0.706 |
+| text | 129 | 0.595 | 0.349 | 0.992 | 0.884 |
+| **overall** | 334 | 0.563 | 0.383 | 0.943 | 0.782 |
+
+**Findings:** (1) **attribution precision is high (0.94 overall)** — when tarn.rag answers, the cited spans
+support the claim 94% of the time. (2) **A consistent table penalty across every metric** — F1 0.51 vs 0.60,
+attribution 0.88 vs 0.99, citation-coverage 0.73 vs 0.88 (table vs text). Tables are systematically harder to
+answer *and* attribute, which points at the **linearized-table representation** (rendered to text) as the
+next lever — the motivation for ingesting tables through the native structured `Table`-element path (a
+follow-up). Run via `scripts/run_layout_eval.py --attribution`.

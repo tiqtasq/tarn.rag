@@ -25,6 +25,7 @@ from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import (
     BRIDGE_RETRIEVAL,
+    HYBRID_RETRIEVAL,
     build_corpus_index,
     format_comparison,
     format_sweep,
@@ -37,36 +38,53 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 
 
 async def _run(
-    dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool, corpus: str
+    dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
+    corpus: str, corpus_limit: int | None, concurrency: int, reasoners: list[str] | None, grounding: str | None,
+    hybrid: bool,
 ) -> None:
     settings = get_settings()
+    tag = ""
     if bridge:  # Phase-2 bridge retrieval (multi-query + LLM judge) instead of the lean dense-only default
         settings.components[RETRIEVAL_PIPELINE] = BRIDGE_RETRIEVAL
+        tag = " + bridge"
+    if hybrid:  # dense + sparse BM25, RRF-fused (overrides --bridge if both given)
+        settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL
+        tag = " + hybrid"
     llm = LanguageModel.create(settings.llm)
-    tag = " + bridge" if bridge else ""
     if corpus == "pool":
-        await _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag)
+        await _run_over_pool(
+            dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency, reasoners, grounding
+        )
     else:
-        await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag)
+        await _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag, reasoners, grounding)
 
 
-async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
+async def _run_distractor(dataset, path, limit, hf, sweep, settings, llm, tag, reasoners, grounding) -> None:
     items = HF_LOADERS[dataset](limit=limit) if hf else LOADERS[dataset](path, limit=limit)
     print(
         f"running {len(items)} {dataset} questions (distractor) "
         f"through reader={settings.llm.provider}:{settings.llm.model}{tag} …"
     )
     if sweep:
-        print(format_sweep(dataset, await sweep_benchmark(items, llm, settings=settings)))
+        reports = await sweep_benchmark(items, llm, reasoners=reasoners, settings=settings, grounding=grounding)
+        print(format_sweep(dataset, reports))
     else:
         print(format_comparison({dataset: await run_benchmark(items, llm, settings=settings)}))
 
 
-async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag) -> None:
-    all_items = HF_LOADERS[dataset]() if hf else LOADERS[dataset](path)  # the FULL dev set -> the corpus
+async def _run_over_pool(
+    dataset, path, limit, hf, sweep, settings, llm, tag, corpus_limit, concurrency, reasoners, grounding
+) -> None:
+    # The corpus is built from the first ``corpus_limit`` dev questions (all of them if None) — sized larger
+    # than the eval slice so the eval questions' gold passages are in the haystack. A moderate corpus_limit
+    # keeps the (per-doc) build tractable while still making retrieval miss-able.
+    all_items = HF_LOADERS[dataset](limit=corpus_limit) if hf else LOADERS[dataset](path, limit=corpus_limit)
     corpus = corpus_from_items(all_items)
     eval_items = all_items[:limit] if limit else all_items
-    db_path = f"./docs/bench_{dataset}_pool.db"
+    # Tag the index by embedder (model + dim) so different embedders get separate corpora — the index is
+    # embedder-specific (its vectors + fingerprint), so a gte-small build mustn't be reused for te3-small.
+    emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
+    db_path = f"./docs/bench_{dataset}_pool_{corpus_limit or 'full'}_{emb_tag}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building corpus index for {dataset}: {len(corpus)} passages -> {db_path} (cached) …")
     repo, embedder = await build_corpus_index(corpus, settings, db_path=db_path)
@@ -76,9 +94,16 @@ async def _run_over_pool(dataset, path, limit, hf, sweep, settings, llm, tag) ->
             f"through reader={settings.llm.provider}:{settings.llm.model}{tag} …"
         )
         if sweep:
-            print(format_sweep(dataset, await sweep_over_corpus(eval_items, llm, repo, embedder, settings=settings)))
+            reports = await sweep_over_corpus(
+                eval_items, llm, repo, embedder, reasoners=reasoners, settings=settings,
+                concurrency=concurrency, grounding=grounding,
+            )
+            print(format_sweep(dataset, reports))
         else:
-            print(format_comparison({dataset: await run_over_corpus(eval_items, llm, repo, embedder, settings=settings)}))
+            report = await run_over_corpus(
+                eval_items, llm, repo, embedder, settings=settings, concurrency=concurrency
+            )
+            print(format_comparison({dataset: report}))
     finally:
         await repo.disconnect()
 
@@ -96,20 +121,50 @@ def main(argv: list[str] | None = None) -> None:
         help="sweep the reasoners (single_hop / iterative / decomposition) instead of one configured run",
     )
     parser.add_argument(
+        "--hybrid", action="store_true",
+        help="retrieve with dense + sparse BM25, RRF-fused (vs the dense-only default); needs the corpus's "
+             "FTS index, which ingestion already builds",
+    )
+    parser.add_argument(
         "--bridge", action="store_true",
         help="use the Phase-2 bridge retrieval (multi-query expansion + LLM relevance judge) — needs an LLM",
     )
     parser.add_argument(
         "--corpus", choices=["distractor", "pool"], default="distractor",
         help="retrieval setting: 'distractor' (per-question pool, default) or 'pool' (one shared corpus "
-             "built from the whole dev set — the fullwiki-style setting; built once + cached)",
+             "built from the dev set — the fullwiki-style setting; built once + cached)",
+    )
+    parser.add_argument(
+        "--corpus-limit", type=int, default=None,
+        help="with --corpus pool: build the corpus from only the first N dev questions (a moderate haystack "
+             "the per-doc ingest can build in reasonable time); defaults to the whole dev set",
+    )
+    parser.add_argument(
+        "--concurrency", type=int, default=8,
+        help="with --corpus pool: how many questions to answer in parallel (the LLM calls are I/O-bound, "
+             "so this overlaps their latency; bounded by the API rate limit)",
+    )
+    parser.add_argument(
+        "--reasoners", type=lambda s: [r.strip() for r in s.split(",") if r.strip()], default=None,
+        help="with --sweep: comma-separated reasoner class_names to sweep (e.g. "
+             "'decomposition,grounded_retrieval'); defaults to single_hop,iterative,decomposition",
+    )
+    parser.add_argument(
+        "--grounding", default=None,
+        help="grounding checker for the grounded_retrieval reasoner (e.g. llm_grounding); default heuristic",
     )
     args = parser.parse_args(argv)
     if args.hf and args.dataset not in HF_LOADERS:
         parser.error(f"--hf supports {sorted(HF_LOADERS)}; {args.dataset!r} needs a file path")
     if not args.hf and not args.path:
         parser.error("provide a dataset file path, or use --hf")
-    asyncio.run(_run(args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge, args.corpus))
+    asyncio.run(
+        _run(
+            args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge,
+            args.corpus, args.corpus_limit, args.concurrency, args.reasoners, args.grounding,
+            args.hybrid,
+        )
+    )
 
 
 if __name__ == "__main__":

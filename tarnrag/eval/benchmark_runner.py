@@ -13,6 +13,7 @@ ensemble / bridge / ChainFilter) — but a baseline of where tarn.rag's current 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from collections.abc import AsyncIterator, Awaitable
@@ -67,6 +68,15 @@ BRIDGE_RETRIEVAL: dict[str, object] = {
     "reranker": {"class_name": "llm_judge"},
 }
 
+# Hybrid retrieval (vs the lean dense-only default): dense KNN + sparse BM25, RRF-fused. BM25 matches exact
+# entity tokens — the multi-hop *bridge* entity that's lexically present but embeds weakly against the
+# question — so it targets the dense-only recall ceiling directly, at no LLM cost.
+HYBRID_RETRIEVAL: dict[str, object] = {
+    "class_name": "retrieval_pipeline",
+    "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+    "fuser": {"class_name": "rrf"},
+}
+
 
 @asynccontextmanager
 async def _eval_engines(settings: Settings) -> AsyncIterator[tuple[IngestionEngine, RetrievalEngine]]:
@@ -114,12 +124,22 @@ async def run_benchmark(
         return _aggregate(per_query)
 
 
+def _reasoner_spec(name: str, grounding: str | None) -> dict[str, object]:
+    """A ``generation_pipeline`` spec for reasoner ``name``; for ``grounded_retrieval``, ``grounding``
+    overrides its grounding checker (e.g. ``llm_grounding`` for a sharper γ signal than the heuristic)."""
+    reasoner: dict[str, object] = {"class_name": name}
+    if grounding and name == "grounded_retrieval":
+        reasoner["grounding_checker"] = {"class_name": grounding}
+    return {"class_name": "generation_pipeline", "reasoner": reasoner}
+
+
 async def sweep_benchmark(
     items: list[BenchItem],
     llm: LanguageModel,
     *,
     reasoners: list[str] | None = None,
     settings: Settings | None = None,
+    grounding: str | None = None,
 ) -> dict[str, GenEvalReport]:
     """Run several reasoners over the *same* per-question passages and score each — the Phase-0 config
     comparison (``single_hop`` vs ``iterative`` vs ``decomposition``), reader + embedder held fixed and
@@ -127,7 +147,7 @@ async def sweep_benchmark(
     reasoner over one shared ``GenerationContext``; returns one report per reasoner name."""
     settings = settings or Settings(_env_file=None)
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
-    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    specs = {r: _reasoner_spec(r, grounding) for r in reasoners}
     factory = ComponentFactory.get()
     async with _eval_engines(settings) as (ingest, retrieval):
         ctx = GenerationContext(retrieval, llm)
@@ -176,16 +196,25 @@ async def run_over_corpus(
     embedder: Embedder,
     *,
     settings: Settings,
+    concurrency: int = 8,
 ) -> GenEvalReport:
     """Answer each item by retrieving over the *shared* pre-built corpus index (no per-question ingest) —
-    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely."""
+    the fullwiki-style setting. Scoring is unchanged; retrieval can now miss the gold entirely. Questions
+    run with bounded ``concurrency`` — they're independent + read-only over the shared corpus, so the
+    (I/O-bound) LLM calls overlap; results are order-independent, so the aggregate is unchanged."""
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     generation = GenerationEngine.assemble(retrieval, llm, settings)
-    per_query = []
-    for item in items:
-        result = await _safe_answer(generation.answer(Query(text=item.query.text, purpose=item.query.purpose)))
-        per_query.append(_score(item.query, result))
-    return _aggregate(per_query)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                generation.answer(Query(text=item.query.text, purpose=item.query.purpose))
+            )
+        return _score(item.query, result)
+
+    per_query = await asyncio.gather(*(_one(item) for item in items))  # gather preserves item order
+    return _aggregate(list(per_query))
 
 
 async def sweep_over_corpus(
@@ -196,20 +225,30 @@ async def sweep_over_corpus(
     *,
     reasoners: list[str] | None = None,
     settings: Settings,
+    concurrency: int = 8,
+    grounding: str | None = None,
 ) -> dict[str, GenEvalReport]:
-    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner."""
+    """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner.
+    Each (item, reasoner) runs with bounded ``concurrency`` (independent + read-only over the shared corpus)."""
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
-    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    specs = {r: _reasoner_spec(r, grounding) for r in reasoners}
     factory = ComponentFactory.get()
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     ctx = GenerationContext(retrieval, llm)
     pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(name: str, pipeline: GenerationPipeline, item: BenchItem):
+        async with sem:
+            result = await _safe_answer(
+                pipeline.answer(Query(text=item.query.text, purpose=item.query.purpose), ctx)
+            )
+        return name, _score(item.query, result)
+
+    tasks = [_one(name, p, item) for item in items for name, p in pipelines.items()]
     per_query: dict[str, list] = {name: [] for name in pipelines}
-    for item in items:
-        query = Query(text=item.query.text, purpose=item.query.purpose)
-        for name, pipeline in pipelines.items():
-            result = await _safe_answer(pipeline.answer(query, ctx))
-            per_query[name].append(_score(item.query, result))
+    for name, scored in await asyncio.gather(*tasks):  # item-major order preserved per reasoner
+        per_query[name].append(scored)
     return {name: _aggregate(pq) for name, pq in per_query.items()}
 
 
