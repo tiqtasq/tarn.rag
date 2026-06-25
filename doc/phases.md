@@ -445,3 +445,24 @@ is identical to the per-doc index (same documents, chunks, embeddings); only the
 Batched dispatch also batches the **Embed** stage, so API embedders make far fewer requests (the cost that
 made the te3 corpus build take ~2.6 h). Remaining floor: per-row inserts + ~5 stages; further wins would need
 cross-stage batching.
+
+---
+
+## Option 4 — robustness: deterministic drift-guards (2026-06-25)
+
+The gains this track measured (hybrid retrieval, attribution, ingest throughput) had no regression guard — a
+refactor could silently undo them. CI shapes what a guard can check: the lean push CI (`codecov.yml`) has no
+models / datasets / LLM key; the gated `model-tests.yml` job has the ONNX models but still no LLM key; and the
+LLM metrics (attribution, multi-hop F1) are non-deterministic (gpt-4o-mini ±0.02–0.03). So the **deterministic,
+every-push** guards are:
+
+- **Hybrid mechanic** (`tests/retrieval/test_hybrid_regression.py`) — the *cause* of the TAT-QA table lift,
+  distilled into an invariant: with a controlled embedder, a 'table' chunk whose exact tokens are present but
+  whose dense vector is far from the query is ranked **below** the top-k by dense-only, and **rescued** by
+  hybrid (BM25 → RRF ranks it first). Breaks if the sparse arm or RRF fusion regresses. No model needed.
+- **Ingest equivalence** (`tests/ingestion/test_bulk_ingest.py`, from Option 3) — the batched + bulk-persist
+  index is identical to the per-doc index.
+
+The full, real-data quality metrics (gte-small table lift, gpt-4o-mini attribution / multi-hop F1) need
+corpus scale and/or an LLM key, so they're tracked **on-demand** via `scripts/run_layout_eval.py` and
+`scripts/run_benchmarks.py` rather than as committed CI assertions.
