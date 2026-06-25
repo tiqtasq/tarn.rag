@@ -26,6 +26,11 @@ class ChunkStore(ABC):
     async def store_document(self, doc: Document) -> str:
         """Upsert a document; return its id (threaded forward as ``metadata['doc_id']``)."""
 
+    async def store_documents(self, docs: list[Document]) -> list[str]:
+        """Bulk ``store_document``; return ids in order. Default loops (one txn each); ``DocumentRepository``
+        overrides it with a single-transaction bulk upsert (the ingest hot path)."""
+        return [await self.store_document(doc) for doc in docs]
+
     @abstractmethod
     async def store_chunks(self, chunks: list[Chunk]) -> list[str]:
         """Persist chunks atomically; return their ids (in order)."""

@@ -102,10 +102,9 @@ class PipelineOrchestrator(BatchCoordinator):
     async def _record(
         self, jobs: list[IngestionJob], status: str, error: str | None = None
     ) -> None:
-        for job in jobs:
-            await self.repository.record_job(
-                job.document_id, job.job_id, job.stage_name, status, error
-            )
+        await self.repository.record_jobs(  # one transaction for the whole batch's status rows
+            [(job.document_id, job.job_id, job.stage_name) for job in jobs], status, error
+        )
 
     def _make_job(self, item: PipelineItem, stage_name: str) -> IngestionJob:
         return IngestionJob(
