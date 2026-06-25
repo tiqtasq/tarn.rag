@@ -7,6 +7,7 @@ from here: ``from tarnrag.contracts import Document, ChunkStore, Candidate, Retr
 
 from tarnrag.contracts.dtos import (
     Chunk,
+    CorpusStatus,
     Document,
     DocumentFacts,
     Embedding,
@@ -36,6 +37,7 @@ __all__ = [
     "Chunk",
     "Embedding",
     "DocumentFacts",
+    "CorpusStatus",
     "MethodRef",
     # structure (layout-aware extraction)
     "StructuredDocument",

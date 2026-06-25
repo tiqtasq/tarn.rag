@@ -52,6 +52,30 @@ async def test_store_and_get_document(repo):
     assert got.metadata["source_id"] == "s1"
 
 
+async def test_corpus_stats_summarizes_counts_and_document_lengths(repo):
+    await repo.store_document_with_chunks(
+        Document(content="x" * 10, metadata={"source_id": "a"}),
+        [_chunk("c0", 0, 2, source_id="a"), _chunk("c1", 1, 2, source_id="a")],
+    )
+    await repo.store_document_with_chunks(
+        Document(content="y" * 30, metadata={"source_id": "b"}),
+        [_chunk("only", 0, 1, source_id="b")],
+    )
+    stats = await repo.corpus_stats()
+    assert stats.document_count == 2
+    assert stats.chunk_count == 3
+    assert stats.embedding_count == 0  # none stored
+    assert (stats.min_chars, stats.max_chars, stats.total_chars) == (10, 30, 40)
+    assert stats.mean_chars == 20.0 and stats.median_chars == 20.0  # median of [10, 30]
+    assert stats.mean_chunks_per_doc == 1.5  # 3 chunks / 2 docs
+
+
+async def test_corpus_stats_on_an_empty_repository_is_all_zeros(repo):
+    stats = await repo.corpus_stats()
+    assert stats.document_count == 0 and stats.chunk_count == 0 and stats.total_chars == 0
+    assert stats.mean_chars == 0.0 and stats.median_chars == 0.0 and stats.mean_chunks_per_doc == 0.0
+
+
 async def test_document_with_chunks_and_idempotency(repo):
     doc_id, ids = await repo.store_document_with_chunks(
         Document(content="full", metadata={"source_id": "s1"}),

@@ -1,0 +1,59 @@
+name: Model-gated tests (opt-in)
+
+# The example "points" (Part II / Part I) and the real ONNX embedder + cross-encoder tests are gated on
+# the models being fetched (~200 MB), so they are SKIPPED in the default push CI (codecov.yml) and would
+# otherwise not be enforced as the system changes. This workflow runs them — but it is DORMANT by default:
+# it never fires on a normal push or PR. Enable a run either way:
+#
+#   * manually — Actions tab → "Model-gated tests (opt-in)" → Run workflow (workflow_dispatch); or
+#   * on a pull request — add the `run-model-tests` label to the PR (re-add it to re-run).
+#
+# Adding any *other* label is a no-op (the job's `if` filters to the one label).
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [labeled]
+
+jobs:
+  model-tests:
+    name: Run the model-gated tests
+    runs-on: ubuntu-latest
+    # Run only for the manual trigger or the opt-in label — otherwise the job is skipped.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.label.name == 'run-model-tests'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (model-running runtime + test tools)
+        run: pip install -e ".[all,dev]"
+
+      - name: Set PYTHONPATH to repo root
+        run: echo "PYTHONPATH=${GITHUB_WORKSPACE}" >> $GITHUB_ENV
+
+      - name: Cache the ONNX models
+        id: cache-models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: tarnrag-models-${{ hashFiles('scripts/fetch_model.py') }}
+
+      - name: Fetch the embedding + reranker models
+        if: steps.cache-models.outputs.cache-hit != 'true'
+        run: |
+          python scripts/fetch_model.py
+          python scripts/fetch_model.py --repo Xenova/ms-marco-MiniLM-L-6-v2 \
+            --dest ./models/ms-marco-MiniLM-L-6-v2
+
+      - name: Run the suite with the models present
+        # With both models fetched, the model-gated tests run instead of skipping — i.e. the example
+        # "points" (P2-01 dense good/bad, P2-02 the hybrid swap, …), the real embedder, and the
+        # cross-encoder reranker. Postgres tests still skip here (no Postgres service in this job).
+        run: pytest -q
