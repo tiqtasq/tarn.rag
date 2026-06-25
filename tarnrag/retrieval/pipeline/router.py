@@ -20,7 +20,7 @@ from tarnrag.core.components import ComponentFactory
 from tarnrag.retrieval.components.classifier import QueryClassifier
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.pipeline.searcher import Searcher
-from tarnrag.retrieval.types import Query
+from tarnrag.retrieval.types import Query, SearchTrace
 
 _DEFAULT_SEARCHER: dict[str, Any] = {"class_name": "retrieval_pipeline"}  # dense + identity fuser
 
@@ -49,9 +49,14 @@ class RoutingRetrievalPipeline(Searcher):
         self._routes = {t: factory.create_as(spec, Searcher) for t, spec in self.config.routes.items()}
         self._default = factory.create_as(self.config.default, Searcher)
 
-    async def search(self, query: Query, ctx: RetrievalContext) -> list[RetrievalResult]:
+    async def search(
+        self, query: Query, ctx: RetrievalContext, trace: SearchTrace | None = None
+    ) -> list[RetrievalResult]:
         self._ensure_children()
         if not query.query_type:  # a caller-supplied query_type wins; otherwise classify
             self._classifier.classify(query, ctx)
         searcher = self._routes.get(query.query_type, self._default)
-        return await searcher.search(query, ctx)
+        if trace is not None:  # record which route this query took before delegating to it
+            route_key = query.query_type if query.query_type in self._routes else "default"
+            trace.routing = (query.query_type, route_key)
+        return await searcher.search(query, ctx, trace)

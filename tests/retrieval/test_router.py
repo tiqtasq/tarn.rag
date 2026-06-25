@@ -23,7 +23,7 @@ class _RecordingSearcher(Searcher):
         self.marker = marker
         self.seen: Query | None = None
 
-    async def search(self, query, ctx):
+    async def search(self, query, ctx, trace=None):
         self.seen = query
         return [self.marker]
 

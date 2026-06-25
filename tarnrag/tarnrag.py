@@ -21,11 +21,9 @@ first ``ask``. Use it directly::
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
-from tarnrag.contracts import RetrievalResult
+from tarnrag.contracts import CorpusStatus, RetrievalResult
 from tarnrag.core.engine.config import Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
@@ -36,6 +34,7 @@ from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.engine.engine import RetrievalEngine
+from tarnrag.retrieval.types import SearchTrace
 from tarnrag.storage.repository import DocumentRepository
 
 
@@ -43,11 +42,11 @@ class TarnRag:
     """An ingestion + retrieval + generation session over one store (see the module docstring)."""
 
     def __init__(self, settings: Settings | str | Path, llm: LanguageModel | None = None) -> None:
-        """``settings`` is a ready ``Settings`` or the path to a JSON config to load (the ambient ``.env``
-        is ignored — the file is authoritative; OS env vars still supplement, e.g. the LLM key). ``llm``
-        may be injected (tests / a custom backend)."""
+        """``settings`` is a ready ``Settings`` or the path to a JSON/YAML config to load (the ambient
+        ``.env`` is ignored — the file is authoritative; OS env vars still supplement, e.g. the LLM key).
+        ``llm`` may be injected (tests / a custom backend)."""
         if not isinstance(settings, Settings):
-            settings = Settings(_env_file=None, **json.loads(Path(settings).read_text()))
+            settings = Settings.from_file(settings)
         self.settings = settings
         self._injected_llm = llm
         self._repository: DocumentRepository | None = None
@@ -114,6 +113,12 @@ class TarnRag:
         """Every ingested document (id + chunk / embedding counts)."""
         return Outcome(await (await self._ingestion_engine()).list_documents())
 
+    async def status(self) -> Outcome[CorpusStatus]:
+        """A snapshot of the document repository — document / chunk / embedding counts and the
+        document-length distribution. Read-only: it queries the shared store directly, so it never builds
+        the ingestion machinery."""
+        return Outcome(await self._repository.corpus_stats())
+
     async def delete(self, document_id: str) -> Outcome[bool]:
         """Delete a document and everything derived from it. The value is False if it wasn't known."""
         return Outcome(await (await self._ingestion_engine()).delete_document(document_id))
@@ -122,6 +127,15 @@ class TarnRag:
         """Retrieval only — the ranked, provenance-bearing passages. ``top_k`` mirrors the engine's
         ``search_text`` default."""
         return Outcome(await self._retrieval.search_text(query, top_k=top_k))
+
+    async def explain(self, query: str, *, top_k: int = 8) -> Outcome[SearchTrace]:
+        """Retrieval with its inner workings exposed — the same ranked results ``retrieve`` returns
+        (``trace.results``) plus the :class:`~tarnrag.retrieval.types.SearchTrace` a UI renders to explain
+        *why*: each retriever's candidates before fusion, the ranking at every pipeline stage
+        (fused → merged → reranked → final) with per-component scores, and any routing decision.
+        Output-free like the rest of the facade — it returns the data; a UI (the console's ``explain``)
+        renders it."""
+        return Outcome(await self._retrieval.explain_text(query, top_k=top_k))
 
     async def ask(self, query: str) -> Outcome[GenerationResult]:
         """Retrieval + generation — a grounded answer with a proof tree. Needs an LLM."""
@@ -150,9 +164,10 @@ class TarnRag:
         return self._generation
 
     def _build_llm(self) -> LanguageModel:
-        if not (self.settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY")):
+        if not self.settings.llm.resolved_api_key():
             raise RuntimeError(
-                "generation needs an LLM key — set ANTHROPIC_API_KEY (the provider/model are in the config)"
+                f"generation needs an LLM key — set {self.settings.llm.key_env_var()} "
+                "(the provider / model are in the config)"
             )
         return LanguageModel.create(self.settings.llm)
 

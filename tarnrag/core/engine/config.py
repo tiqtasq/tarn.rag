@@ -12,9 +12,13 @@ Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``
 
 from __future__ import annotations
 
+import json
+import os
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -109,11 +113,23 @@ class LLMSettings(BaseModel):
     # api_base_url to point at vLLM / Together / Groq / … e.g. for a Llama-3.3-70B reader).
     provider: Literal["anthropic", "openai"] = "anthropic"
     model: str = "claude-sonnet-4-6"
-    api_key: str = ""  # falls back to the provider's env var (ANTHROPIC_API_KEY / OPENAI_API_KEY)
+    api_key: str = ""  # the key itself (avoid in files); else read from the env var named by api_key_env
+    api_key_env: str = ""  # name of the env var holding the key; "" → the provider's standard var
     api_base_url: str = ""  # falls back to the provider's default endpoint
     api_timeout: float = 60.0
     max_tokens: int = 1024
     temperature: float = 0.0
+
+    def key_env_var(self) -> str:
+        """The environment variable the API key is read from — the configured ``api_key_env`` if set, else
+        the provider's standard (``ANTHROPIC_API_KEY`` / ``OPENAI_API_KEY``)."""
+        standard = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+        return self.api_key_env or standard[self.provider]
+
+    def resolved_api_key(self) -> str:
+        """The API key in effect: the explicit ``api_key``, else the value of :meth:`key_env_var`. Keeps the
+        secret out of config files — only the env var *name* is configured, never the key itself."""
+        return self.api_key or os.environ.get(self.key_env_var(), "")
 
 
 class DatabaseSettings(BaseModel):
@@ -251,6 +267,28 @@ class Settings(BaseSettings):
                 "or switch to MODE='distributed')"
             )
         return self
+
+    @classmethod
+    def from_file(cls, path: str | Path) -> Settings:
+        """Load a ``Settings`` from a JSON **or YAML** config file, selected by extension
+        (``.json`` / ``.yaml`` / ``.yml``). The file is authoritative: the ambient ``.env`` is ignored
+        (``_env_file=None``) so the same config is reproducible everywhere; OS env vars still supplement
+        (e.g. an LLM API key)."""
+        path = Path(path)
+        suffix = path.suffix.lower()
+        text = path.read_text(encoding="utf-8")
+        if suffix in (".yaml", ".yml"):
+            data = yaml.safe_load(text)
+        elif suffix == ".json":
+            data = json.loads(text)
+        else:
+            raise ValueError(
+                f"unsupported config extension {path.suffix!r} for {path} — use .json, .yaml, or .yml"
+            )
+        if not isinstance(data, dict):
+            kind = "empty" if data is None else type(data).__name__
+            raise ValueError(f"config {path} must be a mapping of settings, got {kind}")
+        return cls(_env_file=None, **data)
 
 
 @lru_cache

@@ -9,7 +9,14 @@ Public API::
 
 from tarnrag.ingestion import DocumentStatus, DocumentSummary, IngestionEngine, run_worker
 from tarnrag.report import Issue, Outcome, Report, Severity
-from tarnrag.retrieval import MethodRef, Query, RetrievalEngine, RetrievalError, RetrievalResult
+from tarnrag.retrieval import (
+    MethodRef,
+    Query,
+    RetrievalEngine,
+    RetrievalError,
+    RetrievalResult,
+    SearchTrace,
+)
 from tarnrag.tarnrag import TarnRag  # imported last — wires the three engines together
 
 __all__ = [
@@ -26,5 +33,6 @@ __all__ = [
     "RetrievalError",
     "Query",
     "RetrievalResult",
+    "SearchTrace",
     "MethodRef",
 ]

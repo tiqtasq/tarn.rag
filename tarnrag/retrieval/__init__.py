@@ -24,7 +24,7 @@ from tarnrag.retrieval.components.reranker import CrossEncoderReranker, LlmJudge
 from tarnrag.retrieval.components.retriever import MultiQueryRetriever, RetrievalContext, Retriever
 from tarnrag.retrieval.pipeline.router import RoutingRetrievalPipeline
 from tarnrag.retrieval.pipeline.searcher import Searcher
-from tarnrag.retrieval.types import Query
+from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
 
 __all__ = [
     "RetrievalEngine",
@@ -33,6 +33,9 @@ __all__ = [
     "Query",
     "RetrievalResult",
     "MethodRef",
+    "SearchTrace",
+    "SearchStage",
+    "RetrieverCandidates",
     "Searcher",
     "RetrievalPipeline",
     "RoutingRetrievalPipeline",
