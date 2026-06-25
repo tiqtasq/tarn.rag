@@ -115,12 +115,22 @@ async def run_benchmark(
         return _aggregate(per_query)
 
 
+def _reasoner_spec(name: str, grounding: str | None) -> dict[str, object]:
+    """A ``generation_pipeline`` spec for reasoner ``name``; for ``grounded_retrieval``, ``grounding``
+    overrides its grounding checker (e.g. ``llm_grounding`` for a sharper γ signal than the heuristic)."""
+    reasoner: dict[str, object] = {"class_name": name}
+    if grounding and name == "grounded_retrieval":
+        reasoner["grounding_checker"] = {"class_name": grounding}
+    return {"class_name": "generation_pipeline", "reasoner": reasoner}
+
+
 async def sweep_benchmark(
     items: list[BenchItem],
     llm: LanguageModel,
     *,
     reasoners: list[str] | None = None,
     settings: Settings | None = None,
+    grounding: str | None = None,
 ) -> dict[str, GenEvalReport]:
     """Run several reasoners over the *same* per-question passages and score each — the Phase-0 config
     comparison (``single_hop`` vs ``iterative`` vs ``decomposition``), reader + embedder held fixed and
@@ -128,7 +138,7 @@ async def sweep_benchmark(
     reasoner over one shared ``GenerationContext``; returns one report per reasoner name."""
     settings = settings or Settings(_env_file=None)
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
-    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    specs = {r: _reasoner_spec(r, grounding) for r in reasoners}
     factory = ComponentFactory.get()
     async with _eval_engines(settings) as (ingest, retrieval):
         ctx = GenerationContext(retrieval, llm)
@@ -207,11 +217,12 @@ async def sweep_over_corpus(
     reasoners: list[str] | None = None,
     settings: Settings,
     concurrency: int = 8,
+    grounding: str | None = None,
 ) -> dict[str, GenEvalReport]:
     """The reasoner sweep over the *shared* pre-built corpus (retrieve-only) — one report per reasoner.
     Each (item, reasoner) runs with bounded ``concurrency`` (independent + read-only over the shared corpus)."""
     reasoners = reasoners or ["single_hop", "iterative", "decomposition"]
-    specs = {r: {"class_name": "generation_pipeline", "reasoner": {"class_name": r}} for r in reasoners}
+    specs = {r: _reasoner_spec(r, grounding) for r in reasoners}
     factory = ComponentFactory.get()
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     ctx = GenerationContext(retrieval, llm)

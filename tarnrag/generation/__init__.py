@@ -21,6 +21,7 @@ from tarnrag.generation.components.grounding import (
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
+from tarnrag.generation.components.grounded_retrieval import GroundedRetrievalReasoner
 from tarnrag.generation.components.reasoner import (
     DecompositionReasoner,
     IterativeReasoner,
@@ -39,6 +40,7 @@ __all__ = [
     "SingleHopReasoner",
     "IterativeReasoner",
     "DecompositionReasoner",
+    "GroundedRetrievalReasoner",
     "ReasonedAnswer",
     "ReasonedStep",
     "EvidenceAssembler",

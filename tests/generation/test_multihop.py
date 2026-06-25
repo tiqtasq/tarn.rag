@@ -8,6 +8,7 @@ from tarnrag.generation import (
     DecompositionReasoner,
     GenerationContext,
     GenerationPipeline,
+    GroundedRetrievalReasoner,
     IterativeReasoner,
 )
 from tarnrag.retrieval.types import Query
@@ -114,6 +115,48 @@ async def test_decomposition_falls_back_to_the_original_question(make_result):
         Query(text="original q"), GenerationContext(retrieval, llm)
     )
     assert retrieval.queries == ["original q"] and out.answer == "ok"  # decompose failed -> the question
+
+
+# ---------------- GroundedRetrievalReasoner (γ-driven re-retrieval) ----------------
+
+
+async def test_grounded_retrieval_reretrieves_for_an_ungrounded_claim(make_result):
+    a, b = make_result("a", "Alpha is a 1990 movie."), make_result("b", "Beta directed Alpha.")
+    retrieval = _RoutedRetrieval([("beta", [b]), ("alpha", [a])])  # question->a; follow-up 'beta...'->b
+    llm = _scripted(
+        # hop 1 over [a]: a claim about Beta that [a] doesn't support -> heuristic UNGROUNDED
+        json.dumps({"answer": "?", "steps": [{"claim": "beta directed", "cited": [1]}]}),
+        # hop 2 over [a, b]: now grounded
+        json.dumps({"answer": "Beta", "steps": [{"claim": "Beta directed Alpha", "cited": [1, 2]}]}),
+    )
+    out = await GroundedRetrievalReasoner(GroundedRetrievalReasoner.Config()).reason(
+        Query(text="who directed alpha?"), GenerationContext(retrieval, llm)
+    )
+    assert out.answer == "Beta"
+    assert [r.chunk_id for r in out.evidence] == ["a", "b"]  # the follow-up pulled in the bridge passage
+    assert retrieval.queries == ["who directed alpha?", "beta directed"]  # re-retrieved for the claim
+
+
+async def test_grounded_retrieval_stops_when_grounded(make_result):
+    a = make_result("a", "Beta directed Alpha in 1990.")
+    retrieval = _RoutedRetrieval([("", [a])])  # any query -> [a]
+    # one read whose claim is fully covered by [a] -> GROUNDED -> no follow-up retrieval
+    llm = _scripted(json.dumps({"answer": "Beta", "steps": [{"claim": "Beta directed Alpha", "cited": [1]}]}))
+    out = await GroundedRetrievalReasoner(GroundedRetrievalReasoner.Config()).reason(
+        Query(text="who directed alpha?"), GenerationContext(retrieval, llm)
+    )
+    assert out.answer == "Beta" and len(retrieval.queries) == 1  # stopped after one read (already grounded)
+
+
+async def test_grounded_retrieval_stops_when_followup_finds_nothing_new(make_result):
+    a = make_result("a", "Alpha is a movie.")
+    retrieval = _RoutedRetrieval([("", [a])])  # every query -> the same [a] (no new evidence)
+    llm = _scripted(json.dumps({"answer": "x", "steps": [{"claim": "totally unrelated zzz", "cited": [1]}]}))
+    out = await GroundedRetrievalReasoner(GroundedRetrievalReasoner.Config(max_hops=5)).reason(
+        Query(text="q"), GenerationContext(retrieval, llm)
+    )
+    # claim is ungrounded, but re-retrieval returns only the already-seen [a] -> stop (no infinite loop)
+    assert len(retrieval.queries) == 2 and len(out.evidence) == 1
 
 
 # ---------------- through the pipeline (swap the reasoner spec) ----------------

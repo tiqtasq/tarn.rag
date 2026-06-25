@@ -271,3 +271,84 @@ positive distractor gains confirm it works; the *order-of-magnitude* payoff need
 retrieval architecture (γ-retrieval, ChainFilter) is **fullwiki ingestion + retrieval**, against which those
 levers — and the bridge itself — can actually show their worth. Building more retrieval cleverness against a
 20-passage pool would be optimizing the wrong setting.
+
+---
+
+## Phase 2.5 — shared-corpus (pool) investigation (2026-06-24)
+
+Built the shared-corpus harness (one persistent index, retrieve-only per question; `--corpus pool`), plus
+the supporting hardening: **bounded concurrency** for the eval (~7× — the LLM calls are I/O-bound), an
+**`llm_judge` shortlist cap** (corpus retrieval hands the reranker 100+ candidates), the OpenAI retry
+**honoring `Retry-After`**, and a per-embedder index cache key. Ran HotpotQA over a **~10K-passage pool**
+(1,000 dev questions, deduped), decomposition, n=200.
+
+### Results (pool ~10K, decomposition)
+| variant | hit | F1 | EM |
+|---|---|---|---|
+| gte-small + gpt-4o-mini (baseline) | 0.508 | 0.633 | 0.515 |
+| + bridge (multi-query + judge) | 0.497 | 0.632 | 0.515 |
+| gte-small + **gpt-4o** | 0.541 | 0.653 | 0.540 |
+| **text-embedding-3-small** (1536-d) + mini | 0.514 | 0.644 | 0.515 |
+| *MOTHRAG* | — | *0.781* | *0.648* |
+
+(Distractor reference: gte-small + gpt-4o-mini decomposition was hit 0.574 / F1 0.705.)
+
+### Conclusions
+1. **`hit` is stuck at ~0.51–0.54 across every lever** — bridge, reader, and a much stronger embedder all
+   hit the same wall. So the recall ceiling is **not** embedder quality, the reader, or query expansion.
+2. **The bridge is redundant with decomposition** (flat) — decomposition already expands the query.
+3. **The reader is modest on the pool** (gpt-4o +0.02 F1 vs distractor's +0.06) — it can only answer what's
+   retrieved, and retrieval misses ~half.
+4. **A stronger embedder is flat** (te3-small ≈ gte-small) — so we did *not* pursue a local strong embedder.
+5. The wall is the **multi-hop retrieval problem**: HotpotQA's 2nd-hop passage isn't similar to the
+   *question* (it's similar to the 1st hop's *answer*), so dense retrieval can't surface it — no matter the
+   embedder. The cheap levers (reader / embedder / bridge) are **spent** on the realistic pool setting.
+
+### Verdict → Phase 3
+tarn.rag is at MOTHRAG parity on **distractor** (lean stack + gpt-4o); the **pool** gap is the multi-hop
+retrieval ceiling. The levers that actually attack it are the §6 items *not* redundant with decomposition:
+**γ-driven re-retrieval** (a failed grounding check triggers a follow-up search using what's been read — it
+can find the missing hop) and, heavier, ChainFilter. Phase 3 = **γ-driven re-retrieval**.
+
+---
+
+## Phase 3 — results: γ-driven re-retrieval (2026-06-24)
+
+`GroundedRetrievalReasoner` (`grounded_retrieval`) — retrieve → read → grounding-check; an ungrounded claim
+triggers a follow-up search *for that claim* (the bridge passage), then re-read. Eval: pool ~10K, gte-small,
+gpt-4o-mini, n=200, **heuristic** grounding (the LLM-free default).
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.613 | 0.500 |
+| **grounded_retrieval (γ, heuristic)** | **0.508** | **0.621** | **0.510** |
+
+**Verdict: a small, partly-within-noise positive** (+0.027 hit; F1/EM within the n=200 ~±0.02–0.03 floor —
+decomposition read 0.633 last run vs 0.613 here). γ-retrieval *nudges* the multi-hop ceiling but doesn't
+break it with heuristic grounding. Open levers: (a) **LLM grounding** (sharper gap detection → better-targeted
+re-retrieval — cheap config try), (b) **ChainFilter** (the heavy §6 item: OpenIE triples + chain density),
+or (c) bank it — tarn.rag is at MOTHRAG parity on distractor; the realistic-pool multi-hop recall is a hard
+frontier that incremental levers (bridge, embedder, γ-heuristic) only nudge.
+
+### γ with LLM grounding — the bottleneck is re-retrieval, not the signal (2026-06-24)
+
+Re-ran γ with `--grounding llm_grounding` (sharper claim-gap detection) vs decomposition, same protocol:
+
+| reasoner | hit | F1 | EM |
+|---|---|---|---|
+| decomposition | 0.481 | 0.610 | 0.495 |
+| grounded_retrieval (γ, **llm_grounding**) | 0.486 | 0.596 | 0.480 |
+
+**LLM grounding made γ worse, not better** (−0.014 F1 vs decomposition; below γ-heuristic's 0.621 F1). So the
+weak link is **not** the grounding signal — it's the re-retrieval itself: claim-as-query dense retrieval still
+can't surface the question-dissimilar bridge passage, and the extra hops add context noise. **γ-retrieval is
+spent** as a pool lever.
+
+### Phase 3 verdict (final)
+Every measured lever — bridge, stronger reader, stronger embedder, γ-heuristic, γ-llm — only *nudges* the
+pool's hit ≈ 0.51 multi-hop recall ceiling. The multi-hop retrieval problem (the 2nd-hop passage isn't similar
+to the question) is a **genuine hard frontier** that incremental retrieval tricks don't crack. The honest
+state: **tarn.rag matches MOTHRAG on distractor with a lean, differentiated stack** (offline / layout
+provenance / license filtering); the realistic-pool multi-hop recall gap is characterized and bounded. The
+only untried lever is **ChainFilter** (OpenIE triples + chain density — heavy, uncertain payoff against a
+ceiling 5 levers couldn't move).
