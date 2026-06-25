@@ -100,6 +100,13 @@ class Runner:
             self._out.print(f"{'[green]HIT [/]' if ok else '[red]MISS[/]'} gold phrase {gold!r} in the answer")
         return result
 
+    def show_result(self, result: GenerationResult, *, label: str) -> GenerationResult:
+        """Render an already-computed generation result — the rendering half of :meth:`show_answer`, for a
+        result that wasn't produced by a live ``ask`` (e.g. a constructed illustration). Returns it."""
+        self._out.print(Rule(f"[bold]{label}[/]", align="left", style="cyan"))
+        self._out.print(View.create_answer_view(result))
+        return result
+
     @staticmethod
     def _probe_title(query: str, label: str | None) -> str:
         return f"[bold]{label}[/]  {query}" if label else query
