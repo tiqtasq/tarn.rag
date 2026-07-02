@@ -107,6 +107,12 @@ class AnthropicLanguageModel(LanguageModel):
             self._client = anthropic.AsyncAnthropic(**self._sdk_options())
         return self._client
 
+    async def aclose(self) -> None:
+        """Close the SDK client if one was built (idempotent)."""
+        if self._client is not None:
+            client, self._client = self._client, None
+            await client.close()
+
     def _sdk_options(self) -> dict[str, Any]:
         """The ``AsyncAnthropic`` constructor options — extracted so the retry/timeout wiring is testable
         without the SDK installed. ``max_retries`` delegates transient-failure handling to the SDK
@@ -243,6 +249,12 @@ class OpenAILanguageModel(LanguageModel):
             except ValueError:
                 pass
         return default
+
+    async def aclose(self) -> None:
+        """Close the httpx client if one was built (idempotent)."""
+        if self._client is not None:
+            client, self._client = self._client, None
+            await client.aclose()
 
     # ---------------- the one stubbable seam ----------------
 

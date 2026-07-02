@@ -129,6 +129,81 @@ async def test_ingest_missing_paths_and_empty_store_queries(tmp_path):
         assert (await tarn.delete("nope")).value is False
 
 
+async def test_ingest_reports_stem_collisions_instead_of_overwriting(tmp_path):
+    """Under ``ID_POLICY='caller'`` the document id is the file stem, so ``a.md`` + ``a.txt`` share the id
+    ``'a'`` — the second must not silently upsert over the first: it is skipped with an ERROR issue naming
+    both files, and exactly one document lands. The hash embedder keeps this model-free."""
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "a.md").write_text("alpha as markdown")
+    (src / "a.txt").write_text("alpha as text")
+    settings = Settings(
+        _env_file=None,
+        MODE="embedded",
+        EMBEDDING_DIMENSION=8,
+        ID_POLICY="caller",
+        database=DatabaseSettings(document_url=f"sqlite:///{tmp_path}/collide.db"),
+        embedding=EmbeddingSettings(provider="hash"),
+    )
+    async with TarnRag(settings) as tarn:
+        outcome = await tarn.ingest([str(src)])
+        assert [s.document_id for s in outcome.value] == ["a"]  # the first file per stem is kept
+        [issue] = outcome.report.issues
+        assert issue.severity is Severity.ERROR
+        assert issue.subject == str(src / "a.txt")  # the skipped file
+        assert "'a'" in issue.message and "a.md" in issue.message  # names the id and the kept file
+        assert len((await tarn.docs()).value) == 1  # nothing was overwritten
+
+
+def test_split_stem_collisions_keeps_the_first_per_stem(tmp_path):
+    """The partition itself: first file per stem kept in order; later same-stem files come back as
+    ``(skipped, kept)`` pairs — including a same-name file from a different directory."""
+    a_md, a_txt = tmp_path / "a.md", tmp_path / "a.txt"
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    a_sub = sub / "a.rst"
+    b = tmp_path / "b.md"
+    kept, collisions = TarnRag._split_stem_collisions([a_md, a_txt, b, a_sub])
+    assert kept == [a_md, b]
+    assert collisions == [(a_txt, a_md), (a_sub, a_md)]
+
+
+async def test_close_releases_built_resources(tmp_path):
+    """``close`` releases what the facade BUILT: the generation LLM (when not injected) and the ingestion
+    engine's queue — plus the shared store. Recorded through the same ``aclose`` seams the engines use."""
+    settings = _plumbing_settings(tmp_path)
+    settings.llm.api_key = "k"  # lets _build_llm construct a backend (lazily connecting — no network)
+    tarn = await TarnRag(settings).open()
+    await tarn.docs()  # lazily builds the ingestion engine
+    tarn._gen()  # lazily builds the generation engine over the built LLM
+    closed: list[str] = []
+
+    class _Closable:
+        def __init__(self, name: str):
+            self._name = name
+
+        async def aclose(self) -> None:
+            closed.append(self._name)
+
+    tarn._generation.llm = _Closable("llm")
+    tarn._ingestion._queue = _Closable("queue")
+    await tarn.close()
+    assert closed == ["llm", "queue"]  # the built LLM and the engine's queue are both released
+
+
+async def test_close_leaves_an_injected_llm_to_its_owner(tmp_path):
+    """An INJECTED LLM is closed by whoever supplied it, never by the facade."""
+    closed: list[str] = []
+
+    class _InjectedLLM(StaticLanguageModel):
+        async def aclose(self) -> None:
+            closed.append("llm")
+
+    async with TarnRag(_plumbing_settings(tmp_path), llm=_InjectedLLM("{}")) as tarn:
+        tarn._gen()
+    assert closed == []  # __aexit__ -> close() did not touch the injected model
+
+
 def test_expand_resolves_files_dirs_and_reports_missing(tmp_path):
     """``_expand`` (path resolution only): a file is taken as-is, a directory contributes the files in it
     (sorted), and a path that matches nothing comes back as missing — never silently dropped."""

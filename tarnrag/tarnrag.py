@@ -78,6 +78,13 @@ class TarnRag:
         return self
 
     async def close(self) -> None:
+        """Release everything this facade built: the generation LLM (unless it was injected — an
+        injected one is closed by its owner), the ingestion engine (its queue — the pgQueuer pool in
+        distributed mode), and the one shared store."""
+        if self._generation is not None and self._injected_llm is None:
+            await self._generation.llm.aclose()  # the LLM _build_llm created
+        if self._ingestion is not None:
+            await self._ingestion.aclose()  # the queue it built (+ the shared store, idempotently)
         if self._repository is not None:
             await self._repository.disconnect()  # the one store, shared by every engine
 
@@ -93,9 +100,22 @@ class TarnRag:
         """Ingest (or re-ingest) the given files / directories — a directory contributes the files in it.
         The document id is each file's stem, so re-ingesting a file upserts in place (under
         ``ID_POLICY='caller'``). The value is the resulting per-document statuses; the report flags paths
-        that matched nothing and documents that failed to ingest — neither is dropped silently."""
+        that matched nothing, files skipped because their stem (= id) collides with another file's, and
+        documents that failed to ingest — nothing is dropped silently."""
         files, missing = self._expand(paths)
         issues = [Issue("not found", Severity.WARNING, subject=raw) for raw in missing]
+        if self.settings.ID_POLICY == "caller":
+            # The stem is the document id — two files sharing one stem (a.md + a.txt, or one name in two
+            # directories) would silently upsert over each other. Keep the first, report the rest.
+            files, collisions = self._split_stem_collisions(files)
+            issues += [
+                Issue(
+                    f"skipped — its document id {skipped.stem!r} is already taken by {kept}",
+                    Severity.ERROR,
+                    subject=str(skipped),
+                )
+                for skipped, kept in collisions
+            ]
         if not files:
             return Outcome([], Report(tuple(issues)))
         ingestion = await self._ingestion_engine()
@@ -170,6 +190,24 @@ class TarnRag:
                 "(the provider / model are in the config)"
             )
         return LanguageModel.create(self.settings.llm)
+
+    @staticmethod
+    def _split_stem_collisions(files: list[Path]) -> tuple[list[Path], list[tuple[Path, Path]]]:
+        """Partition ``files`` by stem uniqueness: the kept files (first file per stem, in order) and the
+        collisions as ``(skipped, kept-it-collides-with)`` pairs. Only used under ``ID_POLICY='caller'``,
+        where the stem is the document id — a collision would be a silent overwrite, so it is skipped and
+        reported instead. Deterministic: ``_expand`` yields a stable order, so re-runs keep the same file."""
+        first_by_stem: dict[str, Path] = {}
+        kept: list[Path] = []
+        collisions: list[tuple[Path, Path]] = []
+        for path in files:
+            existing = first_by_stem.get(path.stem)
+            if existing is None:
+                first_by_stem[path.stem] = path
+                kept.append(path)
+            else:
+                collisions.append((path, existing))
+        return kept, collisions
 
     @staticmethod
     def _expand(paths: list[str]) -> tuple[list[Path], list[str]]:
