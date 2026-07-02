@@ -111,6 +111,85 @@ def test_openai_defaults_base_url():
     assert OpenAILanguageModel(model="gpt-4o-mini")._base_url == "https://api.openai.com/v1"
 
 
+# ---------------- the sampling fallback (Prompt value > configured default > library fallback) ----------
+
+
+async def _anthropic_call(lm, prompt):
+    """Run one stubbed ``complete`` and return the captured ``messages.create`` kwargs."""
+    captured = {}
+
+    async def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _fake_response("x")
+
+    lm._create = fake_create
+    await lm.complete(prompt)
+    return captured
+
+
+async def _openai_call(lm, prompt):
+    """Run one stubbed ``complete`` and return the captured request body."""
+    captured = {}
+
+    async def fake_post(url, body, headers):
+        captured.update(body)
+        return {"choices": [{"message": {"content": "x"}}]}
+
+    lm._post = fake_post
+    await lm.complete(prompt)
+    return captured
+
+
+async def test_anthropic_configured_defaults_apply_when_prompt_is_silent():
+    lm = AnthropicLanguageModel(model="m", api_key="k", max_tokens=512, temperature=0.3)
+    sent = await _anthropic_call(lm, Prompt(user="hi"))  # no per-call sampling knobs
+    assert sent["max_tokens"] == 512 and sent["temperature"] == 0.3  # LLMSettings-level defaults win
+
+
+async def test_openai_configured_defaults_apply_when_prompt_is_silent():
+    lm = OpenAILanguageModel(model="m", api_key="k", max_tokens=512, temperature=0.3)
+    sent = await _openai_call(lm, Prompt(user="hi"))
+    assert sent["max_tokens"] == 512 and sent["temperature"] == 0.3
+
+
+async def test_prompt_values_override_configured_defaults():
+    lm = AnthropicLanguageModel(model="m", api_key="k", max_tokens=512, temperature=0.3)
+    sent = await _anthropic_call(lm, Prompt(user="hi", max_tokens=42, temperature=0.9))
+    assert sent["max_tokens"] == 42 and sent["temperature"] == 0.9  # per-call override wins
+
+
+async def test_explicit_zero_temperature_beats_configured_default():
+    # None — not falsiness — is the "unset" sentinel: an explicit 0.0 must win over a configured 0.7.
+    lm = OpenAILanguageModel(model="m", api_key="k", temperature=0.7)
+    sent = await _openai_call(lm, Prompt(user="hi", temperature=0.0))
+    assert sent["temperature"] == 0.0
+
+
+async def test_library_fallback_when_nothing_is_configured():
+    sent = await _openai_call(OpenAILanguageModel(model="m", api_key="k"), Prompt(user="hi"))
+    assert sent["max_tokens"] == 1024 and sent["temperature"] == 0.0  # the level-3 fallback
+
+
+def test_create_threads_sampling_defaults():
+    lm = LanguageModel.create(LLMSettings(api_key="k", max_tokens=2048, temperature=0.5))
+    assert lm.default_max_tokens == 2048 and lm.default_temperature == 0.5
+
+
+# ---------------- the Anthropic retry wiring (delegated to the SDK) ----------------
+
+
+def test_anthropic_sdk_options_wire_retries_and_timeout():
+    opts = AnthropicLanguageModel(model="m", api_key="k", timeout=5.0)._sdk_options()
+    assert opts["max_retries"] == AnthropicLanguageModel.MAX_RETRIES  # survives batch-run rate-limiting
+    assert opts["timeout"] == 5.0 and opts["api_key"] == "k"
+    assert "base_url" not in opts  # only set when configured
+
+
+def test_anthropic_sdk_options_include_base_url_when_set():
+    opts = AnthropicLanguageModel(model="m", api_key="k", base_url="https://proxy")._sdk_options()
+    assert opts["base_url"] == "https://proxy"
+
+
 async def _no_sleep(*_a, **_k):
     pass
 

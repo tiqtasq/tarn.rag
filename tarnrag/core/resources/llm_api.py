@@ -18,12 +18,37 @@ from typing import Any
 from tarnrag.core.resources.llm import Completion, LanguageModel, Prompt
 
 
+def _sampling(prompt: Prompt, default_max_tokens: int, default_temperature: float) -> tuple[int, float]:
+    """The effective ``(max_tokens, temperature)`` for one request — a **three-level fallback**, first
+    set wins:
+
+    1. the ``Prompt``'s explicit value — for a caller that truly needs a per-call override;
+    2. the backend's configured default — ``LLMSettings.max_tokens`` / ``.temperature``
+       (``LLM__MAX_TOKENS`` / ``LLM__TEMPERATURE``), threaded in by ``LanguageModel.create``;
+    3. the library fallback (1024 / 0.0) — the ``LLMSettings`` field defaults (mirrored by the backend
+       constructor defaults for direct construction).
+
+    ``None`` — not falsiness — is the "unset" sentinel, so an explicit ``temperature=0.0`` still wins over
+    a configured 0.7. Shared by both backends so neither drifts back to pinning the ``Prompt`` value
+    unconditionally (the bug where the configured sampling settings were silently ignored)."""
+    return (
+        prompt.max_tokens if prompt.max_tokens is not None else default_max_tokens,
+        prompt.temperature if prompt.temperature is not None else default_temperature,
+    )
+
+
 class AnthropicLanguageModel(LanguageModel):
     """Claude via the Anthropic Messages API. Maps a ``Prompt`` (system + user + knobs) to one
-    ``messages.create`` call and concatenates the text blocks of the reply."""
+    ``messages.create`` call and concatenates the text blocks of the reply. Transient-failure retries are
+    delegated to the SDK (``max_retries`` — exponential backoff, ``Retry-After`` honored), configured in
+    ``_sdk_options`` for parity with the OpenAI backend's ``_post_retrying``."""
 
     PROVIDER = "anthropic"
     API_KEY_ENV = "ANTHROPIC_API_KEY"
+    # SDK-managed retry attempts (429 / 5xx / connection errors, Retry-After honored) — the SDK's default
+    # of 2 is too few to ride out sustained rate-limiting on a batch/eval run; parity with
+    # OpenAILanguageModel.RETRY_ATTEMPTS.
+    MAX_RETRIES = 8
 
     def __init__(
         self,
@@ -48,10 +73,11 @@ class AnthropicLanguageModel(LanguageModel):
         return f"{self.PROVIDER}:{self.model}"
 
     async def complete(self, prompt: Prompt) -> Completion:
+        max_tokens, temperature = _sampling(prompt, self.default_max_tokens, self.default_temperature)
         kwargs: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": prompt.max_tokens or self.default_max_tokens,
-            "temperature": prompt.temperature,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
             "messages": [{"role": "user", "content": prompt.user}],
         }
         if prompt.system is not None:
@@ -78,11 +104,22 @@ class AnthropicLanguageModel(LanguageModel):
                     "AnthropicLanguageModel needs the anthropic SDK — install the 'generation' extra "
                     "(pip install '.[generation]')"
                 ) from e
-            opts: dict[str, Any] = {"api_key": self._key(), "timeout": self.timeout}
-            if self._base_url:
-                opts["base_url"] = self._base_url
-            self._client = anthropic.AsyncAnthropic(**opts)
+            self._client = anthropic.AsyncAnthropic(**self._sdk_options())
         return self._client
+
+    def _sdk_options(self) -> dict[str, Any]:
+        """The ``AsyncAnthropic`` constructor options — extracted so the retry/timeout wiring is testable
+        without the SDK installed. ``max_retries`` delegates transient-failure handling to the SDK
+        (exponential backoff, ``Retry-After`` honored) — the Anthropic counterpart of the OpenAI backend's
+        ``_post_retrying``."""
+        opts: dict[str, Any] = {
+            "api_key": self._key(),
+            "timeout": self.timeout,
+            "max_retries": self.MAX_RETRIES,
+        }
+        if self._base_url:
+            opts["base_url"] = self._base_url
+        return opts
 
     def _key(self) -> str:
         key = self._api_key or os.environ.get(self.API_KEY_ENV, "")
@@ -156,11 +193,12 @@ class OpenAILanguageModel(LanguageModel):
         if prompt.system is not None:
             messages.append({"role": "system", "content": prompt.system})
         messages.append({"role": "user", "content": prompt.user})
+        max_tokens, temperature = _sampling(prompt, self.default_max_tokens, self.default_temperature)
         body = {
             "model": self.model,
             "messages": messages,
-            "max_tokens": prompt.max_tokens or self.default_max_tokens,
-            "temperature": prompt.temperature,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         }
         data = await self._post_retrying(f"{self._base_url}/chat/completions", body, self._headers())
         choice = (data.get("choices") or [{}])[0]
