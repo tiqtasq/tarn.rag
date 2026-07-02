@@ -227,6 +227,18 @@ async def test_ingest_paths_uses_supplied_source_ids(repo, tmp_path):
     assert by_id == {"id-a": str(a), "id-b": str(b)}
 
 
+async def test_ingest_paths_persists_the_source_kind(repo, tmp_path):
+    """The extractor-confirmed kind lands in the document row. It used to fall back to ``'document'``
+    for every ingest — the engine stamped ``source_type`` while the repository read ``source_kind``."""
+    f = tmp_path / "spec.txt"
+    f.write_text("Hello world. " * 10, encoding="utf-8")
+    engine, queue = _wire(repo)
+    await engine.ingest_paths([str(f)], source_ids=["spec"])
+    await queue.run()
+    doc = await repo.get_document("spec")
+    assert doc.metadata["source_kind"] == "txt"  # the real kind, not the 'document' default
+
+
 async def test_ingest_streams_uses_supplied_source_ids(repo, tmp_path):
     enq = _RecordingEnqueuer()
     stages = _stages()

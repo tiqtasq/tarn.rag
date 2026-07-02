@@ -91,7 +91,16 @@ class LoadAndParseStage(PipelineStage):
         )
         yield PipelineItem(
             content=document.text,
-            metadata={**md, "doc_id": md.get("doc_id") or document.source_id, "loaded": True},
+            metadata={
+                **md,
+                "doc_id": md.get("doc_id") or document.source_id,
+                "loaded": True,
+                # The extractor-confirmed kind, under the key the repository persists
+                # (``_DOC_PROVENANCE``'s ``source_kind`` column). Distinct from ``source_type``, the
+                # caller's INPUT hint this stage routes on — stamping the output key here is what makes
+                # ``documents.source_kind`` real (it used to silently fall back to ``"document"``).
+                "source_kind": document.source_kind,
+            },
             document=document,
             provenance=item.provenance,
         )
