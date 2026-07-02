@@ -27,12 +27,15 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class Prompt:
     """A single-turn completion request: an optional ``system`` instruction + the ``user`` text, plus the
-    sampling knobs. Kept minimal and provider-agnostic; each backend maps it to its own request shape."""
+    sampling knobs. ``max_tokens`` / ``temperature`` default to ``None`` — "no per-call preference" — so
+    the backend falls back to its configured ``LLMSettings`` defaults (the three-level fallback lives in
+    ``llm_api._sampling``). Kept minimal and provider-agnostic; each backend maps it to its own request
+    shape."""
 
     user: str
     system: str | None = None
-    max_tokens: int = 1024
-    temperature: float = 0.0
+    max_tokens: int | None = None  # None → the configured LLMSettings default (see llm_api._sampling)
+    temperature: float | None = None  # None → the configured LLMSettings default
 
 
 @dataclass(frozen=True)
