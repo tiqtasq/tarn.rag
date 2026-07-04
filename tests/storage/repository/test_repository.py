@@ -450,8 +450,32 @@ async def test_hydrate_returns_registered_methods_batched(repo):
     rec1, rec2 = await repo.hydrate(["not-a-chunk", c1, c2])  # unknown ids are skipped, order kept
     assert rec1.methods == [("M1", "v1"), ("M2", "v2")]  # ordered by method_id
     assert rec2.methods == [("M2", "v2")]
-    async with repo.engine.connect() as conn:  # the helper's empty early-out (hydrate returns before it)
-        assert await repo._methods_by_chunk(conn, []) == {}
+    async with repo.engine.connect() as conn:  # the helpers' empty early-outs (hydrate returns before them)
+        assert await repo.reads.methods_by_chunk(conn, []) == {}
+        assert await repo.reads.chunk_provenance(conn, []) == {}
+        assert await repo.reads.child_rows_by_chunk(conn, repo.table_cells, []) == {}
+
+
+async def test_hydrate_carries_table_and_annotations(repo):
+    """``hydrate`` (the retrieval read path) rebuilds a chunk's table cells AND annotations onto its
+    provenance — the same assembly ``get_chunk`` uses, through the hydrate-side ``chunk_provenance``."""
+    chunk = Chunk(
+        parent_doc_id="",
+        content="| Bolt | Torque |",
+        chunk_index=0,
+        provenance=ChunkProvenance(
+            content_hash=_h("t"),
+            table=Table(n_rows=1, n_cols=1, cells=[TableCell(id="c0", row=0, col=0, text="Bolt")]),
+            annotations=[Annotation(producer="acronyms", type="entity", value={"text": "M6"})],
+        ),
+        metadata={"source_id": "s1"},
+    )
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [rec] = await repo.hydrate([cid])
+    assert rec.provenance.table is not None and rec.provenance.table.cell_at(0, 0).text == "Bolt"
+    assert [a.type for a in rec.provenance.annotations] == ["entity"]
 
 
 async def test_dense_knn_filter_by_license_class(repo):
