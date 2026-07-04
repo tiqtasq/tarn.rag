@@ -151,7 +151,7 @@ class PostgresRepository(DocumentRepository):
         """
         if not chunk_ids:
             return []
-        c, d, m = self.chunks, self.documents, self.method_chunks
+        c, d = self.chunks, self.documents
         stmt = (
             select(
                 c.c.chunk_id, c.c.text, c.c.document_id, d.c.source_kind,
@@ -164,15 +164,10 @@ class PostgresRepository(DocumentRepository):
         async with self.engine.connect() as conn:
             by_id = {r[0]: r for r in (await conn.execute(stmt)).all()}
             prov = await self._chunk_provenance(conn, chunk_ids)
-            records: list[ChunkRecord] = []
-            for cid in chunk_ids:
-                r = by_id.get(cid)
-                if r is None:
-                    continue
-                methods = (
-                    await conn.execute(
-                        select(m.c.method_id, m.c.method_version).where(m.c.chunk_id == cid)
-                    )
-                ).all()
-                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
+            methods = await self._methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
+            records = [
+                self._create_chunk_record(r, methods.get(cid, []), prov.get(cid))
+                for cid in chunk_ids
+                if (r := by_id.get(cid)) is not None
+            ]
         return records

@@ -63,7 +63,6 @@ class EmbedStage(PipelineStage):
                     vector=list(vec),
                     model=self.config.embedding.model,
                     dimension=len(vec),
-                    metadata={"source_id": it.metadata.get("source_id")},
                 )
 
     @staticmethod

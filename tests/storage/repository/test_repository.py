@@ -409,6 +409,51 @@ async def test_dense_knn_filter_restricts_to_method_scope(repo):
     assert await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=())) == []
 
 
+async def test_method_bundle_registers_replaces_and_clears(repo):
+    """``register_method_bundle`` is the §8 bundle writer the scope-filter path was missing: it writes
+    the bundle, REPLACES it on re-registration (idempotent), clears on an empty list — and a scoped
+    dense search honors it end to end."""
+    _, (c1, c2, c3) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("one", 0, 3), _chunk("two", 1, 3), _chunk("three", 2, 3)],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=c, vector=v, model="m", dimension=3)
+        for c, v in ((c1, [1.0, 0.0, 0.0]), (c2, [0.9, 0.1, 0.0]), (c3, [0.8, 0.2, 0.0]))
+    ])
+    await repo.register_method_bundle("M1", "v1", [c1, c2])
+    assert await repo.method_bundle("M1", "v1") == sorted([c1, c2])
+    scoped = await repo.dense_knn(
+        [1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=(MethodRef("M1", "v1"),))
+    )
+    assert {c.chunk_id for c in scoped} == {c1, c2}  # the registered bundle, through the filter
+
+    await repo.register_method_bundle("M1", "v1", [c3])  # re-register REPLACES the bundle
+    assert await repo.method_bundle("M1", "v1") == [c3]
+    await repo.register_method_bundle("M1", "v1", [])  # empty clears it
+    assert await repo.method_bundle("M1", "v1") == []
+    assert (
+        await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=(MethodRef("M1"),)))
+        == []
+    )
+
+
+async def test_hydrate_returns_registered_methods_batched(repo):
+    """``hydrate`` carries each chunk's method refs (now fetched in ONE query, not one per chunk),
+    ordered by method id for determinism."""
+    _, (c1, c2) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("one", 0, 2), _chunk("two", 1, 2)],
+    )
+    await repo.register_method_bundle("M2", "v2", [c1, c2])
+    await repo.register_method_bundle("M1", "v1", [c1])
+    rec1, rec2 = await repo.hydrate(["not-a-chunk", c1, c2])  # unknown ids are skipped, order kept
+    assert rec1.methods == [("M1", "v1"), ("M2", "v2")]  # ordered by method_id
+    assert rec2.methods == [("M2", "v2")]
+    async with repo.engine.connect() as conn:  # the helper's empty early-out (hydrate returns before it)
+        assert await repo._methods_by_chunk(conn, []) == {}
+
+
 async def test_dense_knn_filter_by_license_class(repo):
     """The permitted-chunk filter restricts by license_class (the ModusQ §5.6 policy axis)."""
     _, (a, b) = await repo.store_document_with_chunks(
