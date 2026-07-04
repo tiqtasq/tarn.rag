@@ -7,7 +7,8 @@ component depends only on its slice — env vars use the ``GROUP__FIELD`` conven
 ``EMBEDDING__MODEL``). The few cross-cutting knobs (``MODE``, ``EMBEDDING_DIMENSION``,
 ``UPLOAD_DIR``) stay top-level.
 
-Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``Settings``).
+The default pipeline compositions live here too (``_fill_default_components`` fills
+``Settings.components``); the engines' ``build_*`` methods only read them.
 """
 
 from __future__ import annotations

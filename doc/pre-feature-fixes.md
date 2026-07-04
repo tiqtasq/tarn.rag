@@ -7,6 +7,12 @@ latent/dead surface that invites cargo-culting, then code↔doc inconsistencies,
 Each item is small enough to be one PR (or part of one themed PR); file:line references are as of
 this review.
 
+**Status (2026-07-05):** executed as a PR series — #102 (A1, A4), #103 (A2, A6, A7, A8),
+#104 (A9), #105 (A3 + queue wording), #106 (B1 → writer added, A5, B3), #107 (D2),
+plus the docs/packaging PR carrying C1–C5 and this status block. Open: B4, B5 (graduated to the
+strategic roadmap), B2/D1/D3 (decisions deferred), B6 (real claim-side batching → roadmap P9),
+and B7 below.
+
 ---
 
 ## A. Real bugs / correctness (fix first)
@@ -131,6 +137,15 @@ the roadmap) or trim the unused annotation payload to what routing needs.
 now misdescribes the InMemory queue as well.
 **Fix (min):** correct the comment and document the asymmetry. **Fix (real):** claim-side batching
 in the pgQueuer adapter (group claims by stage within a wait window) — also listed in the roadmap.
+
+### B7. Align the Postgres `embeddings` schema with the 1:1 chunk-keyed model *(added 2026-07-04)*
+The SQLite side is the considered design (`vec_chunks(chunk_id PK, vector)`); the Postgres table
+predates the `index_meta` fingerprint gate and kept a surrogate `id` PK plus per-row
+`model`/`dimension` copies — redundant (`index_meta` + the `Vector(dim)` type already carry them)
+and weaker (`chunk_id` is only indexed, not UNIQUE, though the system semantics are strictly 1:1).
+Target: `embeddings(chunk_id PRIMARY KEY, vector)`, and the `Embedding` DTO slims accordingly.
+**Blocked on D1** (it's a schema change to a backend that may hold data — needs the migration
+stance first).
 
 ---
 

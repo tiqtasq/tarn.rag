@@ -26,10 +26,12 @@ The base install is the lightweight SQLite/embedded path. Backends and features 
 | `embeddings-api` | hosted embedding APIs (OpenAI / Voyage / Gemini) |
 | `parsers` | PDF/HTML document loaders (`pypdf`, `pdfplumber`, `beautifulsoup4`) |
 | `docling` | high-fidelity layout-aware PDF extraction (heavy) |
-| `generation` | the LLM backend for the generation layer (`anthropic`) |
+| `generation` | the Anthropic LLM backend for the generation layer (`anthropic`) |
+| `openai` | any OpenAI-compatible `/chat/completions` LLM backend (`httpx`) |
 | `console` | the interactive `tarnrag` console UI (`rich`) |
+| `benchmarks` | the HuggingFace loaders for the QA benchmarks (`datasets`) |
 | `postgres` / `queue` | the distributed backends (`asyncpg` + `pgvector` / `pgqueuer`) |
-| `all` | the common embedded runtime (`onnx`, `parsers`, `embeddings-api`, `generation`, `console`) |
+| `all` | the common embedded runtime (`onnx`, `parsers`, `embeddings-api`, `generation`, `openai`, `console`) |
 
 ```bash
 pip install "tarn-rag[onnx,parsers]"     # local embedder + PDF/HTML extraction

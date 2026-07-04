@@ -89,6 +89,18 @@ Add a `reindex` operation (read stored documents → re-chunk/re-embed → new s
 bge/e5/API embedders — and shipping upgrades — is one command. Then actually sweep 2–3 modern
 small embedders vs gte-small on TAT-QA + pool; ship the best offline default.
 
+**P8b. Generic branching (`Router`) component family** *(added 2026-07-05, from review discussion)*
+The N+2 pattern — a selector spec + `routes: dict[value → component spec]` + a `default` spec —
+already exists twice, specialized (`RoutingRetrievalPipeline`, `LoadAndParse`'s extractor routes).
+Generalize it as: a small shared base in `core/components` owning the config shape, child
+construction, and lookup; **thin per-seam subclasses** (`routing_chunker` first) so each stays a
+typed member of the family it branches over (one generic duck-typed class would erase the typed
+seams and can't bridge sync/async); seam-specific selectors, starting with a deterministic
+`metadata_key` selector. Scope is **component-level branching inside one stage** — the ingestion
+DAG stays linear (no conditional edges, no fan-in). Route decisions are recorded (annotation /
+trace) like the two existing instances. First consumer: `routing_chunker` (different chunker
+configs per document kind); retrofit of the two precedents only if it fits without contortion.
+
 ### Tier 3: systems performance
 
 **P9. Distributed batching parity** — claim-side batching in the pgQueuer adapter (group claimed
