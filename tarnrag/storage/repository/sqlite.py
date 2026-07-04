@@ -282,18 +282,12 @@ class SqliteRepository(DocumentRepository):
             ).fetchall()
             by_id = {r[0]: r for r in rows}
             prov = await self._chunk_provenance(conn, chunk_ids)
-            records: list[ChunkRecord] = []
-            for cid in chunk_ids:
-                r = by_id.get(cid)
-                if r is None:
-                    continue
-                methods = (
-                    await conn.exec_driver_sql(
-                        "SELECT method_id, method_version FROM method_chunks WHERE chunk_id = ?",
-                        (cid,),
-                    )
-                ).fetchall()
-                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
+            methods = await self._methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
+            records = [
+                self._create_chunk_record(r, methods.get(cid, []), prov.get(cid))
+                for cid in chunk_ids
+                if (r := by_id.get(cid)) is not None
+            ]
         return records
 
     # ----- §8 search-index hooks (vec0 + FTS5 live outside the FK graph) -----

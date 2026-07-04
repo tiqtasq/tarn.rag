@@ -411,6 +411,44 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                 await conn.execute(insert(self.embeddings), rows)
         return ids
 
+    async def register_method_bundle(
+        self, method_id: str, method_version: str, chunk_ids: list[str]
+    ) -> None:
+        """Register the §8 method bundle — the resolved set of chunks for ``(method_id,
+        method_version)``. REPLACES any existing bundle for that pair in one transaction (idempotent
+        re-registration); an empty ``chunk_ids`` just clears it. A retrieval scoped to a matching
+        ``MethodRef`` then returns only these chunks (the ``method_scope`` pre-filter). The chunks must
+        already be stored (FK). This is the writer the method-scope query path was missing."""
+        mc = self.method_chunks.c
+        async with self.engine.begin() as conn:
+            await conn.execute(
+                self.method_chunks.delete().where(
+                    (mc.method_id == method_id) & (mc.method_version == method_version)
+                )
+            )
+            if chunk_ids:
+                await conn.execute(
+                    insert(self.method_chunks),
+                    [
+                        {"method_id": method_id, "method_version": method_version, "chunk_id": cid}
+                        for cid in chunk_ids
+                    ],
+                )
+
+    async def method_bundle(self, method_id: str, method_version: str) -> list[str]:
+        """The chunk ids registered for ``(method_id, method_version)`` (empty if unregistered) —
+        the read-back for :meth:`register_method_bundle`, sorted for determinism."""
+        mc = self.method_chunks.c
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(mc.chunk_id)
+                    .where((mc.method_id == method_id) & (mc.method_version == method_version))
+                    .order_by(mc.chunk_id)
+                )
+            ).all()
+        return [r[0] for r in rows]
+
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
         # No-op BY DESIGN (not unfinished): §8 chunks carry no free-form metadata column. Enrichment
         # now annotates the document (the Enrich stage) and rides into chunks via ChunkProvenance;
@@ -856,6 +894,26 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         for chunk in chunks:
             if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
                 chunk.provenance.annotations = [cp.row_to_annotation(r) for r in rows]
+
+    async def _methods_by_chunk(
+        self, conn: AsyncConnection, chunk_ids: list[str]
+    ) -> dict[str, list[tuple[str, str]]]:
+        """``(method_id, method_version)`` pairs per chunk id, in ONE query (ordered for determinism) —
+        the batched method fetch behind both dialects' ``hydrate`` (formerly a per-chunk N+1)."""
+        if not chunk_ids:
+            return {}
+        mc = self.method_chunks.c
+        rows = (
+            await conn.execute(
+                select(mc.chunk_id, mc.method_id, mc.method_version)
+                .where(mc.chunk_id.in_(chunk_ids))
+                .order_by(mc.method_id, mc.method_version)
+            )
+        ).all()
+        grouped: dict[str, list[tuple[str, str]]] = {}
+        for cid, mid, ver in rows:
+            grouped.setdefault(cid, []).append((mid, ver))
+        return grouped
 
     async def _chunk_provenance(
         self, conn: AsyncConnection, chunk_ids: list[str]

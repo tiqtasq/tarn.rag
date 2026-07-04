@@ -122,9 +122,10 @@ class Chunk(BaseModel):
 class Embedding(BaseModel):
     """
     A chunk's dense vector — at-rest ONLY (terminal stage output; never flows). A write-side DTO:
-    nothing reconstructs an ``Embedding`` from storage. Persisted to the ``embeddings`` table on
-    Postgres; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
-    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` / ``metadata`` are dropped there.
+    nothing reconstructs an ``Embedding`` from storage. On Postgres all fields are persisted to the
+    ``embeddings`` table; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
+    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` are dropped there. No metadata bag —
+    no backend had a column for one, so the field was dead weight and was removed.
     """
 
     id: str | None = None
@@ -132,7 +133,6 @@ class Embedding(BaseModel):
     vector: list[float]
     model: str
     dimension: int
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
