@@ -124,8 +124,31 @@ class Embedding(BaseModel):
     A chunk's dense vector — at-rest ONLY (terminal stage output; never flows). A write-side DTO:
     nothing reconstructs an ``Embedding`` from storage. On Postgres all fields are persisted to the
     ``embeddings`` table; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
-    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` are dropped there. No metadata bag —
-    no backend had a column for one, so the field was dead weight and was removed.
+    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` are dropped there. 
+
+    The embedding vectors themselves are stored in both backends. It is the terminal output of the 
+    ingestion pipeline:
+
+    EmbedStage ──yields──▶  Embedding(chunk_id, vector, model, dimension)     ← the DTO
+                                  │
+                                  ▼  EmbeddingResultSink → repo.store_embeddings([...])
+                  ┌───────────────┴────────────────┐
+              Postgres                          SQLite
+    INSERT INTO embeddings            INSERT INTO vec_chunks(chunk_id, embedding)
+    (id, chunk_id, vector ←pgvector,  (the sqlite-vec virtual table — exactly two
+     model, dimension)                 columns; id/model/dimension are dropped)
+
+    - Postgres: PostgresRepository uses the base store_embeddings, which writes every DTO field to the embeddings table
+      (vector as a pgvector column, plus id, chunk_id, model, dimension).
+    - SQLite: SqliteRepository overrides store_embeddings and writes to the sqlite-vec virtual table vec_chunks instead 
+      (the embeddings table exists in the schema but stays empty there). Virtual tables have a fixed shape:
+      (chunk_id, embedding float[dim]), so only those two fields land; id/model/dimension are dropped on this 
+      backend.
+
+    Why the DTO is "write-only": retrieval never reads Embedding objects back. Dense search (dense_knn) queries the vector 
+    index directly — sqlite-vec's MATCH / pgvector's cosine operator — and gets back (chunk_id, distance) pairs; the text 
+    and provenance are then hydrated from the chunks table. No code path ever materializes a stored vector back into an 
+    Embedding.    
     """
 
     id: str | None = None
