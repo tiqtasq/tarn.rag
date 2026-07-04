@@ -119,7 +119,7 @@ def test_stage_built_from_dict_spec_via_component_factory():
     assert isinstance(chunk, ChunkStage)
     assert (chunk._chunker.config.chunk_size, chunk._chunker.config.overlap) == (16, 4)  # child built by the factory
     assert chunk.tag == "Chunk"  # the type tag (the sink/metrics key)
-    assert chunk.name.startswith("Chunk-")  # unnamed instance -> counter-suffixed unique id
+    assert chunk.name == "Chunk"  # unnamed ⇒ the bare tag; PipelineDAG adds the positional suffix
     assert chunk.to_json()["class_name"] == "Chunk"  # round-trips back to a spec
 
 

@@ -28,23 +28,22 @@ class PipelineStage(Component):
     class Config(Component.Config):
         """Base stage config. Concrete stages pin ``class_name`` and add their own fields."""
 
-    # Global monotonic counter across all stage instances, used to disambiguate auto-derived
-    # names so two unnamed instances of one stage class don't clash.
-    _instance_counter: int = 0
-
     def __init__(self, config: PipelineStage.Config) -> None:
         super().__init__(config)  # Component.__init__ stores self.config
-        # `name` is the per-instance identity (DAG node / job.stage_name) and must be unique: an
-        # explicit `config.name` wins, else the class_name tag gets the global counter appended so
-        # several unnamed instances of one stage class can coexist. Sinks and metrics key off
-        # `tag` (the type), not on this.
+        # `name` is the stage's identity within a pipeline (DAG node / job.stage_name): an explicit
+        # `config.name` wins; otherwise the class tag, which ``PipelineDAG`` suffixes POSITIONALLY
+        # (``{tag}-{index}``) when the stage joins a pipeline. Names must be derivable from the
+        # pipeline definition alone — a queued job's ``stage_name`` is resolved by the CONSUMER's DAG,
+        # in distributed mode a different process, so any process-local state in the name (a global
+        # instance counter once lived here) breaks routing whenever the two processes' construction
+        # histories differ. Sinks and metrics key off ``tag`` (the type), not on this.
         class_tag = getattr(config, "class_name", None) or type(self).__name__
-        self._name: str = config.name or f"{class_tag}-{PipelineStage._instance_counter}"
-        PipelineStage._instance_counter += 1
+        self._name: str = config.name or class_tag
 
     @property
     def name(self) -> str:
-        """The stage's read-only, unique identity within a pipeline (DAG node / job target)."""
+        """The stage's identity within a pipeline (DAG node / job target) — explicit ``config.name``,
+        else the class tag until ``PipelineDAG`` assigns the positional default (``{tag}-{index}``)."""
         return self._name
 
     @property

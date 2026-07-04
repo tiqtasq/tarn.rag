@@ -17,9 +17,10 @@ from tarnrag.ingestion.engine.jobs import Batch, IngestionJob
 
 ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the consumer forms homogeneous Batches
 
-# A handler receives a Batch — a homogeneous unit (all jobs share one stage_name). Today
-# every dispatch is a single job; batch dispatch must group claims by stage_name (Batch
-# enforces it). Forming the Batch is the consumer's job; the worker just runs it.
+# A handler receives a Batch — a homogeneous unit (all jobs share one stage_name; the Batch
+# constructor enforces it). Forming the Batch is the consumer's job; the worker just runs it.
+# The InMemory queue groups each wave into real multi-job batches per stage; the pgQueuer
+# adapter still dispatches single-job batches (claim-side batching is a pending optimization).
 JobHandler = Callable[[Batch], Awaitable[None]]
 
 
@@ -49,8 +50,9 @@ class JobConsumer(ABC):
 
 class InMemoryJobQueue(JobEnqueuer, JobConsumer):
     """
-    In-process job queue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
-    at-least-once + requeue-on-raise semantics so tests reflect reality.
+    The **production embedded-mode queue** (and the test double) — in-process, no Postgres, no
+    pgQueuer. Emulates pgQueuer's at-least-once + requeue-on-raise semantics so embedded mode and
+    the tests behave like the distributed queue.
 
     ``requeue_on_error=True`` (default) re-queues a failing job up to ``max_attempts``
     (recovery tests); ``False`` re-raises immediately (sharp unit failures). pgQueuer
