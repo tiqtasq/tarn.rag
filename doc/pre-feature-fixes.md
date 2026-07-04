@@ -74,6 +74,15 @@ split arbitrarily between the loops and each `run()` returns when *it* sees an e
 files/directories this stalls the loop (streams already use `asyncio.to_thread` for the copy).
 **Fix:** `await asyncio.to_thread(...)` the hash (or hash during the staged copy).
 
+### A9. `documents.source_kind` was never persisted (found post-review, fixed with A2's follow-up)
+The ingest path stamps ``metadata["source_type"]`` (the caller's input hint), but the repository's
+provenance map reads ``metadata.get("source_kind")`` — a key mismatch, so the ``source_kind`` column
+always held its ``"document"`` default. The D3 stringly-typed-metadata hazard, materialized.
+**Fixed:** ``LoadAndParseStage`` stamps the extractor-confirmed ``document.source_kind`` into the
+outgoing metadata (the persisted key); ``TarnRag.ingest`` uses the now-real stored kind for a
+cross-call guard — replacing a document whose stored kind differs from the incoming file's
+(``a.pdf`` then ``a.md``) is reported as a WARNING instead of passing silently.
+
 ---
 
 ## B. Latent / dead surface — decide: implement or remove

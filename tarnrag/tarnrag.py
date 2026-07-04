@@ -29,6 +29,7 @@ from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.types import GenerationResult
+from tarnrag.ingestion.components.extraction.load_parse import infer_source_kind
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
@@ -100,8 +101,9 @@ class TarnRag:
         """Ingest (or re-ingest) the given files / directories — a directory contributes the files in it.
         The document id is each file's stem, so re-ingesting a file upserts in place (under
         ``ID_POLICY='caller'``). The value is the resulting per-document statuses; the report flags paths
-        that matched nothing, files skipped because their stem (= id) collides with another file's, and
-        documents that failed to ingest — nothing is dropped silently."""
+        that matched nothing, files skipped because their stem (= id) collides with another file's,
+        replacements whose source kind differs from the stored document's (probably a different file
+        sharing the stem), and documents that failed to ingest — nothing is dropped silently."""
         files, missing = self._expand(paths)
         issues = [Issue("not found", Severity.WARNING, subject=raw) for raw in missing]
         if self.settings.ID_POLICY == "caller":
@@ -116,6 +118,10 @@ class TarnRag:
                 )
                 for skipped, kept in collisions
             ]
+            # Cross-call guard: an id that already exists is a legitimate re-ingest (upsert) — but if the
+            # STORED source kind differs from the incoming file's, this is probably a different file that
+            # happens to share the stem (a.pdf then a.md). The replace proceeds; the report says so.
+            issues += await self._kind_change_warnings(files)
         if not files:
             return Outcome([], Report(tuple(issues)))
         ingestion = await self._ingestion_engine()
@@ -190,6 +196,30 @@ class TarnRag:
                 "(the provider / model are in the config)"
             )
         return LanguageModel.create(self.settings.llm)
+
+    async def _kind_change_warnings(self, files: list[Path]) -> list[Issue]:
+        """A WARNING per file that is about to replace a stored document of a **different source kind**
+        (the ``a.pdf`` then ``a.md`` case — same stem, so same id, but almost certainly a different
+        document). A same-kind replace is the normal re-ingest contract and stays silent; a stored kind of
+        ``""``/``"document"`` is the pre-fix unknown default, so it can't be compared and stays silent too.
+        The replace itself proceeds either way — this is the report, not a refusal."""
+        issues: list[Issue] = []
+        for path in files:
+            existing = await self._repository.get_document(path.stem)
+            if existing is None:
+                continue  # a fresh id — nothing is replaced
+            stored = (existing.metadata or {}).get("source_kind") or ""
+            incoming = infer_source_kind(str(path))
+            if stored not in ("", "document") and incoming and stored != incoming:
+                issues.append(
+                    Issue(
+                        f"replacing document {path.stem!r}, previously ingested from a {stored!r} "
+                        f"source, with this {incoming!r} file",
+                        Severity.WARNING,
+                        subject=str(path),
+                    )
+                )
+        return issues
 
     @staticmethod
     def _split_stem_collisions(files: list[Path]) -> tuple[list[Path], list[tuple[Path, Path]]]:

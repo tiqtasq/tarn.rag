@@ -129,6 +129,19 @@ async def test_ingest_missing_paths_and_empty_store_queries(tmp_path):
         assert (await tarn.delete("nope")).value is False
 
 
+def _caller_hash_settings(tmp_path: Path) -> Settings:
+    """Embedded settings with ``ID_POLICY='caller'`` (stems are document ids) + the hash embedder, so the
+    ingest-behavior tests actually ingest without a model."""
+    return Settings(
+        _env_file=None,
+        MODE="embedded",
+        EMBEDDING_DIMENSION=8,
+        ID_POLICY="caller",
+        database=DatabaseSettings(document_url=f"sqlite:///{tmp_path}/store.db"),
+        embedding=EmbeddingSettings(provider="hash"),
+    )
+
+
 async def test_ingest_reports_stem_collisions_instead_of_overwriting(tmp_path):
     """Under ``ID_POLICY='caller'`` the document id is the file stem, so ``a.md`` + ``a.txt`` share the id
     ``'a'`` — the second must not silently upsert over the first: it is skipped with an ERROR issue naming
@@ -137,14 +150,7 @@ async def test_ingest_reports_stem_collisions_instead_of_overwriting(tmp_path):
     src.mkdir()
     (src / "a.md").write_text("alpha as markdown")
     (src / "a.txt").write_text("alpha as text")
-    settings = Settings(
-        _env_file=None,
-        MODE="embedded",
-        EMBEDDING_DIMENSION=8,
-        ID_POLICY="caller",
-        database=DatabaseSettings(document_url=f"sqlite:///{tmp_path}/collide.db"),
-        embedding=EmbeddingSettings(provider="hash"),
-    )
+    settings = _caller_hash_settings(tmp_path)
     async with TarnRag(settings) as tarn:
         outcome = await tarn.ingest([str(src)])
         assert [s.document_id for s in outcome.value] == ["a"]  # the first file per stem is kept
@@ -153,6 +159,48 @@ async def test_ingest_reports_stem_collisions_instead_of_overwriting(tmp_path):
         assert issue.subject == str(src / "a.txt")  # the skipped file
         assert "'a'" in issue.message and "a.md" in issue.message  # names the id and the kept file
         assert len((await tarn.docs()).value) == 1  # nothing was overwritten
+
+
+async def test_ingest_warns_when_replacing_a_document_of_a_different_kind(tmp_path):
+    """Cross-call stem reuse: ``a.txt`` ingested earlier, then ``a.md`` from elsewhere — same stem = same
+    id, so the replace proceeds (the upsert contract), but the **kind change** is WARNING-reported
+    (probably a different document, not a re-ingest). A same-kind re-ingest stays silent."""
+    run1, run2 = tmp_path / "one", tmp_path / "two"
+    run1.mkdir()
+    run2.mkdir()
+    (run1 / "a.txt").write_text("alpha as text")
+    (run2 / "a.md").write_text("alpha as markdown")
+    async with TarnRag(_caller_hash_settings(tmp_path)) as tarn:
+        assert (await tarn.ingest([str(run1)])).report.ok  # fresh id — nothing replaced, no issues
+        assert (await tarn.ingest([str(run1)])).report.ok  # same-kind re-ingest — the normal upsert, silent
+
+        outcome = await tarn.ingest([str(run2)])  # a.md replaces the txt-sourced document 'a'
+        [issue] = outcome.report.issues
+        assert issue.severity is Severity.WARNING
+        assert issue.subject == str(run2 / "a.md")
+        assert "'txt'" in issue.message and "'md'" in issue.message  # names both kinds
+        assert [s.status for s in outcome.value] == ["complete"]  # the replace still went through
+        assert len((await tarn.docs()).value) == 1  # still one document 'a'
+
+
+async def test_ingest_stays_silent_over_an_unknown_stored_kind(tmp_path):
+    """No spurious warnings where the kind can't be compared: a stored kind of ``'document'`` (the
+    pre-fix default — legacy stores) and an incoming file with no extension are both unknown."""
+    from tarnrag.contracts import Document
+
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "a.md").write_text("alpha as markdown")
+    (src / "b").write_text("bare beta")  # no extension — incoming kind unknown
+    async with TarnRag(_caller_hash_settings(tmp_path)) as tarn:
+        # Seed 'a' the way a pre-fix store looks (source_kind fell back to 'document') and 'b' with a
+        # real kind; the a.md replace can't compare against 'document', the 'b' file has no extension.
+        await tarn._repository.store_document(Document(content="old alpha", metadata={"source_id": "a"}))
+        await tarn._repository.store_document(
+            Document(content="old beta", metadata={"source_id": "b", "source_kind": "txt"})
+        )
+        outcome = await tarn.ingest([str(src)])
+        assert outcome.report.ok  # both replacements proceed silently — nothing comparable changed
 
 
 def test_split_stem_collisions_keeps_the_first_per_stem(tmp_path):
