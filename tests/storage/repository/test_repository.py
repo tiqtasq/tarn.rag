@@ -447,9 +447,11 @@ async def test_hydrate_returns_registered_methods_batched(repo):
     )
     await repo.register_method_bundle("M2", "v2", [c1, c2])
     await repo.register_method_bundle("M1", "v1", [c1])
-    rec1, rec2 = await repo.hydrate([c1, c2])
+    rec1, rec2 = await repo.hydrate(["not-a-chunk", c1, c2])  # unknown ids are skipped, order kept
     assert rec1.methods == [("M1", "v1"), ("M2", "v2")]  # ordered by method_id
     assert rec2.methods == [("M2", "v2")]
+    async with repo.engine.connect() as conn:  # the helper's empty early-out (hydrate returns before it)
+        assert await repo._methods_by_chunk(conn, []) == {}
 
 
 async def test_dense_knn_filter_by_license_class(repo):
