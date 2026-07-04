@@ -175,7 +175,53 @@ def test_create_threads_sampling_defaults():
     assert lm.default_max_tokens == 2048 and lm.default_temperature == 0.5
 
 
+# ---------------- aclose (whoever built the model releases its client) ----------------
+
+
+async def test_language_model_aclose_defaults_to_a_noop():
+    await StaticLanguageModel("hi").aclose()  # offline backends hold no client — nothing to release
+
+
+async def test_openai_aclose_closes_the_lazily_built_client():
+    lm = OpenAILanguageModel(model="m", api_key="k")
+    client = lm._http()  # lazily built
+    await lm.aclose()
+    assert client.is_closed and lm._client is None
+    await lm.aclose()  # idempotent — a second close is a no-op
+
+
+async def test_anthropic_aclose_closes_the_client_once():
+    closed = {"n": 0}
+
+    class _Client:
+        async def close(self):
+            closed["n"] += 1
+
+    lm = AnthropicLanguageModel(model="m", api_key="k", client=_Client())
+    await lm.aclose()
+    await lm.aclose()  # idempotent
+    assert closed["n"] == 1 and lm._client is None
+
+
 # ---------------- the Anthropic retry wiring (delegated to the SDK) ----------------
+
+
+def test_anthropic_sdk_lazily_builds_the_client_from_the_options(monkeypatch):
+    """``_sdk`` builds the client once, from exactly ``_sdk_options()`` — verified with a fake ``anthropic``
+    module, so the lazy-import path runs without the SDK installed."""
+    import sys
+
+    built = {}
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **opts):
+            built.update(opts)
+
+    monkeypatch.setitem(sys.modules, "anthropic", types.SimpleNamespace(AsyncAnthropic=_FakeAsyncAnthropic))
+    lm = AnthropicLanguageModel(model="m", api_key="k")
+    client = lm._sdk()
+    assert isinstance(client, _FakeAsyncAnthropic) and lm._sdk() is client  # built once, cached
+    assert built["max_retries"] == AnthropicLanguageModel.MAX_RETRIES  # the retry wiring reaches the SDK
 
 
 def test_anthropic_sdk_options_wire_retries_and_timeout():

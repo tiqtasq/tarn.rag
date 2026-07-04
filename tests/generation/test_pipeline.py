@@ -43,9 +43,66 @@ async def test_engine_answer_text_delegates(make_result, fake_retrieval):
 
 
 async def test_engine_is_an_async_context_manager(make_result, fake_retrieval):
-    # aclose is best-effort: the fake port exposes no aclose, so __aexit__ must be a no-op (not error).
+    # A directly-constructed engine runs over INJECTED resources (owns_resources=False), so __aexit__ ->
+    # aclose closes nothing — their owner does. Must be a clean no-op, not an error.
     async with GenerationEngine(fake_retrieval([]), StaticLanguageModel("{}"), _pipeline()) as eng:
         assert eng.retrieval is not None
+
+
+class _ClosablePort:
+    """A retrieval-port double that records whether ``aclose`` was called."""
+
+    def __init__(self):
+        self.closed = False
+
+    async def search(self, query):
+        return []
+
+    async def aclose(self):
+        self.closed = True
+
+
+class _ClosableLLM(StaticLanguageModel):
+    def __init__(self):
+        super().__init__("{}")
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+async def test_aclose_releases_owned_resources():
+    # The standalone-create posture: the engine built its retrieval + LLM, so aclose releases both.
+    port, llm = _ClosablePort(), _ClosableLLM()
+    await GenerationEngine(port, llm, _pipeline(), owns_resources=True).aclose()
+    assert port.closed and llm.closed
+
+
+async def test_aclose_leaves_injected_resources_to_their_owner():
+    # The composition-root posture (TarnRag): retrieval + LLM are injected and shared — never closed here.
+    port, llm = _ClosablePort(), _ClosableLLM()
+    await GenerationEngine(port, llm, _pipeline()).aclose()
+    assert not port.closed and not llm.closed
+
+
+async def test_create_builds_and_owns_its_resources(monkeypatch):
+    """The standalone ``create`` path builds the retrieval engine + LLM itself (factories stubbed here),
+    so the engine owns them — ``aclose`` releases both."""
+    from tarnrag.core.engine.config import Settings
+    from tarnrag.core.resources.llm import LanguageModel
+    from tarnrag.retrieval.engine.engine import RetrievalEngine
+
+    port, llm = _ClosablePort(), _ClosableLLM()
+
+    async def fake_retrieval_create(settings):
+        return port
+
+    monkeypatch.setattr(RetrievalEngine, "create", fake_retrieval_create)
+    monkeypatch.setattr(LanguageModel, "create", lambda settings: llm)
+    eng = await GenerationEngine.create(Settings(_env_file=None))
+    assert eng.retrieval is port and eng.llm is llm
+    await eng.aclose()
+    assert port.closed and llm.closed  # created standalone ⇒ owned ⇒ released
 
 
 async def test_no_results_yields_an_answer_with_empty_evidence(make_result, fake_retrieval):

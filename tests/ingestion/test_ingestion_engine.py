@@ -83,6 +83,53 @@ async def test_embedded_auto_drain_processes_inline(repo):
     assert status.embedding_count == status.chunk_count >= 1
 
 
+async def test_concurrent_ingests_single_flight_the_drain(repo):
+    """Two+ concurrent embedded ingests must not interleave two ``run()`` loops over the one queue (waves
+    and batches would be split arbitrarily between them): the drain lock serializes them, and every
+    document still completes."""
+    import asyncio
+
+    engine, queue = _wire(repo, auto_drain=True)
+    active = {"now": 0, "max": 0}
+    original_run = queue.run
+
+    async def tracked_run():
+        active["now"] += 1
+        active["max"] = max(active["max"], active["now"])
+        try:
+            await original_run()
+        finally:
+            active["now"] -= 1
+
+    queue.run = tracked_run
+    batches = [[{"content": f"Document {i} text. " * 10, "source_id": f"d{i}"}] for i in range(4)]
+    results = await asyncio.gather(*(engine.ingest_content(b) for b in batches))
+
+    assert active["max"] == 1  # never two drain loops at once
+    for [doc_id] in results:  # a drain may have processed a peer's jobs — every doc still completes
+        assert (await engine.status(doc_id)).status == "complete"
+
+
+async def test_aclose_closes_a_closable_queue(repo):
+    """``aclose`` releases the queue the engine was built with (the pgQueuer pool in distributed mode)
+    before the repository — through the same duck-typed ``aclose`` seam the facade uses."""
+    engine, queue = _wire(repo)
+    closed = []
+
+    async def record():
+        closed.append("queue")
+
+    queue.aclose = record  # the InMemory queue has none; give this instance a recording one
+    await engine.aclose()
+    assert closed == ["queue"]
+
+
+async def test_aclose_without_a_closable_queue_still_releases_the_store(repo):
+    """The InMemory queue holds nothing to close — ``aclose`` skips it and still releases the store."""
+    engine, _ = _wire(repo)
+    await engine.aclose()  # no error; repository disconnected (idempotent under the fixture's teardown)
+
+
 async def test_unknown_document_status_is_none(repo):
     engine, _ = _wire(repo)
     assert await engine.status("does-not-exist") is None

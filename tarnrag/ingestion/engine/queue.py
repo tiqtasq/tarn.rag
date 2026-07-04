@@ -116,7 +116,7 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
     propagates so pgQueuer requeues the job (= recovery, D5).
     """
 
-    def __init__(self, driver):
+    def __init__(self, driver, pool=None):
         from pgqueuer import QueueManager
         from pgqueuer.queries import Queries
 
@@ -124,6 +124,7 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         # raw driver — passing the driver makes run()/verify_structure fail with AttributeError.
         self._queries = Queries(driver)
         self._qm = QueueManager(self._queries)
+        self._pool = pool  # the asyncpg pool connect() opened (None when a driver is injected)
 
     @classmethod
     async def connect(cls, connection_url: str) -> "PgQueuerJobQueue":
@@ -134,7 +135,14 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         from pgqueuer.db import AsyncpgPoolDriver
 
         pool = await asyncpg.create_pool(connection_url)
-        return cls(AsyncpgPoolDriver(pool))
+        return cls(AsyncpgPoolDriver(pool), pool=pool)
+
+    async def aclose(self) -> None:
+        """Release the asyncpg pool :meth:`connect` opened. Idempotent; a driver-injected instance owns
+        no pool and closes nothing (its owner does)."""
+        if self._pool is not None:
+            pool, self._pool = self._pool, None
+            await pool.close()
 
     async def enqueue(self, job: IngestionJob) -> None:
         # payload is the full IngestionJob (incl. the inline item, D1)

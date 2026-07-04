@@ -55,6 +55,10 @@ class LanguageModel(Resource):
     async def complete(self, prompt: Prompt) -> Completion:
         """Generate a completion for ``prompt``."""
 
+    async def aclose(self) -> None:
+        """Release any lazily-built network client. Default: nothing to release (offline backends);
+        the HTTP/SDK backends override it. Idempotent — whoever *built* the model closes it."""
+
     @staticmethod
     def create(llm: LLMSettings) -> LanguageModel:
         """Build the ``LanguageModel`` for the configured provider, mapping the ``LLMSettings`` slice to

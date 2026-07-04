@@ -46,7 +46,7 @@ def _job(job_id: str = "j1", stage: str = "LoadAndParse") -> IngestionJob:
 @pytest.fixture
 async def pgq():
     """A live ``PgQueuerJobQueue`` on a freshly-installed pgQueuer schema; uninstalled + pool-closed after.
-    Uses ``connect`` (so it's exercised) and reaches the driver's pool only to close it cleanly."""
+    Uses ``connect`` and ``aclose`` so the adapter's whole lifecycle is exercised."""
     pytest.importorskip("pgqueuer")
     pytest.importorskip("asyncpg")
     q = await PgQueuerJobQueue.connect(PG_URL)
@@ -58,7 +58,17 @@ async def pgq():
     finally:
         with suppress(Exception):
             await q._queries.uninstall()
-        await q._queries.driver._pool.close()  # release the asyncpg pool connect() opened
+        await q.aclose()  # release the asyncpg pool connect() opened
+
+
+async def test_aclose_releases_the_pool_and_is_idempotent():
+    """``aclose`` closes the asyncpg pool ``connect`` opened, exactly once — a second call is a no-op."""
+    pytest.importorskip("pgqueuer")
+    pytest.importorskip("asyncpg")
+    q = await PgQueuerJobQueue.connect(PG_URL)
+    await q.aclose()
+    await q.aclose()  # idempotent
+    assert q._pool is None
 
 
 async def test_enqueued_job_is_consumed_through_the_run_loop(pgq):
