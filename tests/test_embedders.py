@@ -175,3 +175,13 @@ def test_api_key_is_required(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="API key"):
         OpenAIEmbedder(model="m", embedding_dim=2).embed_passages(["x"])
+
+
+def test_onnx_fingerprint_is_sensitive_to_contextualize_tables(tmp_path):
+    """contextualize_tables is an embed-time index variant: it must change the fingerprint, so a
+    contextualized index never opens under a non-contextualizing embedder (mirrors inject_header_path)."""
+    (tmp_path / "tokenizer.json").write_text("{}")  # identity hashes the tokenizer file only
+    base = OnnxEmbedder(str(tmp_path), model_id="m")
+    ctx = OnnxEmbedder(str(tmp_path), model_id="m", contextualize_tables=True)
+    assert base.config_fingerprint() != ctx.config_fingerprint()
+    assert ctx.embed_meta()["contextualize_tables"] == "True"

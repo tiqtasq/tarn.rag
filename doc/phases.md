@@ -494,3 +494,37 @@ Findings:
    the technical-manual / ModusQ query style the behavior tests exercise. The roadmap's
    "TAT-QA (identifier-heavy)" measurement assumption was wrong for its question side; a real P3
    measurement needs a lexical-classified query slice over a manuals-style corpus (open item).
+
+---
+
+## P1 PR-1 — native table ingest + contextualized embedding: measurement (2026-07-05)
+
+Setup as before (`--limit 100 -k 10`, n=334). New: tables ingest through the native `table_json`
+extractor (chunks carry a real `Table`; cells persisted), and `EMBEDDING__CONTEXTUALIZE_TABLES`
+embeds a table chunk as its header-contextualized rendering (`Table.contextual_text` — each value
+bound to its row/column headers). Stored/BM25 text stays the grid.
+
+| config                       | table | table-text | text  | overall |
+|------------------------------|------:|-----------:|------:|--------:|
+| plain-text tables, dense     | 0.779 |      0.855 | 0.938 |   0.865 |
+| plain-text tables, hybrid    | 0.853 |      0.945 | 0.953 |   0.922 |
+| **native ingest**, dense     | 0.768 |      0.864 | 0.938 |   0.865 |
+| native ingest, hybrid        | 0.853 |      0.945 | 0.953 |   0.922 |
+| native + **ctx**, dense      | 0.747 |      0.891 | 0.930 |   0.865 |
+| native + ctx, hybrid         | 0.863 |      0.945 | 0.953 | **0.925** |
+
+Findings:
+
+1. **Native ingest is behavior-preserving**: hybrid digit-identical; dense a wash (−0.011 table /
+   +0.009 table-text — the atomic table leaf vs the old char-split of oversize tables).
+2. **Contextualized embedding is a small, mixed lever at the retrieval level**: on the shipped
+   hybrid default +0.010 table / +0.003 overall; on pure dense it helps table-text (+0.027) but
+   hurts pure-table (−0.021), netting flat. Hybrid had already closed most of the table
+   *retrieval* gap. The flag ships **default-off** (an embed-time index variant, fingerprinted).
+3. **The big measured table penalty is reader-side** (attribution 0.88 vs 0.99, F1 0.51 vs 0.60)
+   — PR-2's territory (structured table view + cell citations for the reader). PR-1's real
+   deliverable is the substrate PR-2 needs: real `Table`s with persisted cells flowing through
+   ingest → chunks → hydrate.
+4. Eval-script fix along the way: since P2 made hybrid the Settings default, the script's
+   "DENSE" leg (which passed no spec) silently ran hybrid — it now pins an explicit dense-only
+   spec.

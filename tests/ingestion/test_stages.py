@@ -111,6 +111,39 @@ def test_embed_injects_header_path_when_enabled():
     assert on2._embedder.calls[-1] == ["plain text"]
 
 
+def test_embed_contextualizes_table_chunks_when_enabled():
+    """contextualize_tables embeds a TABLE chunk as its header-contextualized rendering (values bound
+    to headers) instead of the raw grid; stored text is untouched, non-table chunks are unaffected,
+    and header-path injection composes on top."""
+    from tarnrag.contracts import Table, TableCell
+
+    table = Table(n_rows=2, n_cols=2, cells=[
+        TableCell(id="h", row=0, col=1, is_column_header=True, text="2019"),
+        TableCell(id="r", row=1, col=0, is_row_header=True, text="Goodwill"),
+        TableCell(id="v", row=1, col=1, text="1,910"),
+    ])
+    item = PipelineItem(
+        content="| 2019 |\n| Goodwill | 1,910 |", metadata={"chunk_id": "c0", "source_id": "s1"},
+        provenance=ChunkProvenance(content_hash="h", header_path=["Notes"], table=table),
+    )
+    on = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(contextualize_tables=True)))
+    on._embedder = _FakeEmbedder()
+    list(on.process_batch([item]))
+    assert on._embedder.calls[-1] == ["Goodwill \u2014 2019: 1,910"]  # rendered from cells, not the grid
+
+    off = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings()))
+    off._embedder = _FakeEmbedder()
+    list(off.process_batch([item]))
+    assert off._embedder.calls[-1] == [item.content]  # default: the grid text as stored
+
+    both = EmbedStage(EmbedStage.Config(
+        embedding=EmbeddingSettings(contextualize_tables=True, inject_header_path=True)
+    ))
+    both._embedder = _FakeEmbedder()
+    list(both.process_batch([item]))
+    assert both._embedder.calls[-1] == ["Notes\nGoodwill \u2014 2019: 1,910"]  # the two compose
+
+
 def test_stage_built_from_dict_spec_via_component_factory():
     """The migration's goal: a stage (and its chunker child) instantiated from a plain dict spec."""
     chunk = ComponentFactory.get().create(

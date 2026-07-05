@@ -37,9 +37,15 @@ def test_render_table_linearizes_cells():
 
 
 def test_load_tatqa_filters_arithmetic_and_labels_sources():
+    import json
+
     corpus, queries = load_tatqa(ROWS)
-    assert {uid for uid, _ in corpus} == {"t1", "p1", "p2"}  # table + 2 paragraphs, deduped by uid
-    assert dict(corpus)["t1"] == " | 2019 | 2018\nRevenue | $10 | $8"  # table rendered (empty first cell)
+    by_uid = {uid: (content, kind) for uid, content, kind in corpus}
+    assert set(by_uid) == {"t1", "p1", "p2"}  # table + 2 paragraphs, deduped by uid
+    content, kind = by_uid["t1"]
+    assert kind == "table"  # the native table_json path — chunks carry a real Table
+    assert json.loads(content) == [["", "2019", "2018"], ["Revenue", "$10", "$8"]]  # the JSON grid
+    assert by_uid["p1"] == ("Revenue grew strongly in 2019.", "text")
     assert len(queries) == 2  # the arithmetic question is filtered out
     by_seg = {q.answer_from: q for q in queries}
     assert by_seg["table"].gold_source_ids == ["t1"]
@@ -48,7 +54,7 @@ def test_load_tatqa_filters_arithmetic_and_labels_sources():
 
 def test_load_tatqa_limit_caps_records():
     corpus, queries = load_tatqa(ROWS + ROWS, limit=1)
-    assert {uid for uid, _ in corpus} == {"t1", "p1", "p2"}  # only the first record
+    assert {uid for uid, _, _ in corpus} == {"t1", "p1", "p2"}  # only the first record
 
 
 async def test_source_hit_runs_over_the_index(tmp_path):
@@ -56,6 +62,12 @@ async def test_source_hit_runs_over_the_index(tmp_path):
     corpus, queries = load_tatqa(ROWS)
     repo, embedder = await build_tatqa_index(corpus, settings, db_path=str(tmp_path / "t.db"))
     try:
+        # The native path: the table element's chunk carries the persisted Table (cells + headers).
+        [chunk] = await repo.get_chunks_by_document("t1")
+        assert chunk.provenance is not None and chunk.provenance.table is not None
+        assert chunk.provenance.table.cell_at(1, 1).text == "$10"
+        assert chunk.content == " | 2019 | 2018\nRevenue | $10 | $8"  # stored/BM25 text: the grid
+
         report = await tatqa_source_hit(queries, repo, embedder, settings=settings, k=3, concurrency=2)
         assert report.n == 2 and 0.0 <= report.source_hit <= 1.0
         assert set(report.by_segment) == {"table", "text"}  # segmented by answer_from
