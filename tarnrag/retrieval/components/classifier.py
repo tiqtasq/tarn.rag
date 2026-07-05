@@ -18,13 +18,13 @@ contract. Domain-specific classifiers are added later as more components on this
 
 from __future__ import annotations
 
-import re
 import string
 from abc import abstractmethod
 from typing import Any, Literal
 
 from tarnrag.contracts import Annotation, Geometry
 from tarnrag.core.components import Component
+from tarnrag.core.text import looks_like_identifier
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query
 
@@ -84,6 +84,8 @@ class GenericQueryClassifier(QueryClassifier):
 
 # Compact, domain-independent word lists (English defaults; override via Config). They lean English, but
 # the exact-match cues (identifiers / quotes / length) are language-independent and carry weight regardless.
+# The identifier cue itself lives in ``core.text`` — shared with the sparse-query builders, so what this
+# classifier labels lexical is exactly what the FTS builder phrase-requires.
 _QUESTION_WORDS = frozenset(
     "who what when where why how which whose whom is are was were do does did "
     "can could should would will may might has have had".split()
@@ -92,7 +94,6 @@ _STOPWORDS = frozenset(
     "a an the of to in on for and or but with at by from as into about than that this these those "
     "be been being it its i we you they he she my your our their over under up down out".split()
 )
-_VERSION = re.compile(r"\d+(?:[.\-]\d+)+")  # 6.4, 1.2.3, 2024-01 — dotted/hyphenated number runs
 
 
 class StructuralQueryClassifier(QueryClassifier):
@@ -131,7 +132,7 @@ class StructuralQueryClassifier(QueryClassifier):
         fn_ratio = sum(w in stop for w in words) / n if n else 0.0
         interrogative = bool(words) and (words[0] in qwords or text.endswith("?"))
         has_quotes = text.count('"') >= 2
-        identifiers = [t for t in raw_tokens if self._looks_like_identifier(t)]
+        identifiers = [t for t in raw_tokens if looks_like_identifier(t)]
 
         if has_quotes or identifiers:
             label = cfg.lexical_type
@@ -154,20 +155,3 @@ class StructuralQueryClassifier(QueryClassifier):
             },
         )
 
-    @staticmethod
-    def _looks_like_identifier(token: str) -> bool:
-        """Whether a whitespace token reads as an identifier / code (a language-independent exact-match
-        cue): a ``§`` reference, a letter+digit mix (``BM25``, ``L6``, ``v2``), an all-caps acronym
-        (``API``, ``PDF``), or a dotted/hyphenated number (``6.4``, ``1.2.3``)."""
-        if "§" in token:
-            return True
-        core = token.strip(string.punctuation)
-        if not core:
-            return False
-        has_alpha = any(c.isalpha() for c in core)
-        has_digit = any(c.isdigit() for c in core)
-        if has_alpha and has_digit:
-            return True
-        if len(core) >= 2 and core.isupper() and has_alpha:
-            return True
-        return bool(_VERSION.fullmatch(core))

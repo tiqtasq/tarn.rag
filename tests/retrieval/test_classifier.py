@@ -80,7 +80,10 @@ def test_exact_match_cues_force_lexical(text):
 
 def test_punctuation_only_token_is_not_an_identifier():
     # A token that strips to empty (all punctuation) isn't an identifier — the empty-core guard.
-    assert StructuralQueryClassifier._looks_like_identifier("--") is False
+    # (The cue lives in core.text now, shared with the sparse-query builders.)
+    from tarnrag.core.text import looks_like_identifier
+
+    assert looks_like_identifier("--") is False
     assert _classify("corrosion -- inspection").query_type == "lexical"  # still a plain keyword phrase
 
 

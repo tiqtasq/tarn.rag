@@ -456,6 +456,40 @@ async def test_hydrate_returns_registered_methods_batched(repo):
         assert await repo.reads.child_rows_by_chunk(conn, repo.table_cells, []) == {}
 
 
+def test_fts_query_composes_exact_match_intent():
+    """The FTS5 MATCH builder (P3): plain queries are byte-identical to the old OR builder; quoted spans
+    and punctuation-split identifiers become REQUIRED phrases, AND-ed with the OR remainder."""
+    q = SqliteRepository._fts_query
+    assert q("tank inspection") == '"tank" OR "inspection"'  # plain: unchanged
+    assert q('check the "goodwill impairment" note') == '"goodwill impairment" AND ("check" OR "the" OR "note")'
+    assert q("torque for 6.4.2") == '"6 4 2" AND ("torque" OR "for")'  # dotted identifier ⇒ adjacency
+    assert q("§6.4 applies") == '"6 4" AND ("applies")'
+    assert q('"exact phrase"') == '"exact phrase"'  # phrase-only query
+    assert q("BM25 ranking") == '"bm25" OR "ranking"'  # single-piece identifier is a plain token already
+    assert q('find " " it') == '"find" OR "it"'  # a blank quoted span contributes nothing
+    assert q("under 20,000,000 total") == '"under" OR "20" OR "000" OR "total"'  # dedupe within one token too
+    assert q("!!! ...") == ""  # nothing usable ⇒ no match
+
+
+async def test_sparse_search_requires_phrase_adjacency(repo):
+    """A quoted span or dotted identifier must appear as an ADJACENT phrase — token scatter no longer
+    matches (P3); plain multi-token queries stay recall-first (OR)."""
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            _chunk("apply the torque from section 6.4.2 of the manual", 0, 2),
+            _chunk("6 bolts, 4 nuts and 2 washers in the torque kit", 1, 2),
+        ],
+    )
+    plain = await repo.sparse_search("torque kit", 5)  # plain OR: both chunks match
+    assert {c.chunk_id for c in plain} == {a, b}
+    scoped = await repo.sparse_search("torque 6.4.2", 5)  # the identifier is a required phrase
+    assert [c.chunk_id for c in scoped] == [a]  # b has 6 / 4 / 2 scattered — excluded
+    quoted = await repo.sparse_search('"torque kit"', 5)  # quoted span: adjacency required
+    assert [c.chunk_id for c in quoted] == [b]  # a has 'torque from …' — not the phrase
+    assert await repo.sparse_search("!!! ...", 5) == []  # nothing usable ⇒ no match, no FTS error
+
+
 async def test_hydrate_carries_table_and_annotations(repo):
     """``hydrate`` (the retrieval read path) rebuilds a chunk's table cells AND annotations onto its
     provenance — the same assembly ``get_chunk`` uses, through the hydrate-side ``chunk_provenance``."""

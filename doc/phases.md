@@ -466,3 +466,31 @@ every-push** guards are:
 The full, real-data quality metrics (gte-small table lift, gpt-4o-mini attribution / multi-hop F1) need
 corpus scale and/or an LLM key, so they're tracked **on-demand** via `scripts/run_layout_eval.py` and
 `scripts/run_benchmarks.py` rather than as committed CI assertions.
+
+---
+
+## P2 + P3 — hybrid default + phrase-aware sparse: measurement (2026-07-05)
+
+Setup: `scripts/run_layout_eval.py --limit 100 -k 10` (TAT-QA, n=334 extractive queries, same
+parameters as the Option-2 baseline), store rebuilt from scratch under **schema v2**.
+
+| segment    |   n | DENSE | HYBRID (P3) | HYBRID (2026-06-24, pre-P3) |
+|------------|----:|------:|------------:|----------------------------:|
+| table      |  95 | 0.779 |       0.853 |                        0.853 |
+| table-text | 110 | 0.855 |       0.945 |                        0.945 |
+| text       | 129 | 0.938 |       0.953 |                        0.953 |
+| OVERALL    | 334 | 0.865 |   **0.922** |                        0.922 |
+
+Findings:
+
+1. **Clean A/A.** Dense reproduces the June baseline digit-for-digit on a from-scratch schema-v2
+   rebuild — B7, the read-assembly split, the method-bundle writer, and the hybrid-default flip
+   moved retrieval by exactly zero. End-to-end regression-freedom, not just unit-level.
+2. **P3 is a null result on TAT-QA** — hybrid-with-phrase-awareness equals pre-P3 hybrid exactly.
+   TAT-QA *questions* are natural-language financial prose: no quoted spans, no `§` references,
+   (almost) no dotted identifiers — the phrase path never fires. This also confirms the
+   "plain queries compile byte-identically" claim in the strongest possible way.
+3. **Where P3 pays** is identifier-style queries (`§6.4.2`, `"exact phrase"`, version numbers) —
+   the technical-manual / ModusQ query style the behavior tests exercise. The roadmap's
+   "TAT-QA (identifier-heavy)" measurement assumption was wrong for its question side; a real P3
+   measurement needs a lexical-classified query slice over a manuals-style corpus (open item).
