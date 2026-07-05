@@ -163,10 +163,10 @@ class PostgresRepository(DocumentRepository):
         )
         async with self.engine.connect() as conn:
             by_id = {r[0]: r for r in (await conn.execute(stmt)).all()}
-            prov = await self._chunk_provenance(conn, chunk_ids)
-            methods = await self._methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
+            prov = await self.reads.chunk_provenance(conn, chunk_ids)
+            methods = await self.reads.methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
             records = [
-                self._create_chunk_record(r, methods.get(cid, []), prov.get(cid))
+                self.reads.create_chunk_record(r, methods.get(cid, []), prov.get(cid))
                 for cid in chunk_ids
                 if (r := by_id.get(cid)) is not None
             ]
