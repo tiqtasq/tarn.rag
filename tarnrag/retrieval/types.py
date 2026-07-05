@@ -40,7 +40,7 @@ class Query:
     scope: list[MethodRef] | str = ALL  # MethodRef[] or ALL
     top_k: int = 8
     dense_k: int = 50
-    sparse_k: int = 50  # used in Step B (sparse retriever)
+    sparse_k: int = 50  # candidate window for the sparse (BM25 / tsvector) retriever
     query_type: str = ""  # headline classification label; the router's route key
     annotations: list[Annotation] = field(default_factory=list)  # the classifier's rich findings
 
