@@ -58,12 +58,8 @@ class EmbedStage(PipelineStage):
             sub = items[i : i + batch_size]
             vectors = embedder.embed_passages([self._embed_text(it, inject) for it in sub])
             for it, vec in zip(sub, vectors):
-                yield Embedding(
-                    chunk_id=it.metadata["chunk_id"],
-                    vector=list(vec),
-                    model=self.config.embedding.model,
-                    dimension=len(vec),
-                )
+                # Just the chunk key + its vector: embedder identity is index-wide (index_meta).
+                yield Embedding(chunk_id=it.metadata["chunk_id"], vector=list(vec))
 
     @staticmethod
     def _embed_text(item: PipelineItem, inject: bool) -> str:

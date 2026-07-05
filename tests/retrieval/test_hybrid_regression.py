@@ -40,9 +40,9 @@ async def _index(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=table, vector=[0.0, 0.0, 1.0], model="f", dimension=3),  # far from the query
-        Embedding(chunk_id=t1, vector=[1.0, 0.0, 0.0], model="f", dimension=3),     # near the query
-        Embedding(chunk_id=t2, vector=[0.9, 0.1, 0.0], model="f", dimension=3),     # near the query
+        Embedding(chunk_id=table, vector=[0.0, 0.0, 1.0]),  # far from the query
+        Embedding(chunk_id=t1, vector=[1.0, 0.0, 0.0]),     # near the query
+        Embedding(chunk_id=t2, vector=[0.9, 0.1, 0.0]),     # near the query
     ])
     return table
 

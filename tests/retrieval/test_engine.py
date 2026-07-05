@@ -61,8 +61,8 @@ async def _index(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0]),
     ])
     return cids
 
@@ -190,8 +190,8 @@ async def test_filter_drops_unavailable_and_respects_grounding(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
     # EXECUTION: the unavailable chunk is dropped; the grounding-disallowed one is kept.
@@ -235,8 +235,8 @@ async def test_default_license_policy_excludes_third_party_copyrighted(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     settings = Settings(_env_file=None)  # default components -> the default_license policy applies
     engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)), settings=settings)
@@ -258,8 +258,8 @@ async def _index_tree(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=leaf1, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=leaf2, vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=leaf1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=leaf2, vector=[0.0, 1.0, 0.0]),
     ])
     return parent, leaf1, leaf2
 

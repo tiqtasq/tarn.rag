@@ -36,8 +36,8 @@ async def _index(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0]),
     ])
     return cids
 

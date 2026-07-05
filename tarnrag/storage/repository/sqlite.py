@@ -126,9 +126,8 @@ class SqliteRepository(DocumentRepository):
     async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
         """
         §8: dense vectors live in the sqlite-vec ``vec_chunks`` virtual table, not the embeddings
-        table (which stays empty on SQLite). Only ``chunk_id`` + ``vector`` are stored — the
-        ``Embedding``'s ``id`` / ``model`` / ``dimension`` are dropped here (they are columns only
-        on the Postgres ``embeddings`` table); nothing reads them back.
+        table (which stays empty on SQLite). Stores exactly the DTO — ``chunk_id`` + ``vector`` —
+        idempotently (``INSERT OR REPLACE`` on the chunk_id key).
         """
         if not embeddings:
             return []
