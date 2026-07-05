@@ -10,6 +10,7 @@ from tarnrag.ingestion.components.extraction import (
     MarkdownExtractor,
     PlainTextExtractor,
     Source,
+    TableJsonExtractor,
 )
 
 
@@ -152,3 +153,50 @@ def test_html_empty_table_is_dropped():
     )
     assert not any(e.kind == ElementKind.TABLE for e in doc.elements)
     assert any(e.text == "after" for e in doc.elements)
+
+
+# ---------------- table_json: a JSON grid -> one atomic TABLE element with a real Table ----------------
+
+
+def test_table_json_builds_a_native_table_element():
+    """A bare JSON grid extracts to one TABLE element: cells with grid positions + header flags
+    (defaults: first row = column headers, first column = row labels), markdown = the ` | `-joined grid
+    (the stored/BM25 text), and the element is atomic."""
+    import json
+
+    grid = [["", "2019", "2018"], ["Goodwill", "1,910", "2,130"]]
+    doc = _run(TableJsonExtractor, Source(source_id="d1", source_kind="table", content=json.dumps(grid)))
+    [el] = doc.elements
+    assert el.kind == ElementKind.TABLE and el.atomic
+    assert doc.text == el.text == " | 2019 | 2018\nGoodwill | 1,910 | 2,130"  # exact cell tokens per row
+    table = el.table
+    assert (table.n_rows, table.n_cols) == (2, 3)
+    value = table.cell_at(1, 1)
+    assert value.text == "1,910"
+    assert [h.text for h in table.column_headers_for(value)] == ["2019"]
+    assert [h.text for h in table.row_headers_for(value)] == ["Goodwill"]
+
+
+def test_table_json_object_form_overrides_header_shape():
+    """The object form carries per-document header shape: header_rows=2 stacks column headers;
+    header_cols=0 means no row labels."""
+    import json
+
+    content = json.dumps({"grid": [["FY", "FY"], ["2019", "2018"], ["10", "8"]], "header_rows": 2, "header_cols": 0})
+    doc = _run(TableJsonExtractor, Source(source_id="d1", content=content))
+    table = doc.elements[0].table
+    value = table.cell_at(2, 0)
+    assert [h.text for h in table.column_headers_for(value)] == ["FY", "2019"]  # stacked headers
+    assert table.row_headers_for(value) == []  # header_cols=0 -> no row labels
+
+
+def test_table_json_rejects_a_non_grid():
+    import pytest
+
+    with pytest.raises(ValueError, match="JSON grid"):
+        _run(TableJsonExtractor, Source(source_id="d1", content='{"grid": "not a grid"}'))
+
+
+def test_table_json_empty_grid_yields_no_elements():
+    doc = _run(TableJsonExtractor, Source(source_id="d1", content="[]"))
+    assert doc.elements == [] and doc.text == ""

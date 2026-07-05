@@ -14,6 +14,7 @@ Extractive only: arithmetic / count answers have no retrievable source span, so 
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 
 from tarnrag.core.engine.config import GENERATION_PIPELINE, DatabaseSettings, Settings
@@ -51,23 +52,28 @@ class TatQaQuery:
 
 def render_table(grid: list[list[str]]) -> str:
     """Linearize a TAT-QA table grid (rows of cells) to text — cells joined by ``|`` per row — preserving the
-    exact cell tokens (so BM25 can match them) and the row structure."""
+    exact cell tokens (so BM25 can match them) and the row structure. (The ``table_json`` extractor produces
+    the same rendering as the element text, so the native path keeps the BM25 tokens identical.)"""
     return "\n".join(" | ".join(c for c in row) for row in grid)
 
 
-def load_tatqa(rows: list[dict], *, limit: int | None = None) -> tuple[list[tuple[str, str]], list[TatQaQuery]]:
-    """Map TAT-QA records (``{table, paragraphs, questions}``) → a deduped corpus of ``(uid, text)`` elements
-    (each table rendered, each paragraph) and the extractive ``TatQaQuery`` list. ``limit`` caps records.
-    Pure (no network) — pass ``rows`` from :func:`stream_tatqa` or a fixture."""
-    corpus: dict[str, str] = {}
+def load_tatqa(
+    rows: list[dict], *, limit: int | None = None
+) -> tuple[list[tuple[str, str, str]], list[TatQaQuery]]:
+    """Map TAT-QA records (``{table, paragraphs, questions}``) → a deduped corpus of
+    ``(uid, content, kind)`` elements — each table as its **JSON grid** (``kind='table'``, ingested through
+    the native ``table_json`` extractor so chunks carry a real ``Table``), each paragraph as text — and the
+    extractive ``TatQaQuery`` list. ``limit`` caps records. Pure (no network) — pass ``rows`` from
+    :func:`stream_tatqa` or a fixture."""
+    corpus: dict[str, tuple[str, str]] = {}  # uid -> (content, kind)
     queries: list[TatQaQuery] = []
     for rec in rows[:limit] if limit else rows:
         table = rec["table"]
         tuid = table["uid"]
-        corpus[tuid] = render_table(table["table"])
+        corpus[tuid] = (json.dumps(table["table"]), "table")
         para_uid_by_order = {}
         for p in rec["paragraphs"]:
-            corpus[p["uid"]] = p["text"]
+            corpus[p["uid"]] = (p["text"], "text")
             para_uid_by_order[str(p["order"])] = p["uid"]
         for q in rec["questions"]:
             if q.get("answer_type") not in _EXTRACTIVE:
@@ -83,7 +89,7 @@ def load_tatqa(rows: list[dict], *, limit: int | None = None) -> tuple[list[tupl
             queries.append(
                 TatQaQuery(question=q["question"], answers=list(q.get("answer", [])), gold_source_ids=sorted(gold), answer_from=af)
             )
-    return list(corpus.items()), queries
+    return [(uid, content, kind) for uid, (content, kind) in corpus.items()], queries
 
 
 def stream_tatqa(limit: int | None = None) -> list[dict]:
@@ -105,11 +111,13 @@ class SourceHitReport:
 
 
 async def build_tatqa_index(
-    corpus: list[tuple[str, str]], settings: Settings, *, db_path: str
+    corpus: list[tuple[str, str, str]], settings: Settings, *, db_path: str
 ) -> tuple[DocumentRepository, Embedder]:
-    """Ingest each ``(uid, text)`` element with ``source_id == uid`` (so ``document_id`` maps a retrieved
-    chunk back to its element) into a persistent, **cached** store. Mirrors ``build_corpus_index``: a
-    full store is reused (skip the slow embed), a partial one is rebuilt."""
+    """Ingest each ``(uid, content, kind)`` element with ``source_id == uid`` (so ``document_id`` maps a
+    retrieved chunk back to its element) into a persistent, **cached** store. Tables (``kind='table'``)
+    go through the native ``table_json`` extractor — chunks carry a real ``Table`` (persisted cells,
+    contextualizable at embed time); paragraphs stay on the text path. Mirrors ``build_corpus_index``:
+    a full store is reused (skip the slow embed), a partial one is rebuilt."""
     settings.ID_POLICY = "caller"  # ingest each element under its uid, so document_id maps back for source-hit
     embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
     repo = await DocumentRepository.create(
@@ -122,7 +130,16 @@ async def build_tatqa_index(
     for summary in await ingest.list_documents():
         await ingest.delete_document(summary.document_id)
     await ingest.ingest_content(
-        [{"source_id": uid, "content": text, "title": uid, "source_type": "text"} for uid, text in corpus]
+        [
+            {
+                "source_id": uid,
+                "content": content,
+                "title": uid,
+                "source_type": kind,
+                **({"extractor": "table_json"} if kind == "table" else {}),
+            }
+            for uid, content, kind in corpus
+        ]
     )
     return repo, embedder
 

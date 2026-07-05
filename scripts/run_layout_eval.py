@@ -33,6 +33,8 @@ async def _run(limit: int | None, k: int, concurrency: int, attribution: bool, h
     settings = get_settings()
     corpus, queries = load_tatqa(stream_tatqa(limit), limit=limit)
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
+    if settings.embedding.contextualize_tables:  # a distinct index — the embed text differs (P1)
+        emb_tag += "_ctx"
     db_path = f"./docs/tatqa_{limit or 'full'}_{emb_tag}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building TAT-QA corpus: {len(corpus)} elements -> {db_path} (cached) … ; {len(queries)} extractive queries")
@@ -46,10 +48,16 @@ async def _run(limit: int | None, k: int, concurrency: int, attribution: bool, h
                   f"{' + hybrid' if hybrid else ''} …")
             overall, by_seg = await tatqa_attribution(queries, llm, repo, embedder, settings=settings, concurrency=concurrency)
             print("\n" + format_attribution(overall, by_seg))
-        else:  # retrieval-only source-hit: dense vs hybrid
-            for label, spec in (("DENSE", None), ("HYBRID", HYBRID_RETRIEVAL)):
-                if spec is not None:
-                    settings.components[RETRIEVAL_PIPELINE] = spec
+        else:  # retrieval-only source-hit: dense vs hybrid. Since P2, the *Settings default* is
+            # hybrid — so the dense leg must pin an explicit dense-only spec (passing nothing would
+            # silently run hybrid twice).
+            dense_only = {
+                "class_name": "retrieval_pipeline",
+                "retrievers": [{"class_name": "dense"}],
+                "fuser": {"class_name": "identity"},
+            }
+            for label, spec in (("DENSE", dense_only), ("HYBRID", HYBRID_RETRIEVAL)):
+                settings.components[RETRIEVAL_PIPELINE] = spec
                 report = await tatqa_source_hit(queries, repo, embedder, settings=settings, k=k, concurrency=concurrency)
                 print("\n" + format_source_hit(report, tag=f"[{label}]"))
     finally:

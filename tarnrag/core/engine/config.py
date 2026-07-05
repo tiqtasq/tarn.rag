@@ -82,6 +82,11 @@ class EmbeddingSettings(BaseModel):
     # injected index has a distinct fingerprint and won't ``open()`` with a non-injecting embedder —
     # the two are compared by building separate indexes.
     inject_header_path: bool = False
+    # Table contextualization (P1): embed a TABLE chunk as its header-contextualized rendering (each
+    # value bound to its row/column headers — ``Table.contextual_text``) instead of the raw grid text.
+    # Embed-time only: the stored/BM25 text stays the grid. Part of the embedding identity, like
+    # ``inject_header_path`` — compared by building separate indexes.
+    contextualize_tables: bool = False
 
     # API providers only (provider != 'onnx'):
     api_key: str = ""  # falls back to the provider's standard env var (OPENAI_API_KEY / VOYAGE_API_KEY / GEMINI_API_KEY)

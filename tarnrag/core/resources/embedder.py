@@ -100,6 +100,7 @@ class OnnxEmbedder(Embedder):
         query_prefix: str = "",
         passage_prefix: str = "",
         inject_header_path: bool = False,
+        contextualize_tables: bool = False,
         model_file: str = "model.onnx",
         tokenizer_file: str = "tokenizer.json",
     ):
@@ -113,6 +114,7 @@ class OnnxEmbedder(Embedder):
         self.query_prefix = query_prefix
         self.passage_prefix = passage_prefix
         self.inject_header_path = inject_header_path
+        self.contextualize_tables = contextualize_tables
         self.model_path = self.model_dir / model_file
         self.tokenizer_path = self.model_dir / tokenizer_file
         self._session = None
@@ -135,6 +137,7 @@ class OnnxEmbedder(Embedder):
             query_prefix=embedding.query_prefix,
             passage_prefix=embedding.passage_prefix,
             inject_header_path=embedding.inject_header_path,
+            contextualize_tables=embedding.contextualize_tables,
         )
 
     # ---------------- identity (no model load needed) ----------------
@@ -168,6 +171,7 @@ class OnnxEmbedder(Embedder):
             "passage_prefix": self.passage_prefix,
             "max_length": self.max_length,
             "inject_header_path": self.inject_header_path,
+            "contextualize_tables": self.contextualize_tables,
         }
 
     def config_fingerprint(self) -> str:
@@ -193,6 +197,7 @@ class OnnxEmbedder(Embedder):
             "passage_prefix": ident["passage_prefix"],
             "max_length": str(ident["max_length"]),
             "inject_header_path": str(ident["inject_header_path"]),
+            "contextualize_tables": str(ident["contextualize_tables"]),
             "embedding_config_fingerprint": self.config_fingerprint(),
         }
 
