@@ -84,7 +84,9 @@ async def test_attribution_runs_and_segments(tmp_path):
     try:
         # the canned answer matches the table question's gold ($10); single_hop reads it, llm_grounding judges
         llm = StaticLanguageModel('{"answer": "$10", "steps": [{"claim": "Revenue was $10", "cited": [1]}]}')
-        overall, by_seg = await tatqa_attribution(queries, llm, repo, embedder, settings=settings, concurrency=2)
+        overall, by_seg = await tatqa_attribution(
+            queries, llm, repo, embedder, settings=settings, table_view="structured", concurrency=2
+        )
         assert overall.n == 2 and set(by_seg) == {"table", "text"}  # segmented by answer_from
         assert 0.0 <= overall.grounded_rate <= 1.0 and 0.0 <= overall.token_f1 <= 1.0
         assert "OVERALL" in format_attribution(overall, by_seg)

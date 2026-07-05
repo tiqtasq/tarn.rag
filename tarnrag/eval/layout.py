@@ -32,11 +32,14 @@ _EXTRACTIVE = frozenset({"span", "multi-span"})  # arithmetic/count have no retr
 
 # Attribution measurement: read the answer with a single_hop reasoner, then have an LLM judge whether each
 # cited span supports its claim (grounding). ``grounded_rate`` is the answer-level attribution precision.
-_ATTRIBUTION_PIPELINE = {
-    "class_name": "generation_pipeline",
-    "reasoner": {"class_name": "single_hop"},
-    "grounding_checker": {"class_name": "llm_grounding"},
-}
+def _attribution_pipeline(table_view: str) -> dict:
+    """The attribution generation spec with the table view PINNED on both the reasoner and the judge —
+    a measurement never inherits a default (the P2 default-flip lesson)."""
+    return {
+        "class_name": "generation_pipeline",
+        "reasoner": {"class_name": "single_hop", "table_view": table_view},
+        "grounding_checker": {"class_name": "llm_grounding", "table_view": table_view},
+    }
 
 
 @dataclass
@@ -208,12 +211,14 @@ async def tatqa_attribution(
     embedder: Embedder,
     *,
     settings: Settings,
+    table_view: str,
     concurrency: int = 8,
 ) -> tuple[GenEvalReport, dict[str, GenEvalReport]]:
     """Answer each question over the shared corpus and have an LLM judge the citations: returns the overall
     ``GenEvalReport`` (F1/EM + ``grounded_rate`` = attribution precision + ``citation_coverage``) and one per
-    ``answer_from`` segment — so a table-vs-text attribution gap is visible. Bounded ``concurrency``."""
-    settings.components[GENERATION_PIPELINE] = _ATTRIBUTION_PIPELINE
+    ``answer_from`` segment — so a table-vs-text attribution gap is visible. ``table_view`` is REQUIRED
+    (pinned onto reasoner + judge — a measurement never inherits a default). Bounded ``concurrency``."""
+    settings.components[GENERATION_PIPELINE] = _attribution_pipeline(table_view)
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     generation = GenerationEngine.assemble(retrieval, llm, settings)
     sem = asyncio.Semaphore(concurrency)

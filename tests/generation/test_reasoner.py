@@ -107,3 +107,49 @@ async def test_numbered_passages_and_header_label_in_the_prompt(make_result, fak
     await _reasoner().reason(Query(text="how?"), ctx)
     assert "[1] Maint > Corrosion — Coatings help." in captured["user"]
     assert "Question: how?" in captured["user"]
+
+
+def _table_result():
+    """A retrieved TABLE chunk: raw grid as stored text, a real Table on the provenance."""
+    from tarnrag.contracts import ChunkProvenance, RetrievalResult, Table, TableCell
+
+    table = Table(n_rows=2, n_cols=2, cells=[
+        TableCell(id="h", row=0, col=1, is_column_header=True, text="2019"),
+        TableCell(id="r", row=1, col=0, is_row_header=True, text="Goodwill"),
+        TableCell(id="v", row=1, col=1, text="1,910"),
+    ])
+    return RetrievalResult(
+        chunk_id="t", text=" | 2019\nGoodwill | 1,910", score=1.0, component_scores={},
+        document_id="d", source_kind="table", standard_id=None, locator=None, license_class="open",
+        provenance=ChunkProvenance(content_hash="h", table=table),
+    )
+
+
+async def test_reader_sees_the_structured_table_view(fake_retrieval):
+    """P1 PR-2: a table chunk is laid before the model as its header-contextualized rendering (values
+    bound to headers), not the raw grid."""
+    seen = {}
+
+    def reply(prompt):
+        seen["user"] = prompt.user
+        return json.dumps({"answer": "1,910", "steps": []})
+
+    ctx = GenerationContext(fake_retrieval([_table_result()]), StaticLanguageModel(reply))
+    await _reasoner().reason(Query(text="goodwill in 2019?"), ctx)
+    assert "Goodwill \u2014 2019: 1,910" in seen["user"]  # rendered from cells
+    assert " | 2019" not in seen["user"]  # the raw grid is not shown
+
+
+async def test_table_view_text_pins_the_raw_grid(fake_retrieval):
+    """table_view='text' (the pre-P1 representation — what evals pin for the baseline leg) lays the
+    stored grid text before the model unchanged."""
+    seen = {}
+
+    def reply(prompt):
+        seen["user"] = prompt.user
+        return json.dumps({"answer": "1,910", "steps": []})
+
+    ctx = GenerationContext(fake_retrieval([_table_result()]), StaticLanguageModel(reply))
+    await _reasoner(table_view="text").reason(Query(text="goodwill in 2019?"), ctx)
+    assert " | 2019\nGoodwill | 1,910" in seen["user"]  # the stored text, verbatim
+    assert "\u2014 2019: 1,910" not in seen["user"]
