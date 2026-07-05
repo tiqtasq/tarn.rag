@@ -285,7 +285,9 @@ class SqliteRepository(DocumentRepository):
             if len(pieces) > 1 and looks_like_identifier(token):
                 phrases.append(" ".join(pieces))  # split identifier ⇒ adjacency is the meaning
             else:
-                or_tokens += [p for p in pieces if p not in or_tokens]
+                for piece in pieces:  # dedupe one at a time — a token like 20,000,000 repeats pieces
+                    if piece not in or_tokens:
+                        or_tokens.append(piece)
         parts = [f'"{p}"' for p in phrases]
         if or_tokens:
             group = " OR ".join(f'"{t}"' for t in or_tokens)

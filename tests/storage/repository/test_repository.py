@@ -467,6 +467,7 @@ def test_fts_query_composes_exact_match_intent():
     assert q('"exact phrase"') == '"exact phrase"'  # phrase-only query
     assert q("BM25 ranking") == '"bm25" OR "ranking"'  # single-piece identifier is a plain token already
     assert q('find " " it') == '"find" OR "it"'  # a blank quoted span contributes nothing
+    assert q("under 20,000,000 total") == '"under" OR "20" OR "000" OR "total"'  # dedupe within one token too
     assert q("!!! ...") == ""  # nothing usable ⇒ no match
 
 
