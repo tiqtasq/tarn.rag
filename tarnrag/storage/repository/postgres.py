@@ -49,6 +49,25 @@ class PostgresRepository(DocumentRepository):
             "CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin (to_tsvector('english', text))"
         )
 
+    async def store_embeddings(self, embeddings) -> list[str]:
+        """Upsert dense vectors into the ``embeddings`` table — ``ON CONFLICT (chunk_id)`` replaces,
+        so re-embedding a chunk is idempotent (the Postgres counterpart of SQLite's
+        ``INSERT OR REPLACE`` into ``vec_chunks``). Returns the chunk ids written."""
+        if not embeddings:
+            return []
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        rows = [
+            {"chunk_id": e.chunk_id, "vector": self._encode_vector(e.vector)} for e in embeddings
+        ]
+        stmt = pg_insert(self.embeddings).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[self.embeddings.c.chunk_id], set_={"vector": stmt.excluded.vector}
+        )
+        async with self.engine.begin() as conn:
+            await conn.execute(stmt)
+        return [e.chunk_id for e in embeddings]
+
     async def dense_knn(
         self, query_vec: list[float], k: int, filter: ChunkFilter | None = None
     ) -> list[Candidate]:

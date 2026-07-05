@@ -18,7 +18,11 @@ class IndexMeta:
     ``build`` produces it from an embedder; ``conflict`` checks an existing record against an embedder.
     Both reference the same ``SCHEMA_VERSION`` + field names, so they stay in sync here in one place."""
 
-    SCHEMA_VERSION = "1"  # bumped when the §8 schema changes incompatibly; conflict() refuses a mismatch
+    # Bumped when the §8 schema changes incompatibly; conflict() refuses a mismatch (the store must be
+    # rebuilt by re-ingesting — the deliberate, blunt migration stance while stores are rebuildable).
+    # v2 (2026-07-05): embeddings became strictly chunk-keyed — Postgres ``embeddings`` is
+    # ``(chunk_id PK, vector)``; the surrogate id + per-row model/dimension columns are gone.
+    SCHEMA_VERSION = "2"
     INGESTION_VERSION = "0.1.0"
     FTS_TOKENIZER = "unicode61"  # the fts_chunks tokenizer (recorded so a reader tokenizes the same)
 

@@ -138,7 +138,10 @@ now misdescribes the InMemory queue as well.
 **Fix (min):** correct the comment and document the asymmetry. **Fix (real):** claim-side batching
 in the pgQueuer adapter (group claims by stage within a wait window) — also listed in the roadmap.
 
-### B7. Align the Postgres `embeddings` schema with the 1:1 chunk-keyed model *(added 2026-07-04)*
+### B7. Align the Postgres `embeddings` schema with the 1:1 chunk-keyed model *(added 2026-07-04; DONE — schema v2)*
+**Done (2026-07-05):** `embeddings(chunk_id PK, vector)` with `ON CONFLICT` upsert; DTO slimmed to
+`(chunk_id, vector)`; `SCHEMA_VERSION` bumped to `"2"` (old stores are refused → rebuild by
+re-ingest, per the agreed no-migrations stance at this stage). Original item:
 The SQLite side is the considered design (`vec_chunks(chunk_id PK, vector)`); the Postgres table
 predates the `index_meta` fingerprint gate and kept a surrogate `id` PK plus per-row
 `model`/`dimension` copies — redundant (`index_meta` + the `Vector(dim)` type already carry them)

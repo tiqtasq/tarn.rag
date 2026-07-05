@@ -224,7 +224,7 @@ async def test_document_status_and_jobs(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     assert await repo.document_status("s1") == {
         "document_id": "s1",
@@ -250,7 +250,7 @@ async def test_delete_document_keeps_jobs_until_cleared(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     await repo.record_job("s1", "j1", "LoadAndParse", "completed")
     assert (await repo.document_status("s1"))["status"] == "complete"
@@ -276,7 +276,7 @@ async def test_delete_document_and_jobs_removes_both(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     await repo.record_job("s1", "j1", "LoadAndParse", "completed")
     assert (await repo.document_status("s1"))["status"] == "complete"
@@ -324,8 +324,8 @@ async def test_dense_knn_and_hydrate(repo):
         [_chunk("tank inspection", 0, 2), _chunk("quokka", 1, 2)],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0]),
     ])
     cands = await repo.dense_knn([0.9, 0.1, 0.0], k=2)
     assert cands[0].chunk_id == cid_a  # nearest first
@@ -370,10 +370,10 @@ async def test_dense_knn_filter_backfills_past_disallowed(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c3, vector=[0.8, 0.2, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c4, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0]),
+        Embedding(chunk_id=c3, vector=[0.8, 0.2, 0.0]),
+        Embedding(chunk_id=c4, vector=[0.0, 1.0, 0.0]),
     ])
     query = [1.0, 0.0, 0.0]  # nearest order: c1, c2, c3, c4
     assert [c.chunk_id for c in await repo.dense_knn(query, k=2)] == [c1, c2]  # unfiltered: nearest two
@@ -396,8 +396,8 @@ async def test_dense_knn_filter_restricts_to_method_scope(repo):
         [_chunk("in scope", 0, 2), _chunk("out of scope", 1, 2)],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0]),
     ])
     async with repo.engine.begin() as conn:
         await conn.execute(
@@ -418,7 +418,7 @@ async def test_method_bundle_registers_replaces_and_clears(repo):
         [_chunk("one", 0, 3), _chunk("two", 1, 3), _chunk("three", 2, 3)],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=c, vector=v, model="m", dimension=3)
+        Embedding(chunk_id=c, vector=v)
         for c, v in ((c1, [1.0, 0.0, 0.0]), (c2, [0.9, 0.1, 0.0]), (c3, [0.8, 0.2, 0.0]))
     ])
     await repo.register_method_bundle("M1", "v1", [c1, c2])
@@ -486,8 +486,8 @@ async def test_dense_knn_filter_by_license_class(repo):
          _chunk("copyrighted", 1, 2, license_class="third_party_copyrighted")],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     hits = await repo.dense_knn(
         [1.0, 0.0, 0.0], k=5, filter=ChunkFilter(license_classes=("public_domain", "customer_licensed"))

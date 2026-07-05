@@ -122,40 +122,36 @@ class Chunk(BaseModel):
 class Embedding(BaseModel):
     """
     A chunk's dense vector — at-rest ONLY (terminal stage output; never flows). A write-side DTO:
-    nothing reconstructs an ``Embedding`` from storage. On Postgres all fields are persisted to the
-    ``embeddings`` table; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
-    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` are dropped there. 
+    nothing reconstructs an ``Embedding`` from storage.
 
-    The embedding vectors themselves are stored in both backends. It is the terminal output of the 
+    The embedding vectors themselves are stored in both backends, in the SAME shape — one store is
+    one vector space (the ``index_meta`` fingerprint enforces one embedder per index), so a stored
+    embedding is exactly its chunk key + its vector, keyed 1:1. It is the terminal output of the
     ingestion pipeline:
 
-    EmbedStage ──yields──▶  Embedding(chunk_id, vector, model, dimension)     ← the DTO
+    EmbedStage ──yields──▶  Embedding(chunk_id, vector)     ← the DTO
                                   │
                                   ▼  EmbeddingResultSink → repo.store_embeddings([...])
                   ┌───────────────┴────────────────┐
               Postgres                          SQLite
-    INSERT INTO embeddings            INSERT INTO vec_chunks(chunk_id, embedding)
-    (id, chunk_id, vector ←pgvector,  (the sqlite-vec virtual table — exactly two
-     model, dimension)                 columns; id/model/dimension are dropped)
+    UPSERT INTO embeddings            INSERT OR REPLACE INTO vec_chunks
+    (chunk_id PK, vector ←pgvector)   (chunk_id PK, embedding — the sqlite-vec
+                                       virtual table)
 
-    - Postgres: PostgresRepository uses the base store_embeddings, which writes every DTO field to the embeddings table
-      (vector as a pgvector column, plus id, chunk_id, model, dimension).
-    - SQLite: SqliteRepository overrides store_embeddings and writes to the sqlite-vec virtual table vec_chunks instead 
-      (the embeddings table exists in the schema but stays empty there). Virtual tables have a fixed shape:
-      (chunk_id, embedding float[dim]), so only those two fields land; id/model/dimension are dropped on this 
-      backend.
+    Embedder identity (model / revision / dimension / …) is NOT per-row data: it lives once per
+    index in ``index_meta``, where the fingerprint gate validates it at ``open()``. (Per-row
+    ``id`` / ``model`` / ``dimension`` columns existed historically on Postgres only — schema v2
+    removed them; multiple models per corpus would be a designed "vector spaces" feature, not a
+    schema leniency.)
 
-    Why the DTO is "write-only": retrieval never reads Embedding objects back. Dense search (dense_knn) queries the vector 
-    index directly — sqlite-vec's MATCH / pgvector's cosine operator — and gets back (chunk_id, distance) pairs; the text 
-    and provenance are then hydrated from the chunks table. No code path ever materializes a stored vector back into an 
-    Embedding.    
+    Why the DTO is "write-only": retrieval never reads Embedding objects back. Dense search (dense_knn) queries the vector
+    index directly — sqlite-vec's MATCH / pgvector's cosine operator — and gets back (chunk_id, distance) pairs; the text
+    and provenance are then hydrated from the chunks table. No code path ever materializes a stored vector back into an
+    Embedding.
     """
 
-    id: str | None = None
     chunk_id: str
     vector: list[float]
-    model: str
-    dimension: int
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

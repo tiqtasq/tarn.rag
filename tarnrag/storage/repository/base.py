@@ -42,7 +42,6 @@ from tarnrag.contracts import (
     Document,
     DocumentFacts,
     DocumentFactsSource,
-    Embedding,
     JobStatusSource,
     RetrievalStore,
 )
@@ -270,20 +269,21 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             PrimaryKeyConstraint("method_id", "method_version", "chunk_id"),
             Index("idx_method_chunks_chunk", "chunk_id"),
         )
+        # Schema v2: embeddings are strictly 1:1 with chunks (``chunk_id`` IS the identity — the same
+        # shape as SQLite's ``vec_chunks``). Embedder identity (model/dimension/…) is index-wide and
+        # lives in ``index_meta``, never per row; the historical surrogate ``id`` + ``model`` /
+        # ``dimension`` columns are gone (multi-model corpora would be a designed vector-spaces
+        # feature, not schema slack).
         self.embeddings = Table(
             "embeddings",
             self.metadata,
-            Column("id", Text, primary_key=True),
             Column(
                 "chunk_id",
                 Text,
                 ForeignKey("chunks.chunk_id", ondelete="CASCADE"),
-                nullable=False,
+                primary_key=True,
             ),
             Column("vector", self._vector_type(), nullable=False),
-            Column("model", Text, nullable=False),
-            Column("dimension", Integer, nullable=False),
-            Index("idx_embeddings_chunk", "chunk_id"),
         )
         # Document-keyed status PROJECTION for the API (the queue itself is pgQueuer's).
         self.job_status = Table(
@@ -396,24 +396,9 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         async with self.engine.begin() as conn:
             return await self._insert_chunks(conn, None, chunks)
 
-    async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
-        rows, ids = [], []
-        for emb in embeddings:
-            eid = emb.id or str(uuid.uuid4())
-            ids.append(eid)
-            rows.append(
-                {
-                    "id": eid,
-                    "chunk_id": emb.chunk_id,
-                    "vector": self._encode_vector(emb.vector),
-                    "model": emb.model,
-                    "dimension": emb.dimension,
-                }
-            )
-        async with self.engine.begin() as conn:
-            if rows:
-                await conn.execute(insert(self.embeddings), rows)
-        return ids
+    # ``store_embeddings`` is dialect-owned (the ``ChunkStore`` port keeps it abstract here):
+    # SQLite writes the sqlite-vec ``vec_chunks`` virtual table; Postgres upserts the
+    # ``embeddings`` table (``ON CONFLICT (chunk_id)``). Both are idempotent per chunk.
 
     async def register_method_bundle(
         self, method_id: str, method_version: str, chunk_ids: list[str]
@@ -496,7 +481,7 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         return dict(
             (
                 await conn.execute(
-                    select(self.chunks.c.document_id, func.count(self.embeddings.c.id))
+                    select(self.chunks.c.document_id, func.count(self.embeddings.c.chunk_id))
                     .select_from(
                         self.chunks.join(
                             self.embeddings,

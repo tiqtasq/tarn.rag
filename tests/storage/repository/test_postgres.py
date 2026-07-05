@@ -61,10 +61,23 @@ async def _index(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=b, vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.0, 1.0, 0.0]),
     ])
     return a, b
+
+
+async def test_store_embeddings_upserts_on_chunk_id(pg_repo):
+    """Schema v2: ``chunk_id`` is the PK, so re-embedding a chunk REPLACES its vector in place
+    (``ON CONFLICT`` — the Postgres counterpart of SQLite's ``INSERT OR REPLACE``); a second row per
+    chunk is impossible by construction. Empty input is a no-op."""
+    a, _ = await _index(pg_repo)
+    assert await pg_repo.store_embeddings([]) == []  # the empty early-out
+    # Re-embed chunk a pointing the other way; the [0,0,1] query must now rank it first — one row, updated.
+    assert await pg_repo.store_embeddings([Embedding(chunk_id=a, vector=[0.0, 0.0, 1.0])]) == [a]
+    hits = await pg_repo.dense_knn([0.0, 0.0, 1.0], 5)
+    assert hits[0].chunk_id == a
+    assert [c.chunk_id for c in hits].count(a) == 1  # replaced, not duplicated
 
 
 async def test_dense_sparse_hydrate_roundtrip(pg_repo):

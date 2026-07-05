@@ -68,7 +68,7 @@ async def test_embedding_sink_persists(repo):
         Document(content="d", metadata={"source_id": "s1"}),
         [Chunk(parent_doc_id="", content="c", chunk_index=0, total_chunks=1, metadata={})],
     )
-    emb = Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)
+    emb = Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])
     assert (await _finalize(EmbeddingResultSink(repo), [emb])).persisted
     cands = await repo.dense_knn([1.0, 0.0, 0.0], k=1)
     assert cands[0].chunk_id == cid
