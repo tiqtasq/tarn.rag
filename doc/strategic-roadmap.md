@@ -39,7 +39,7 @@ grid); (b) give the reader a structured view of retrieved table chunks (render f
 cells). Measure: TAT-QA source-hit + attribution segmentation (table vs text) — target closing
 most of the 0.09–0.11 gaps.
 
-**P2. Make hybrid retrieval the shipped default**
+**P2. Make hybrid retrieval the shipped default** *(DONE 2026-07-05)*
 `RETRIEVAL_PIPELINE` still defaults to dense-only. Hybrid is free at query time (FTS index is
 built at ingest anyway), never lost on any segment measured, and is the default posture of every
 SOTA stack. Flip the default spec to `retrievers: [dense, sparse] + rrf`; keep dense-only one

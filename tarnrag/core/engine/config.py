@@ -221,14 +221,17 @@ class Settings(BaseSettings):
                 ],
             },
         )
-        # The retrieval composition (the analog of INGESTION_PIPELINE): dense-only by default; set
-        # ``retrievers`` + a ``fuser: {"class_name": "rrf"}`` for hybrid. Comparing methods = vary this.
+        # The retrieval composition (the analog of INGESTION_PIPELINE): HYBRID by default — dense KNN +
+        # sparse BM25, RRF-fused. Measured (doc/phases.md, post-MOTHRAG Options 1–2): never lost on any
+        # segment, +0.057 source-hit on layout/table corpora (tables +0.074), and free at query time
+        # (the FTS index is built at ingest regardless). Dense-only remains one config edit away
+        # (drop the sparse retriever + set ``fuser: identity``). Comparing methods = vary this.
         self.components.setdefault(
             RETRIEVAL_PIPELINE,
             {
                 "class_name": "retrieval_pipeline",
-                "retrievers": [{"class_name": "dense"}],
-                "fuser": {"class_name": "identity"},
+                "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+                "fuser": {"class_name": "rrf"},
             },
         )
         # The generation composition: a decomposition reasoner + provenance assembler by default. Phase 0
