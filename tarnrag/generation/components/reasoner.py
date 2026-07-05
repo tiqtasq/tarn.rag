@@ -25,6 +25,7 @@ from tarnrag.contracts import RetrievalResult
 from tarnrag.core.components import Component
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components._parsing import extract_json
+from tarnrag.generation.components._passages import passage_text
 from tarnrag.generation.context import GenerationContext
 from tarnrag.retrieval.types import Query
 
@@ -73,18 +74,26 @@ class Reasoner(Component):
     class Config(Component.Config):
         """Base reasoner config; concrete reasoners pin ``class_name``."""
 
+        # How a TABLE chunk is laid before the model (P1 PR-2): 'structured' renders it from its cells
+        # (values bound to headers — see ``_passages``); 'text' is the raw stored grid (the pre-P1
+        # behavior). Evals pin this explicitly — a measurement never inherits the default.
+        table_view: Literal["structured", "text"] = "structured"
+
     @abstractmethod
     async def reason(self, query: Query, ctx: GenerationContext) -> ReasonedAnswer:
         """Retrieve, read, and return the answer + supporting steps + the evidence drawn on."""
 
     # ---------------- shared helpers (used by every reasoner) ----------------
 
-    @staticmethod
-    def _numbered_passages(results: list[RetrievalResult]) -> str:
-        """The retrieved passages, numbered 1-based for citation (``(none retrieved)`` when empty)."""
+    def _numbered_passages(self, results: list[RetrievalResult]) -> str:
+        """The retrieved passages, numbered 1-based for citation (``(none retrieved)`` when empty) —
+        each rendered per the configured ``table_view`` (the shared ``passage_text``)."""
         if not results:
             return "(none retrieved)"
-        return "\n".join(f"[{i + 1}] {Reasoner._label(r)}{r.text}" for i, r in enumerate(results))
+        return "\n".join(
+            f"[{i + 1}] {Reasoner._label(r)}{passage_text(r, self.config.table_view)}"
+            for i, r in enumerate(results)
+        )
 
     @staticmethod
     def _label(result: RetrievalResult) -> str:

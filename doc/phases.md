@@ -528,3 +528,34 @@ Findings:
 4. Eval-script fix along the way: since P2 made hybrid the Settings default, the script's
    "DENSE" leg (which passed no spec) silently ran hybrid — it now pins an explicit dense-only
    spec.
+
+---
+
+## P1 PR-2 — structured table view for the reader: measurement (2026-07-06)
+
+The reader (and the grounding judge, kept in lockstep) now sees a TABLE chunk as its
+header-contextualized rendering (`passage_text` / `Table.contextual_text`) instead of the raw grid;
+`table_view ∈ {structured, text}` is pinned explicitly on both components in the eval (never
+inherited). Setup: native store, hybrid retrieval (pinned), `gpt-4o-mini`, n=334.
+
+| segment    | F1 text→struct | EM          | attrib          | cite        |
+|------------|----------------|-------------|-----------------|-------------|
+| table      | 0.532→0.497    | 0.389→0.368 | **0.874→0.895** | 0.732→0.711 |
+| table-text | 0.577→0.560    | 0.427→0.400 | **0.927→0.945** | 0.724→0.706 |
+| text       | 0.577→0.589    | 0.333→0.341 | 0.984→0.984     | 0.868→0.876 |
+| OVERALL    | 0.564→0.553    | 0.380→0.368 | **0.934→0.946** | 0.782→0.773 |
+
+Findings:
+
+1. **Attribution — the measured penalty PR-2 targets — improves on exactly the penalized
+   segments** (table +0.021, table-text +0.018, overall +0.012), with the text segment as a clean
+   control (0.984 both). The text-view leg reproduces the June baseline (0.874/0.532 vs 0.88/0.51)
+   on the new native store — a valid A/A.
+2. **F1/EM tick down ~0.01–0.035 on table segments** — at n=95/segment with gpt-4o-mini's
+   ±0.02–0.03 nondeterminism both movements sit at the noise edge; no reliable answer-quality
+   cost, no reliable gain. A larger-n run would resolve; not spent here.
+3. Ships with ``structured`` as the default view (the principled representation; the judge always
+   renders what the reader read). ``text`` remains one pinned config away for baselines.
+4. Keyless-run footgun worth remembering: ``OPENAI_LLM_KEY`` in ``.env`` reaches Settings fields,
+   **not** ``os.environ`` — an unexported key makes every LLM call fail silently through
+   ``_safe_answer`` (F1 0.000 / attrib 1.000 across the board is the signature).

@@ -29,7 +29,9 @@ from tarnrag.eval.layout import (
 )
 
 
-async def _run(limit: int | None, k: int, concurrency: int, attribution: bool, hybrid: bool) -> None:
+async def _run(
+    limit: int | None, k: int, concurrency: int, attribution: bool, hybrid: bool, table_view: str
+) -> None:
     settings = get_settings()
     corpus, queries = load_tatqa(stream_tatqa(limit), limit=limit)
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
@@ -40,22 +42,22 @@ async def _run(limit: int | None, k: int, concurrency: int, attribution: bool, h
     print(f"building TAT-QA corpus: {len(corpus)} elements -> {db_path} (cached) … ; {len(queries)} extractive queries")
     repo, embedder = await build_tatqa_index(corpus, settings, db_path=db_path)
     try:
-        if hybrid:
-            settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL
+        # Pin the retrieval spec EXPLICITLY either way — a measurement never inherits a default.
+        dense_only = {
+            "class_name": "retrieval_pipeline",
+            "retrievers": [{"class_name": "dense"}],
+            "fuser": {"class_name": "identity"},
+        }
+        settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL if hybrid else dense_only
         if attribution:  # generation + LLM-judged citations (needs an LLM); retrieval per `hybrid`
             llm = LanguageModel.create(settings.llm)
             print(f"scoring attribution through reader={settings.llm.provider}:{settings.llm.model}"
-                  f"{' + hybrid' if hybrid else ''} …")
-            overall, by_seg = await tatqa_attribution(queries, llm, repo, embedder, settings=settings, concurrency=concurrency)
+                  f"{' + hybrid' if hybrid else ''}, table_view={table_view} …")
+            overall, by_seg = await tatqa_attribution(
+                queries, llm, repo, embedder, settings=settings, table_view=table_view, concurrency=concurrency
+            )
             print("\n" + format_attribution(overall, by_seg))
-        else:  # retrieval-only source-hit: dense vs hybrid. Since P2, the *Settings default* is
-            # hybrid — so the dense leg must pin an explicit dense-only spec (passing nothing would
-            # silently run hybrid twice).
-            dense_only = {
-                "class_name": "retrieval_pipeline",
-                "retrievers": [{"class_name": "dense"}],
-                "fuser": {"class_name": "identity"},
-            }
+        else:  # retrieval-only source-hit: dense vs hybrid, each leg's spec pinned explicitly.
             for label, spec in (("DENSE", dense_only), ("HYBRID", HYBRID_RETRIEVAL)):
                 settings.components[RETRIEVAL_PIPELINE] = spec
                 report = await tatqa_source_hit(queries, repo, embedder, settings=settings, k=k, concurrency=concurrency)
@@ -75,8 +77,15 @@ def main(argv: list[str] | None = None) -> None:
              "(grounded_rate = attribution precision) + F1/EM, segmented by table/text — needs an LLM",
     )
     p.add_argument("--hybrid", action="store_true", help="retrieve with dense + BM25 (RRF) instead of dense-only")
+    p.add_argument(
+        "--table-view", choices=["structured", "text"], default=None,
+        help="how the reader + grounding judge see table chunks (REQUIRED with --attribution; "
+             "pinned explicitly — a measurement never inherits a default)",
+    )
     args = p.parse_args(argv)
-    asyncio.run(_run(args.limit, args.k, args.concurrency, args.attribution, args.hybrid))
+    if args.attribution and args.table_view is None:
+        p.error("--attribution requires --table-view (pin the view; don't inherit a default)")
+    asyncio.run(_run(args.limit, args.k, args.concurrency, args.attribution, args.hybrid, args.table_view or "structured"))
 
 
 if __name__ == "__main__":
