@@ -67,6 +67,14 @@ async def _index(repo):
     return a, b
 
 
+async def test_sparse_quoted_span_is_a_phrase_query(pg_repo):
+    """P3 parity: ``websearch_to_tsquery`` turns a double-quoted span into a phrase query — adjacency
+    required, so the reversed order does not match."""
+    a, _ = await _index(pg_repo)
+    assert [c.chunk_id for c in await pg_repo.sparse_search('"tank corrosion"', 5)] == [a]
+    assert await pg_repo.sparse_search('"corrosion tank"', 5) == []  # reversed ⇒ not a phrase
+
+
 async def test_store_embeddings_upserts_on_chunk_id(pg_repo):
     """Schema v2: ``chunk_id`` is the PK, so re-embedding a chunk REPLACES its vector in place
     (``ON CONFLICT`` — the Postgres counterpart of SQLite's ``INSERT OR REPLACE``); a second row per

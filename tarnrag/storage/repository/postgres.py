@@ -114,10 +114,15 @@ class PostgresRepository(DocumentRepository):
         self, query_text: str, k: int, filter: ChunkFilter | None = None
     ) -> list[Candidate]:
         """§8 sparse retrieval over a ``to_tsvector('english', text)`` GIN index (``ts_rank_cd``, best
-        first). ``plainto_tsquery`` parses the raw text safely; ``raw_score`` is ts_rank (higher better).
-        A ``filter`` is applied as in :meth:`dense_knn` (pre-filtered + over-fetched via ``_overfetch``)."""
+        first). ``websearch_to_tsquery`` parses the raw text safely AND honors exact-match intent — a
+        double-quoted span becomes a phrase query (adjacency-required, the Postgres counterpart of the
+        SQLite builder's required phrases); unquoted terms are AND-ed exactly as ``plainto_tsquery`` did.
+        Dotted identifiers (``6.4.2``) tokenize as single version/file lexemes on BOTH the index and the
+        query side (the same ``english`` parser), so they match exactly without special handling.
+        ``raw_score`` is ts_rank (higher better). A ``filter`` is applied as in :meth:`dense_knn`
+        (pre-filtered + over-fetched via ``_overfetch``)."""
         tsv = func.to_tsvector("english", self.chunks.c.text)
-        tsq = func.plainto_tsquery("english", query_text)
+        tsq = func.websearch_to_tsquery("english", query_text)
         score = func.ts_rank_cd(tsv, tsq).label("score")
         base = select(self.chunks.c.chunk_id, score).where(tsv.op("@@")(tsq))
         if filter is None:
