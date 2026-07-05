@@ -65,6 +65,16 @@ def test_default_generation_reasoner_is_decomposition():
     assert spec["reasoner"]["class_name"] == "decomposition"
 
 
+def test_default_retrieval_pipeline_is_hybrid():
+    """P2: the shipped default retrieval pipeline is HYBRID — dense + sparse, RRF-fused (measured: never
+    lost on any segment, biggest win on table/layout corpora, free at query time)."""
+    from tarnrag.core.engine.config import RETRIEVAL_PIPELINE
+
+    spec = Settings(_env_file=None).components[RETRIEVAL_PIPELINE]
+    assert [r["class_name"] for r in spec["retrievers"]] == ["dense", "sparse"]
+    assert spec["fuser"]["class_name"] == "rrf"
+
+
 def test_kwargs_override_nested():
     s = Settings(_env_file=None, embedding={"model": "k"}, EMBEDDING_DIMENSION=128)
     assert s.embedding.model == "k"
