@@ -76,6 +76,23 @@ An interactive console (needs the `console` extra):
 tarnrag config.json          # or: python -m tarnrag.console config.json
 ```
 
+## The quality profile
+
+The default retrieval pipeline is hybrid (dense + BM25, RRF-fused). For quality-sensitive
+deployments, add the local cross-encoder reranker (measured: table source-hit 0.853 → 0.926 on
+TAT-QA; costs ~seconds/query of CPU — see `doc/phases.md`):
+
+```yaml
+components:
+  retrieval_pipeline:
+    class_name: retrieval_pipeline
+    retrievers: [{class_name: dense}, {class_name: sparse}]
+    fuser: {class_name: rrf}
+    reranker: {class_name: cross_encoder, top_n: 20}
+```
+
+(Fetch the reranker model once with `scripts/fetch_model.py`; it loads lazily on first use.)
+
 ## Modes
 
 - **`MODE='embedded'`** (default) — runs the whole pipeline in-process over SQLite; each ingest call

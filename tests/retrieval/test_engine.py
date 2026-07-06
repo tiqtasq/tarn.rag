@@ -324,6 +324,29 @@ def _result(cid, score, **scores):
     )
 
 
+async def test_cross_encoder_reranker_caps_the_shortlist_and_tails_the_rest():
+    """P4: only the top-N incoming candidates are cross-encoder scored (bounds the CPU cost at corpus
+    scale); the tail keeps its first-pass order below the reranked shortlist."""
+
+    class _CE:
+        def __init__(self):
+            self.seen = None
+
+        def score(self, query, texts):
+            self.seen = list(texts)
+            return [0.1, 0.9][: len(texts)]  # second shortlist entry wins
+
+    ce = _CE()
+    ctx = RetrievalContext(store=None, embedder=None, cross_encoder=ce)
+    results = [_result("a", -1.0), _result("b", -2.0), _result("c", -3.0)]
+    out = await CrossEncoderReranker(CrossEncoderReranker.Config(top_n=2)).rerank(
+        Query(text="q"), results, ctx
+    )
+    assert ce.seen == ["a", "b"]  # only the capped shortlist reaches the model (text == cid here)
+    assert [r.chunk_id for r in out] == ["b", "a", "c"]  # reranked shortlist first, tail unchanged
+    assert "cross_encoder" not in out[2].component_scores  # the tail is never scored
+
+
 async def test_cross_encoder_reranker_rescores_and_reorders():
     """Unit: the cross-encoder score becomes the new score (re-ordering); first-pass scores are kept."""
     ce = _FakeCrossEncoder({"a": 0.2, "b": 0.95})
