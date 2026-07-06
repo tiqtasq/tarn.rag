@@ -73,7 +73,8 @@ async with await RetrievalEngine.create() as r:      # validates schema + embedd
 
 ```
 tarnrag/
-├── core/         # infra: components/ (Component + ComponentFactory + registry), engine/ (config,
+├── core/         # infra: components/ (a re-export shim over the standalone `bausatz` package —
+│                 #   Component + ComponentFactory + Registry live there now), engine/ (config,
 │                 #   Engine base, observability), resources/ (Embedder · CrossEncoder · LanguageModel),
 │                 #   exceptions, hashing
 ├── contracts/    # cross-boundary shared kernel: dtos · ports · results · structure · index_meta

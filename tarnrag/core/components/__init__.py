@@ -1,12 +1,14 @@
-"""Config-driven component framework: build classes from dict/JSON specs by a ``class_name`` tag.
+"""Config-driven component framework — now the standalone ``bausatz`` package (PyPI), re-exported
+here so every existing ``tarnrag.core.components`` import keeps working unchanged.
 
-A ``Component`` declares a typed nested ``Config`` and self-registers on import; ``ComponentFactory``
-turns a spec into an instance; ``Registry`` is the tag -> class table. See ``component.py`` for the
-registration mechanics.
+The framework (``Component`` + typed nested pydantic ``Config`` + self-registration by ``class_name``
+tag, ``ComponentFactory``'s recursive spec→instance construction, ``Registry``) was extracted to
+https://pypi.org/project/bausatz/ — its docs and tests live there. tarn.rag registers into the
+process-global factory (bausatz's default); the framework also supports scoped registries
+(``class MyBase(Component, factory=...)``) should co-resident libraries ever need them.
 """
 
-from tarnrag.core.components.registry import Registry
-from tarnrag.core.components.component import Component
-from tarnrag.core.components.component_factory import ComponentFactory
+from bausatz import Component, ComponentFactory, Registry
+from bausatz.registry import DuplicateTagError, UnknownTagError
 
-__all__ = ["Component", "ComponentFactory", "Registry"]
+__all__ = ["Component", "ComponentFactory", "Registry", "DuplicateTagError", "UnknownTagError"]

@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 
 from tarnrag.core.components import Component
-from tarnrag.core.components.registry import UnknownTagError
+from tarnrag.core.components import UnknownTagError
 from tarnrag.core.engine.config import (
     INGESTION_PIPELINE,
     EmbeddingSettings,
