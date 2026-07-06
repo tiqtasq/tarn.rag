@@ -2,13 +2,16 @@
 
 Core logic must work with ``observability=None`` (every call site guards ``self.obs``);
 ``NoOpObservability`` is the dev/test stand-in when you want a non-None instance with no
-effect. Real adapters (Prometheus, structured logging) are future work and live behind this
-ABC — the domain never imports them. Obs is held by the **worker** (compute metrics) and the
+effect. ``StructuredLoggingObservability`` (PP-3) is the first real adapter: one JSON line per
+event over stdlib logging — machine-parseable, zero dependencies. Prometheus remains future work.
+All adapters live behind this ABC — the domain never imports them. Obs is held by the **worker** (compute metrics) and the
 **orchestrator** (lifecycle: enqueue / status / persistence); stages stay pure (D6).
 """
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator
@@ -27,13 +30,14 @@ class Observability(ABC):
     @staticmethod
     def create(settings: ObservabilitySettings) -> Observability | None:
         """Build the configured observability adapter, or ``None`` when disabled (core logic guards every
-        ``self.obs`` call, so ``None`` = off). The adapter is selected by ``settings.type``; only
-        ``NoOpObservability`` ships today, so an *enabled* observability currently installs the no-op until
-        a real adapter (Prometheus, structured logging) is registered here — by design, not an oversight."""
+        ``self.obs`` call, so ``None`` = off). Selected by ``settings.type``:
+        ``"structured_logging"`` → JSON-lines over stdlib logging (PP-3); anything else (including the
+        not-yet-implemented ``"prometheus"``) falls back to the no-op."""
         if not settings.enabled:
             return None
-        # When real adapters land, dispatch on settings.type here; the no-op is the only one for now.
-        return NoOpObservability()
+        if settings.type == "structured_logging":
+            return StructuredLoggingObservability()
+        return NoOpObservability()  # prometheus etc. dispatch here when they land
 
     @abstractmethod
     async def log(self, level: str, message: str, **context: Any) -> None:
@@ -72,3 +76,30 @@ class NoOpObservability(Observability):
 
     def gauge(self, name: str, value: float, tags: dict[str, str] | None = None) -> None:
         pass
+
+
+class StructuredLoggingObservability(Observability):
+    """JSON-lines adapter (PP-3): every metric and log event becomes ONE machine-parseable JSON line
+    on a stdlib logger (``tarnrag.observability``) — greppable in dev, shippable to any log pipeline
+    in production, zero new dependencies. Enable with ``OBSERVABILITY__ENABLED=true
+    OBSERVABILITY__TYPE=structured_logging``."""
+
+    _LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
+
+    def __init__(self, logger_name: str = "tarnrag.observability") -> None:
+        self._logger = logging.getLogger(logger_name)
+
+    def _emit(self, level: int, payload: dict[str, Any]) -> None:
+        self._logger.log(level, json.dumps(payload, sort_keys=True, default=str))
+
+    async def log(self, level: str, message: str, **context: Any) -> None:
+        self._emit(
+            self._LEVELS.get(level, logging.INFO),
+            {"event": "log", "level": level, "message": message, **context},
+        )
+
+    def counter(self, name: str, value: int = 1, tags: dict[str, str] | None = None) -> None:
+        self._emit(logging.INFO, {"event": "counter", "name": name, "value": value, "tags": tags or {}})
+
+    def gauge(self, name: str, value: float, tags: dict[str, str] | None = None) -> None:
+        self._emit(logging.INFO, {"event": "gauge", "name": name, "value": value, "tags": tags or {}})

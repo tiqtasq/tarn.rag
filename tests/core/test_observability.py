@@ -44,3 +44,48 @@ def test_create_returns_none_when_disabled_else_the_configured_adapter():
 
     assert Observability.create(ObservabilitySettings(enabled=False)) is None
     assert isinstance(Observability.create(ObservabilitySettings(enabled=True)), NoOpObservability)
+
+
+# ---------------- the structured-logging adapter (PP-3) ----------------
+
+
+async def test_structured_logging_emits_one_json_line_per_event(caplog):
+    import json
+    import logging
+
+    from tarnrag.core.engine.observability import StructuredLoggingObservability
+
+    obs = StructuredLoggingObservability()
+    with caplog.at_level(logging.INFO, logger="tarnrag.observability"):
+        obs.counter("ingest.documents", 3, tags={"mode": "embedded"})
+        obs.gauge("stage.Embed.seconds", 1.25)
+        await obs.log("warning", "slow stage", stage="Embed", ms=1250)
+    events = [json.loads(r.message) for r in caplog.records]
+    assert events[0] == {"event": "counter", "name": "ingest.documents", "value": 3, "tags": {"mode": "embedded"}}
+    assert events[1] == {"event": "gauge", "name": "stage.Embed.seconds", "value": 1.25, "tags": {}}
+    assert events[2] == {"event": "log", "level": "warning", "message": "slow stage", "stage": "Embed", "ms": 1250}
+    assert caplog.records[2].levelno == logging.WARNING  # level mapped onto the stdlib logger
+
+
+async def test_structured_logging_timer_and_unknown_level(caplog):
+    import json
+    import logging
+
+    from tarnrag.core.engine.observability import StructuredLoggingObservability
+
+    obs = StructuredLoggingObservability()
+    with caplog.at_level(logging.INFO, logger="tarnrag.observability"):
+        with obs.timer("stage.Chunk.process"):
+            pass
+        await obs.log("bogus-level", "still logged")  # unknown level -> INFO, never dropped
+    timer_event = json.loads(caplog.records[0].message)
+    assert timer_event["event"] == "gauge" and timer_event["name"] == "stage.Chunk.process.seconds"
+    assert caplog.records[1].levelno == logging.INFO
+
+
+def test_create_dispatches_structured_logging():
+    from tarnrag.core.engine.config import ObservabilitySettings
+    from tarnrag.core.engine.observability import Observability, StructuredLoggingObservability
+
+    obs = Observability.create(ObservabilitySettings(enabled=True, type="structured_logging"))
+    assert isinstance(obs, StructuredLoggingObservability)
