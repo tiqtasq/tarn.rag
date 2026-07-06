@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from tarnrag.contracts import Candidate, ChunkFilter, RetrievalStore
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.core.parsing import extract_json
 from tarnrag.core.resources.cross_encoder import CrossEncoder
 from tarnrag.core.resources.embedder import Embedder

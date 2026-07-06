@@ -19,7 +19,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.text import looks_like_identifier, quoted_spans
 from tarnrag.generation.components._passages import passage_text
 from tarnrag.generation.components.reasoner import ReasonedAnswer, Reasoner

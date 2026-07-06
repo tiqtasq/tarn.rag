@@ -92,7 +92,8 @@ small embedders vs gte-small on TAT-QA + pool; ship the best offline default.
 **P8b. Generic branching (`Router`) component family** *(added 2026-07-05, from review discussion)*
 The N+2 pattern — a selector spec + `routes: dict[value → component spec]` + a `default` spec —
 already exists twice, specialized (`RoutingRetrievalPipeline`, `LoadAndParse`'s extractor routes).
-Generalize it as: a small shared base in `core/components` owning the config shape, child
+Generalize it as: a small shared base owning the config shape (a candidate for the standalone
+`bausatz` package itself), child
 construction, and lookup; **thin per-seam subclasses** (`routing_chunker` first) so each stays a
 typed member of the family it branches over (one generic duck-typed class would erase the typed
 seams and can't bridge sync/async); seam-specific selectors, starting with a deterministic

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import LICENSE_POLICY, RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder

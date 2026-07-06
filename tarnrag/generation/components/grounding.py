@@ -28,7 +28,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import Component, ComponentFactory
+from bausatz import Component, ComponentFactory
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components._parsing import extract_json
 from tarnrag.generation.components._passages import passage_text

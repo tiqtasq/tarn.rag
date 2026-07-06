@@ -20,7 +20,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components.grounding import GroundingChecker, Verdict
 from tarnrag.generation.components.reasoner import _READ_SYSTEM, ReasonedAnswer, Reasoner

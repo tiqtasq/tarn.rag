@@ -1,6 +1,6 @@
 """The RoutingRetrievalPipeline: classify a query, then dispatch to the matching sub-pipeline."""
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.retrieval import (
     GenericQueryClassifier,
     Query,

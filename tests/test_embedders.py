@@ -12,7 +12,7 @@ import json
 import numpy as np
 import pytest
 
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.core.resources.embedder import Embedder, HashEmbedder, OnnxEmbedder
 from tarnrag.core.resources.embedder_api import GeminiEmbedder, OpenAIEmbedder, VoyageEmbedder

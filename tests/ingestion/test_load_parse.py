@@ -60,7 +60,7 @@ def test_extractors_are_long_lived_built_once():
 def test_extractors_build_through_the_factory_when_built_via_components():
     # via the framework (ComponentFactory.create -> _build_children): the container's children are
     # already built, so process needs no on-the-fly instantiation for a routed kind.
-    from tarnrag.core.components import ComponentFactory
+    from bausatz import ComponentFactory
 
     stage = ComponentFactory.get().create({"class_name": "LoadAndParse"})
     assert isinstance(stage, LoadAndParseStage)

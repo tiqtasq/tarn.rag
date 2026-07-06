@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from tarnrag.contracts import Annotation, ChunkProvenance, Element, Span, StructuredDocument
 from tarnrag.core.hashing import compute_content_hash
-from tarnrag.core.components import Component
+from bausatz import Component
 
 
 class Chunker(Component):
