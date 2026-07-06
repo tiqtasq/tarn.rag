@@ -173,8 +173,8 @@ scripts/run_benchmarks.py · run_layout_eval.py   # QA-benchmark + TAT-QA layout
   `settings.database.document_url` (document/chunk/embedding storage). Never conflate them.
 - **Observability is optional.** Core logic must work with `observability=None` (guard every `self.obs`
   call); `Observability.create(settings.observability)` returns the configured adapter or `None` when
-  disabled. Only `NoOpObservability` ships today, so an *enabled* observability installs the no-op until a
-  real adapter (Prometheus, structured logging) is registered there — by design, not an oversight.
+  disabled. Adapters: `structured_logging` (JSON-lines over stdlib logging — one machine-parseable line
+  per metric/log event); any other `type` (incl. the not-yet-implemented `prometheus`) installs the no-op.
 - **Retrieval is config-driven Components.** `RetrievalEngine.search` delegates to a `Searcher` built from
   `Settings.components[RETRIEVAL_PIPELINE]` — a `RetrievalPipeline` (parallel `Retriever`s {dense/sparse} →
   `Fuser` {identity/rrf, `(score desc, chunk_id asc)` tie-break} → hydrate → optional `Merger` {auto-merge}
