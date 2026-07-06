@@ -559,3 +559,33 @@ Findings:
 4. Keyless-run footgun worth remembering: ``OPENAI_LLM_KEY`` in ``.env`` reaches Settings fields,
    **not** ``os.environ`` — an unexported key makes every LLM call fail silently through
    ``_safe_answer`` (F1 0.000 / attrib 1.000 across the board is the signature).
+
+---
+
+## P4 — reranker sweep → the quality profile (2026-07-06)
+
+Setup: TAT-QA source-hit@10, n=334, native store, every leg's spec pinned (incl. `top_n`).
+
+| leg                        | table | table-text | text  | overall |
+|----------------------------|------:|-----------:|------:|--------:|
+| DENSE                      | 0.768 |      0.864 | 0.938 |   0.865 |
+| HYBRID (shipped default)   | 0.853 |      0.945 | 0.953 |   0.922 |
+| HYBRID + cross_encoder (uncapped) | 0.895 | 0.964 | 0.946 | 0.937 |
+| HYBRID + cross_encoder (top_n=20) | **0.926** | **0.964** | 0.946 | **0.946** |
+| HYBRID + llm_judge (top_n=20)     | 0.874 | 0.936 | 0.953 |   0.925 |
+
+Findings:
+
+1. **The local cross-encoder wins decisively** (+0.024 overall, +0.073 table over hybrid) and the
+   **LLM judge is noise-level** (+0.003) while costing an API call per query — the offline model
+   beats it on every axis. Fits the offline differentiator.
+2. **Capping helps quality, not just cost**: uncapped, the CE reranks the whole fused shortlist
+   (~60 hydrated candidates) and promotes junk from the deep tail where it's miscalibrated
+   (table 0.895); capped to the top-20 it works only where the first pass is already good
+   (0.926) — and runs ~2.5× faster (26 min vs ~70 min for 334 queries on this CPU;
+   `CrossEncoderReranker` now has `top_n=20`, parity with `llm_judge`).
+3. **The table retrieval gap is essentially closed**: 0.926 vs 0.946 text (was 0.779 vs 0.938
+   dense-only in June).
+4. **The quality profile** = the shipped hybrid default + `reranker: {class_name: cross_encoder,
+   top_n: 20}` (README snippet). The lean default stays reranker-free: ~2–4s/query of CPU rerank
+   is a real cost; the profile is one config edit.

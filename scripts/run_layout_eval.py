@@ -30,7 +30,8 @@ from tarnrag.eval.layout import (
 
 
 async def _run(
-    limit: int | None, k: int, concurrency: int, attribution: bool, hybrid: bool, table_view: str
+    limit: int | None, k: int, concurrency: int, attribution: bool, hybrid: bool, table_view: str,
+    rerank: list[str],
 ) -> None:
     settings = get_settings()
     corpus, queries = load_tatqa(stream_tatqa(limit), limit=limit)
@@ -57,8 +58,15 @@ async def _run(
                 queries, llm, repo, embedder, settings=settings, table_view=table_view, concurrency=concurrency
             )
             print("\n" + format_attribution(overall, by_seg))
-        else:  # retrieval-only source-hit: dense vs hybrid, each leg's spec pinned explicitly.
-            for label, spec in (("DENSE", dense_only), ("HYBRID", HYBRID_RETRIEVAL)):
+        else:  # retrieval-only source-hit: dense vs hybrid (vs reranked), each leg's spec pinned explicitly.
+            legs = [("DENSE", dense_only), ("HYBRID", HYBRID_RETRIEVAL)]
+            for rr in rerank:  # P4: a second-pass reranker on top of the hybrid shortlist.
+                # The spec is pinned FULLY (top_n included) — a measurement never inherits a default.
+                legs.append((
+                    f"HYBRID+{rr.upper()}",
+                    {**HYBRID_RETRIEVAL, "reranker": {"class_name": rr, "top_n": 20}},
+                ))
+            for label, spec in legs:
                 settings.components[RETRIEVAL_PIPELINE] = spec
                 report = await tatqa_source_hit(queries, repo, embedder, settings=settings, k=k, concurrency=concurrency)
                 print("\n" + format_source_hit(report, tag=f"[{label}]"))
@@ -82,10 +90,18 @@ def main(argv: list[str] | None = None) -> None:
         help="how the reader + grounding judge see table chunks (REQUIRED with --attribution; "
              "pinned explicitly — a measurement never inherits a default)",
     )
+    p.add_argument(
+        "--rerank", action="append", choices=["cross_encoder", "llm_judge"], default=[],
+        help="add a HYBRID+<reranker> source-hit leg (repeatable; spec pinned explicitly per leg). "
+             "cross_encoder needs the local ONNX model; llm_judge needs an LLM key.",
+    )
     args = p.parse_args(argv)
     if args.attribution and args.table_view is None:
         p.error("--attribution requires --table-view (pin the view; don't inherit a default)")
-    asyncio.run(_run(args.limit, args.k, args.concurrency, args.attribution, args.hybrid, args.table_view or "structured"))
+    asyncio.run(_run(
+        args.limit, args.k, args.concurrency, args.attribution, args.hybrid,
+        args.table_view or "structured", args.rerank,
+    ))
 
 
 if __name__ == "__main__":
