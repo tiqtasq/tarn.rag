@@ -101,7 +101,32 @@ DAG stays linear (no conditional edges, no fan-in). Route decisions are recorded
 trace) like the two existing instances. First consumer: `routing_chunker` (different chunker
 configs per document kind); retrofit of the two precedents only if it fits without contortion.
 
+**PP. Production-pattern parity cluster** *(added 2026-07-06, from a production-RAG checklist review)*
+The reference pattern: classify → metadata-filter → hybrid+rerank → sections → answerability gate →
+structured-data routing → full logging → failure-mode regression sets. tarn.rag ships 3 (hybrid+rerank,
+P2–P4) and 4 (sections+provenance) outright; the gaps, smallest first:
+
+- **PP-1 Intent-taxonomy classifier** — a deterministic `QueryClassifier` labeling
+  lookup / comparison / aggregation / summarization / troubleshooting / policy, so routers (retrieval
+  today, per-class reasoners once P8b lands) can dispatch per class. *(easy — done with this entry)*
+- **PP-2 Answerability gate** — a wrapper reasoner that checks the query's exact-match cues
+  (identifiers / quoted spans, `core.text`) are covered by the retrieved evidence BEFORE spending the
+  read; refuses (abstains) instead of guessing. Calibrate on MuSiQue `should_abstain`. *(easy v1)*
+- **PP-3 Structured-logging observability adapter** — the seam exists but only ships a no-op; a JSON-lines
+  adapter makes `enabled=true` real. Full per-query trace/latency/token logging remains P10+S7. *(easy v1)*
+- **PP-4 Failure-mode regression sets** — named offline `EvalSet`s per failure mode (ambiguous acronyms,
+  permission-bound docs, should-refuse; table-heavy ≈ TAT-QA already), run in CI with the hash embedder.
+  Formal scorecard remains S4. *(easy, incremental)*
+- **PP-5 Metadata filter axes** — tenant / region / effective-date as first-class `ChunkFilter` axes +
+  policy components (the license filter is the template). Schema change → follows the B2 chunk-metadata
+  decision and the D1 migration stance. Note: per-tenant *stores* are the embedded model's stronger answer.
+- **PP-6 Structured-data routing** — the real architectural gap: numeric/aggregate queries to tooling.
+  In-library first step: a deterministic `table_lookup` reasoner over the persisted `table_cells`
+  (TAT-QA's filtered-out arithmetic class is the ready-made eval). General SQL/API routing belongs to the
+  application layer (tiqtasq.backend).
+
 ### Tier 3: systems performance
+
 
 **P9. Distributed batching parity** — claim-side batching in the pgQueuer adapter (group claimed
 jobs by stage in a short window) so the measured 2.6× embedded ingest win applies to the

@@ -155,3 +155,65 @@ class StructuralQueryClassifier(QueryClassifier):
             },
         )
 
+
+# The intent taxonomy (PP-1: the production-pipeline classes) with compact, overridable cue lists.
+# Ordered by routing consequence: aggregation first (the structured-data gate — numeric questions
+# should not ride the narrative path), then comparison / troubleshooting / policy / summarization;
+# no cue ⇒ lookup. Multi-word cues match as substrings; single words on word boundaries.
+_INTENT_CUES: dict[str, tuple[str, ...]] = {
+    "aggregation": (
+        "how many", "how much", "count", "total", "sum", "average", "mean", "percentage",
+        "percent", "ratio", "rank", "largest", "smallest", "highest", "lowest",
+    ),
+    "comparison": (
+        "compare", "comparison", "versus", "vs", "difference between", "differ", "better than",
+        "worse than", "more than", "less than",
+    ),
+    "troubleshooting": (
+        "error", "errors", "fail", "fails", "failed", "failure", "not working", "does not work",
+        "fix", "troubleshoot", "issue", "warning", "crash", "crashes",
+    ),
+    "policy": (
+        "allowed", "permitted", "policy", "policies", "compliance", "compliant", "must", "shall",
+        "required", "prohibited", "regulation", "regulations",
+    ),
+    "summarization": (
+        "summarize", "summary", "overview", "describe", "outline", "list all", "main points",
+    ),
+}
+
+
+class IntentQueryClassifier(QueryClassifier):
+    """Domain-independent intent taxonomy (PP-1): label each query
+    ``lookup | comparison | aggregation | summarization | troubleshooting | policy`` from
+    deterministic keyword cues, so a router dispatches per class — numeric/aggregate questions to a
+    structured-data route (once one exists), troubleshooting to a lexical-heavy pipeline, etc. The
+    first matching intent in the (consequence-ordered) cue map wins; no cue ⇒ ``lookup``. The matched
+    cues are recorded as an annotation. LLM-free, C++-portable; cues are config (``None`` ⇒ built-in)."""
+
+    class Config(QueryClassifier.Config):
+        class_name: Literal["intent"] = "intent"
+        lookup_type: str = "lookup"  # the no-cue fallback label
+        cues: dict[str, list[str]] | None = None  # intent -> cue list; None ⇒ the built-in taxonomy
+
+    config: IntentQueryClassifier.Config
+
+    def classify(self, query: Query, ctx: RetrievalContext) -> None:
+        cues = (
+            {k: tuple(v) for k, v in self.config.cues.items()}
+            if self.config.cues is not None
+            else _INTENT_CUES
+        )
+        text = " ".join(query.text.lower().split())
+        words = frozenset(w.strip(string.punctuation) for w in text.split())
+        label, matched = self.config.lookup_type, []
+        for intent, intent_cues in cues.items():  # first (most consequential) matching intent wins
+            hits = [
+                c for c in intent_cues if (" " in c and c in text) or (" " not in c and c in words)
+            ]
+            if hits:
+                label, matched = intent, hits
+                break
+        query.query_type = label
+        self._annotate(query, "query_classification", {"label": label, "matched_cues": matched})
+
