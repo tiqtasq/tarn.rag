@@ -40,11 +40,14 @@ class ReasonedStep:
 
 @dataclass
 class ReasonedAnswer:
-    """A ``Reasoner``'s output: the answer, the steps (citing evidence by index), and the evidence."""
+    """A ``Reasoner``'s output: the answer, the steps (citing evidence by index), and the evidence.
+    ``abstained`` marks a refusal made *before* the read (the answerability gate) — the pipeline
+    surfaces it as an abstention without running verification."""
 
     answer: str
     steps: list[ReasonedStep]
     evidence: list[RetrievalResult]
+    abstained: bool = False
 
 
 # The read prompt — answer using ONLY the numbered passages, citing per claim. Shared by the single-hop
