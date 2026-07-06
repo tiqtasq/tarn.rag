@@ -8,7 +8,7 @@ effective-date filter axis (roadmap PP-5).
 import json
 
 from tarnrag.contracts import Chunk, Document, Embedding
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.eval import EvalQuery, EvalSet, evaluate_pipeline
 from tarnrag.generation import GenerationContext, GenerationPipeline
 from tarnrag.retrieval import RetrievalContext, RetrievalPipeline

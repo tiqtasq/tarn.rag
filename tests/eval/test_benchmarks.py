@@ -257,7 +257,7 @@ async def test_run_over_corpus_concurrency_preserves_results(tmp_path):
 
 
 def test_hybrid_retrieval_spec_builds():
-    from tarnrag.core.components import ComponentFactory
+    from bausatz import ComponentFactory
     from tarnrag.eval.benchmark_runner import HYBRID_RETRIEVAL
     from tarnrag.retrieval.pipeline.pipeline import RetrievalPipeline
 

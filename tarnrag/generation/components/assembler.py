@@ -12,7 +12,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from typing import Literal
 
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.generation.components.reasoner import ReasonedAnswer
 from tarnrag.generation.types import Citation, ProofStep
 

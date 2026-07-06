@@ -13,7 +13,7 @@ from collections.abc import Iterator, Mapping
 from typing import Any, Literal
 
 from tarnrag.contracts import PipelineItem
-from tarnrag.core.components import Component, ComponentFactory
+from bausatz import Component, ComponentFactory
 
 
 class PipelineStage(Component):

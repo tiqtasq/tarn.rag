@@ -19,7 +19,7 @@ from typing import Literal
 from pydantic import Field
 
 from tarnrag.contracts import Candidate
-from tarnrag.core.components import Component
+from bausatz import Component
 
 
 @dataclass

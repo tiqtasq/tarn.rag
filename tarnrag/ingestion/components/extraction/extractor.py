@@ -18,7 +18,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from tarnrag.contracts import Element, StructuredDocument
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.core.hashing import compute_content_hash
 
 

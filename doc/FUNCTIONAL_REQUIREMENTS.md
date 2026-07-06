@@ -451,7 +451,7 @@ CREATE INDEX idx_job_status_document ON job_status (document_id);
 
 ### Stage base classes (`tarnrag/ingestion/pipeline/pipeline.py`)
 
-ABCs, and config-driven **`Component`s** (`tarnrag/core/components`): each stage declares a typed
+ABCs, and config-driven **`Component`s** (the standalone `bausatz` package): each stage declares a typed
 nested `Config` (a pydantic model that pins a `class_name` tag plus the stage's fields) and is
 built from it — `ChunkStage(ChunkStage.Config(chunk_size=256))`, or from a dict/JSON spec via
 `ComponentFactory.create({"class_name": "Chunk", …})`. Field validation lives on the `Config`

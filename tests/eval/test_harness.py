@@ -3,7 +3,7 @@
 import pytest
 
 from tarnrag.contracts import Chunk, Document, Embedding
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.eval import (
     EvalQuery,
     EvalSet,

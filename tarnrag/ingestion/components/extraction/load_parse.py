@@ -24,7 +24,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import PipelineItem
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.ingestion.components.extraction.extractor import Extractor, Source
 from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 

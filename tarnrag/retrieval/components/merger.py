@@ -15,7 +15,7 @@ from typing import Literal
 from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.retrieval.components.retriever import RetrievalContext
 
 

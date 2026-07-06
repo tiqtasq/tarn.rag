@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tarnrag.core.components import Component, ComponentFactory
+from bausatz import Component, ComponentFactory
 from tarnrag.generation.components.assembler import EvidenceAssembler
 from tarnrag.generation.components.grounding import GroundingChecker, Verdict
 from tarnrag.generation.components.reasoner import Reasoner

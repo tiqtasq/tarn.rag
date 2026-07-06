@@ -23,7 +23,7 @@ from abc import abstractmethod
 from typing import Any, Literal
 
 from tarnrag.contracts import Annotation, Geometry
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.core.text import looks_like_identifier
 from tarnrag.retrieval.components.retriever import RetrievalContext
 from tarnrag.retrieval.types import Query

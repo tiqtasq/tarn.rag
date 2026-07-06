@@ -30,7 +30,7 @@ GenerationEngine.create() → await answer → reason (retrieve↔read) → grou
 Design specs: `doc/FUNCTIONAL_REQUIREMENTS.md` (ingestion), `doc/ModusQ_RetrievalSubsystemSpec.md` +
 `doc/retrieval-architecture-design.md` (retrieval), and `doc/generation-architecture-design.md` (generation).
 Retrieval methods, generation steps, extractors, chunkers, and enrichers are all config-driven **Components**
-(`core/components`) composed by spec under `Settings.components`.
+(the standalone [`bausatz`](https://pypi.org/project/bausatz/) package — `Component` + `ComponentFactory` + `Registry`, imported directly) composed by spec under `Settings.components`.
 
 ## Using the engines
 
@@ -73,8 +73,7 @@ async with await RetrievalEngine.create() as r:      # validates schema + embedd
 
 ```
 tarnrag/
-├── core/         # infra: components/ (a re-export shim over the standalone `bausatz` package —
-│                 #   Component + ComponentFactory + Registry live there now), engine/ (config,
+├── core/         # infra: engine/ (config,
 │                 #   Engine base, observability), resources/ (Embedder · CrossEncoder · LanguageModel),
 │                 #   exceptions, hashing
 ├── contracts/    # cross-boundary shared kernel: dtos · ports · results · structure · index_meta
