@@ -23,6 +23,7 @@ from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
 from tarnrag.generation.components.answerability import AnswerabilityGateReasoner
 from tarnrag.generation.components.grounded_retrieval import GroundedRetrievalReasoner
+from tarnrag.generation.components.table_lookup import TableLookupReasoner
 from tarnrag.generation.components.reasoner import (
     DecompositionReasoner,
     IterativeReasoner,
@@ -43,6 +44,7 @@ __all__ = [
     "DecompositionReasoner",
     "GroundedRetrievalReasoner",
     "AnswerabilityGateReasoner",
+    "TableLookupReasoner",
     "ReasonedAnswer",
     "ReasonedStep",
     "EvidenceAssembler",

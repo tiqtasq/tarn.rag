@@ -589,3 +589,33 @@ Findings:
 4. **The quality profile** = the shipped hybrid default + `reranker: {class_name: cross_encoder,
    top_n: 20}` (README snippet). The lean default stays reranker-free: ~2–4s/query of CPU rerank
    is a real cost; the profile is one config edit.
+
+---
+
+## PP-6 — table_lookup: deterministic numeric answers from cells (2026-07-06)
+
+The production pattern's "route structured-data questions to tooling, not the reader" — in-library:
+a `table_lookup` reasoner computes change / %-change / sum / average over one row's year-columns
+straight from the persisted `table_cells` (accounting-format parsing, later-minus-earlier by year
+value regardless of column order), cites the table chunk, and DELEGATES anything it can't resolve
+confidently (cross-row, nested, text-sourced derivations). Eval: the TAT-QA **arithmetic** slice
+(n=253 — previously filtered out entirely), numeric EM at gold precision (2dp), specs fully pinned.
+
+| leg                                        | attempted | EM attempted | EM overall | LLM calls |
+|--------------------------------------------|----------:|-------------:|-----------:|----------:|
+| table_lookup only (no fallback)            | 95 (37.5%)|    **0.432** |      0.162 |     **0** |
+| reader only (single_hop, structured tables)|       253 |        0.261 |      0.261 |       253 |
+| **composed: table_lookup → reader fallback**|      253 |        0.304 |  **0.304** |       158 |
+
+Findings:
+
+1. **Where the deterministic path fires, it is 1.65× more accurate than the reader** (0.432 vs
+   0.261) at zero cost — and it never guesses: the 37.5% attempt-rate is the conservative resolve
+   gate abstaining on derivations outside its op set.
+2. **The composition beats the reader on accuracy AND cost**: +4.3 EM pts overall while cutting
+   LLM calls by 37.5%. This is the shipped default for the component
+   (``fallback: single_hop``); ``fallback: null`` is the LLM-free / abstaining posture.
+3. Levers left on the table (recorded, not spent): pct-change sign conventions (TAT-QA golds are
+   inconsistent — some magnitude-based), count questions, cross-row derivations, row-matching
+   recall. The reader's own 0.261 confirms LLM grid arithmetic is weak — routing was the right
+   call.

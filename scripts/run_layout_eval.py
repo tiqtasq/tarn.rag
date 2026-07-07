@@ -20,6 +20,9 @@ from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import HYBRID_RETRIEVAL
 from tarnrag.eval.layout import (
     build_tatqa_index,
+    format_numeric,
+    load_tatqa_numeric,
+    tatqa_numeric,
     format_attribution,
     format_source_hit,
     load_tatqa,
@@ -31,10 +34,11 @@ from tarnrag.eval.layout import (
 
 async def _run(
     limit: int | None, k: int, concurrency: int, attribution: bool, hybrid: bool, table_view: str,
-    rerank: list[str],
+    rerank: list[str], numeric: bool,
 ) -> None:
     settings = get_settings()
-    corpus, queries = load_tatqa(stream_tatqa(limit), limit=limit)
+    rows = stream_tatqa(limit)
+    corpus, queries = load_tatqa(rows, limit=limit)
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
     if settings.embedding.contextualize_tables:  # a distinct index — the embed text differs (P1)
         emb_tag += "_ctx"
@@ -50,7 +54,15 @@ async def _run(
             "fuser": {"class_name": "identity"},
         }
         settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL if hybrid else dense_only
-        if attribution:  # generation + LLM-judged citations (needs an LLM); retrieval per `hybrid`
+        if numeric:  # PP-6: the arithmetic slice through table_lookup — deterministic, LLM-free
+            nq = load_tatqa_numeric(rows, limit=limit)
+            print(f"scoring {len(nq)} arithmetic questions through table_lookup (no LLM) …")
+            spec = {"class_name": "table_lookup", "fallback": None, "top_k": k, "row_coverage": 0.5}
+            report = await tatqa_numeric(
+                nq, repo, embedder, settings=settings, reasoner_spec=spec, k=k, concurrency=concurrency
+            )
+            print("\n" + format_numeric(report, tag="[HYBRID]" if hybrid else "[DENSE]"))
+        elif attribution:  # generation + LLM-judged citations (needs an LLM); retrieval per `hybrid`
             llm = LanguageModel.create(settings.llm)
             print(f"scoring attribution through reader={settings.llm.provider}:{settings.llm.model}"
                   f"{' + hybrid' if hybrid else ''}, table_view={table_view} …")
@@ -95,12 +107,14 @@ def main(argv: list[str] | None = None) -> None:
         help="add a HYBRID+<reranker> source-hit leg (repeatable; spec pinned explicitly per leg). "
              "cross_encoder needs the local ONNX model; llm_judge needs an LLM key.",
     )
+    p.add_argument("--numeric", action="store_true",
+                   help="PP-6: run the arithmetic slice through the table_lookup reasoner (no LLM)")
     args = p.parse_args(argv)
     if args.attribution and args.table_view is None:
         p.error("--attribution requires --table-view (pin the view; don't inherit a default)")
     asyncio.run(_run(
         args.limit, args.k, args.concurrency, args.attribution, args.hybrid,
-        args.table_view or "structured", args.rerank,
+        args.table_view or "structured", args.rerank, args.numeric,
     ))
 
 

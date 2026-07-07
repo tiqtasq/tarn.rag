@@ -121,7 +121,8 @@ P2–P4) and 4 (sections+provenance) outright; the gaps, smallest first:
 - **PP-5 Metadata filter axes** — tenant / region / effective-date as first-class `ChunkFilter` axes +
   policy components (the license filter is the template). Schema change → follows the B2 chunk-metadata
   decision and the D1 migration stance. Note: per-tenant *stores* are the embedded model's stronger answer.
-- **PP-6 Structured-data routing** — the real architectural gap: numeric/aggregate queries to tooling.
+- **PP-6 Structured-data routing** *(DONE 2026-07-06 — `table_lookup`; measured in phases.md: composed
+  lookup→reader = +4.3 EM pts over reader-only at 37.5% fewer LLM calls)* — was: the real architectural gap: numeric/aggregate queries to tooling.
   In-library first step: a deterministic `table_lookup` reasoner over the persisted `table_cells`
   (TAT-QA's filtered-out arithmetic class is the ready-made eval). General SQL/API routing belongs to the
   application layer (tiqtasq.backend).

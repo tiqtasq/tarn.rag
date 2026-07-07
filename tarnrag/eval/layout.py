@@ -17,11 +17,13 @@ import asyncio
 import json
 from dataclasses import dataclass, field
 
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, DatabaseSettings, Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import _safe_answer
 from tarnrag.eval.generation import GenEvalQuery, GenEvalReport, _aggregate, _score
+from tarnrag.generation import GenerationContext, Reasoner
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.retrieval.engine.engine import RetrievalEngine
@@ -249,3 +251,109 @@ def format_attribution(overall: GenEvalReport, by_segment: dict[str, GenEvalRepo
     lines += [row(seg, r) for seg, r in by_segment.items()]
     lines.append(row("OVERALL", overall))
     return "\n".join(lines)
+
+
+# ---------------- the numeric slice (PP-6): arithmetic questions, answered without an LLM ----------
+
+
+@dataclass
+class TatQaNumericQuery:
+    """One arithmetic TAT-QA question: the text, the numeric gold (already in cell units — TAT-QA's
+    ``scale`` rides along for reporting), and the gold source segmentation."""
+
+    question: str
+    gold: float
+    scale: str
+    answer_from: str
+
+
+def load_tatqa_numeric(rows: list[dict], *, limit: int | None = None) -> list[TatQaNumericQuery]:
+    """The arithmetic questions (the slice ``load_tatqa`` filters out) with parseable numeric golds —
+    the ready-made eval for the deterministic ``table_lookup`` reasoner."""
+    queries: list[TatQaNumericQuery] = []
+    for rec in rows[:limit] if limit else rows:
+        for q in rec["questions"]:
+            if q.get("answer_type") != "arithmetic":
+                continue
+            raw = q.get("answer")
+            try:
+                gold = float(str(raw).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            queries.append(
+                TatQaNumericQuery(
+                    question=q["question"], gold=gold, scale=q.get("scale", ""),
+                    answer_from=q.get("answer_from", ""),
+                )
+            )
+    return queries
+
+
+@dataclass
+class NumericReport:
+    """The table_lookup eval: how many questions it ATTEMPTED (vs abstained — never guessed), and
+    numeric exact-match both among attempts and overall (an abstention counts as a miss overall)."""
+
+    n: int
+    attempted: int
+    correct: int
+
+    @property
+    def attempted_rate(self) -> float:
+        return self.attempted / self.n if self.n else 0.0
+
+    @property
+    def em_attempted(self) -> float:
+        return self.correct / self.attempted if self.attempted else 0.0
+
+    @property
+    def em_overall(self) -> float:
+        return self.correct / self.n if self.n else 0.0
+
+
+async def tatqa_numeric(
+    queries: list[TatQaNumericQuery],
+    repo: DocumentRepository,
+    embedder: Embedder,
+    *,
+    settings: Settings,
+    reasoner_spec: dict,
+    llm: LanguageModel | None = None,
+    k: int = 10,
+    concurrency: int = 8,
+) -> NumericReport:
+    """Run every arithmetic question through the caller-PINNED ``reasoner_spec`` (a measurement never
+    inherits a default) — e.g. the LLM-free ``table_lookup`` posture, or a reader leg for comparison
+    (pass its ``llm``). Numeric exact-match = equality after rounding both sides to 2 decimals (the
+    gold precision); an abstention counts as unattempted."""
+    retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
+    reasoner = ComponentFactory.get().create_as(reasoner_spec, Reasoner)
+    ctx = GenerationContext(retrieval, llm=llm)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(q: TatQaNumericQuery) -> tuple[bool, bool]:
+        async with sem:
+            out = await reasoner.reason(Query(text=q.question, top_k=k), ctx)
+        if out.abstained:
+            return False, False
+        try:
+            got = float(out.answer.replace(",", "").replace("$", "").replace("%", "").strip())
+        except (ValueError, AttributeError):
+            return True, False
+        return True, round(got, 2) == round(q.gold, 2)
+
+    scored = await asyncio.gather(*(_one(q) for q in queries))
+    return NumericReport(
+        n=len(scored),
+        attempted=sum(a for a, _ in scored),
+        correct=sum(c for _, c in scored),
+    )
+
+
+def format_numeric(report: NumericReport, *, tag: str = "") -> str:
+    return "\n".join([
+        f"TAT-QA numeric (table_lookup, no LLM){(' ' + tag) if tag else ''}  (n={report.n})",
+        f"attempted   {report.attempted:>5}  ({report.attempted_rate:.3f})",
+        f"EM attempted{report.em_attempted:>12.3f}",
+        f"EM overall  {report.em_overall:>12.3f}   (abstentions count as misses)",
+    ])
