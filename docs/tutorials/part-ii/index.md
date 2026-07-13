@@ -26,6 +26,12 @@ trade**, and the only way to know what you traded away is to look at the query i
 Rungs **01–05** are Act A (retrieval); **06–07** open Act B (generation). Walk them in order — the
 failures only make sense in sequence.
 
+**A ladder is not a stack.** Each rung repairs its predecessor's failure, but that does not mean you
+should switch every knob on at once. Rungs 03 and 05 in particular turn out to be *alternatives*: the
+library's measured sweep found the cross-encoder subsumes routing's gain entirely, so routing under a
+reranker is pure cost ([rung 05](05-query-routing.md) has the numbers). Read the ladder as a tour of
+the trade space, not a build order.
+
 ## Setup
 
 ```bash

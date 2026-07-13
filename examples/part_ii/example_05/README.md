@@ -17,9 +17,13 @@ tie at `0.875` hit@k overall — but segmented by query type, dense owns semanti
 sparse owns lexical (0.75 / 1.00). Routing hits **1.00 on both**, beating every fixed pipeline. The
 `StructuralQueryClassifier` reproduces the labels with none of its own (7/8).
 
+⚠️ **Routing is an alternative to Example 03's reranker, not a layer on top of it.** The S1 sweep
+(`doc/phases.md`) measured `ROUTED+CE` as digit-identical to `HYBRID+CE` — the cross-encoder subsumes
+routing's gain, so routing under a reranker is pure cost. It pays in **no-reranker** deployments.
+
 📖 **[Tutorial: Query routing](../../../docs/tutorials/part-ii/05-query-routing.md)** — how an
-aggregate metric hid a free win, and why the scoreboard routes on gold labels (oracle) while the
-classifier is measured separately.
+aggregate metric hid a free win, why the scoreboard routes on gold labels (oracle) while the
+classifier is measured separately, and where routing actually earns its place.
 
 ## Run
 

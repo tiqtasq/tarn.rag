@@ -99,6 +99,35 @@ at the top:
 
 Note what routing also buys you: it does *less work*. Only one retriever runs per query.
 
+## Does routing survive contact with a real corpus?
+
+Mostly not — and this is the most important paragraph on the page.
+
+The library's own measured sweep (`doc/phases.md`, S1 — TAT-QA, n=334, source-hit@10) put routing
+head-to-head with the profile from [rung 03](03-cross-encoder-reranking.md):
+
+| pipeline | source-hit@10 |
+|----------|---------------|
+| hybrid + cross-encoder | **0.946** |
+| routed (no reranker) | 0.937 |
+| routed + cross-encoder | **0.946** — digit-identical to hybrid + CE |
+
+**The cross-encoder subsumes the gain.** Routing and reranking are two ways of fixing the *same*
+underlying problem — a retriever that ranked the right passage too low — and the cross-encoder is
+simply better at it. Stack them and you pay for routing without getting anything: on that benchmark
+`ROUTED+CE` and `HYBRID+CE` agree to three decimals.
+
+So the naive reading of this ladder — "each rung adds a knob, so turn them all on" — is **wrong**, and
+this rung is where it breaks. Rung 03 and rung 05 are alternatives, not layers.
+
+Routing earns its place in a specific setting: **when you cannot afford a cross-encoder.** A reranker
+costs a model forward pass per candidate per query, which is a real latency and hardware budget. If
+that budget doesn't exist, routing recovers most of the gap LLM-free (0.937 vs 0.946) by protecting
+the lexical/semantic split rather than correcting it after the fact.
+
+That is the whole reason this rung's evaluation is worth running on *your* corpus rather than
+inheriting a conclusion from anyone's table — including this one.
+
 ## That closes Act A
 
 You can now retrieve well: dense for meaning, sparse for exact terms, a reranker to correct both, a
