@@ -1,56 +1,91 @@
 # Part II — the failure-driven ladder
 
-Where [Part I](../part-i/index.md) teaches the machinery on a corpus small enough to verify by eye,
-Part II drives that machinery until it **breaks** — on purpose.
+[Part I](../part-i/index.md) teaches the machinery on a corpus small enough to check by eye. Part II
+drives that machinery until it **breaks** — on purpose.
 
-Every rung of the ladder adds exactly **one** config knob, and shows two queries: one that now works,
-and one that **fails**. The next rung's config repairs that failure — and usually introduces a new
-one. The corpus (`examples/docs/corpus-2/`) is engineered so each failure is reproducible rather than
-anecdotal.
+Every rung adds exactly **one** config knob and shows two queries: one that now works, and one that
+**fails**. The next rung's config repairs that failure — and usually introduces a new one. The corpus
+is engineered so each failure is reproducible rather than anecdotal.
 
-The point is not that any one config is correct. It is that every retrieval decision is a *trade*, and
-the only way to know what you traded away is to look at the query it broke.
+The point is not that any single config is correct. It is that **every retrieval decision is a
+trade**, and the only way to know what you traded away is to look at the query it broke.
 
 ## The ladder
 
-Runnable programs live in [`examples/part_ii/`](../../../examples/part_ii); each carries a README with
-a full console walkthrough of its good and bad cases.
-
 | # | Adds | Fixes | Breaks |
 |---|------|-------|--------|
-| [00](../../../examples/part_ii/example_00/README.md) | Ingest the shared corpus | — | *(the base store every later rung reads)* |
-| [01](../../../examples/part_ii/example_01/README.md) | Dense-only retrieval | Paraphrases | Exact part numbers (`XQ-9920-A`) — nothing to embed |
-| [02](../../../examples/part_ii/example_02/README.md) | Hybrid (dense + sparse + RRF) | The part number | The paraphrase — lexical noise demotes it |
-| [03](../../../examples/part_ii/example_03/README.md) | Cross-encoder reranking | The paraphrase, *keeping* the part number | Cost, latency |
-| [04](../../../examples/part_ii/example_04/README.md) | Structure-aware chunking + auto-merge | Answers split across chunk boundaries | — |
-| [05](../../../examples/part_ii/example_05/README.md) | Query routing *(Act A capstone)* | Per-query-type method selection | — |
-| [06](../../../examples/part_ii/example_06/README.md) | Minimal generation *(Act B opener)* | Passages → an answer | Ungrounded claims |
-| [07](../../../examples/part_ii/example_07/README.md) | Grounding check + abstain | Confident wrong answers | — |
+| [00](00-ingest-the-corpus.md) | The base store | — | *(setup: the index every later rung reads)* |
+| [01](01-dense-only-retrieval.md) | Dense-only retrieval | A paraphrase with no shared words | An opaque part number — nothing to embed |
+| [02](02-hybrid-retrieval.md) | Sparse (BM25) + RRF fusion | The part number | The paraphrase — lexical noise demotes it |
+| [03](03-cross-encoder-reranking.md) | A cross-encoder reranker | The paraphrase, *keeping* the part number | Fragmented answers — the best chunk is half a section |
+| [04](04-structure-aware-chunking.md) | Structure-aware chunking + auto-merge | The fragment — whole sections come back | — |
+| [05](05-query-routing.md) | Query routing *(Act A capstone)* | Per-query-type method selection: 1.00 on both types | — |
+| [06](06-minimal-generation.md) | Generation *(Act B opener)* | Passages → an answer with a proof tree | It can't tell "I answered" from "I couldn't" |
+| [07](07-grounding-and-abstain.md) | Grounding check + abstain | Unsupported answers — refuse instead | — |
 
-## How it is built
+Rungs **01–05** are Act A (retrieval); **06–07** open Act B (generation). Walk them in order — the
+failures only make sense in sequence.
 
-Three conventions, chosen deliberately (see `examples/part_ii/PLAN.md`):
+## Setup
 
-- **The console is the hero.** Each example *is* a `Settings` config you can run interactively:
-  `python -m tarnrag.console examples/part_ii/example_02/config.yaml`. The `run.py` script narrates
-  the good/bad cases, but the config is the artifact.
-- **Configs are YAML, fully explicit, and heavily commented.** Nothing relies on a Python default —
-  every stage and component parameter is enumerated. The acceptance test is: *if a library default
-  changes, these examples still produce the same results.* (Part I tutorial 3 shows why that matters:
-  its numbers survived the day hybrid retrieval became the default, precisely because it named every
-  spec in full.)
-- **Ingest once.** Retrieval and generation rungs are pure config swaps over the one store example 00
-  built. Only chunking, enrichment, or extractor changes force a re-ingest, and those rungs say so.
+```bash
+pip install -e ".[onnx]"       # the package + the ONNX embedding runtime
+python scripts/fetch_model.py  # the embedding model (once)
+```
 
-## Status
+[Rung 03](03-cross-encoder-reranking.md) additionally needs the cross-encoder, and
+[06](06-minimal-generation.md)–[07](07-grounding-and-abstain.md) need an LLM key — each page says so.
 
-The prose tutorials for Part II have not been written yet — the per-example READMEs linked above are
-the current documentation, and they are detailed: each walks through the console session, the score
-breakdown from `explain`, and exactly which rank moved and why.
+## How Part II is built
 
-Start with [example 00](../../../examples/part_ii/example_00/README.md) to build the store, then walk
-the ladder in order. The failures only make sense in sequence.
+Three conventions, each chosen deliberately (`examples/part_ii/PLAN.md`):
+
+**The console is the hero.** Each rung *is* a `Settings` config you can run interactively:
+
+```bash
+python -m tarnrag.console examples/part_ii/example_02/config.yaml
+tarn> explain XQ-9920-A
+```
+
+`explain` is what makes the ladder legible: it prints the per-retriever candidates *before* fusion,
+then the fused → reranked → merged → final stages with a movement (`Δ`) column. You watch the rank
+move, and you see which component moved it. Each rung's `run.py` is a script that narrates the same
+thing non-interactively.
+
+**Configs are YAML, fully explicit, heavily commented.** Nothing relies on a library default — every
+stage and component parameter is enumerated. The acceptance test is: *if a library default changes,
+these examples still produce the same results.* This is not pedantry. While writing these pages the
+library's default retrieval pipeline changed from dense-only to hybrid, and every Part II number was
+unaffected, precisely because no config leaned on a default.
+
+The corollary: **the diff between two configs is the lesson.**
+
+```bash
+diff examples/part_ii/example_01/config.yaml examples/part_ii/example_02/config.yaml
+```
+
+**Ingest once.** Rungs 01, 02, 03, 05, 06, and 07 are pure config swaps over the one store rung 00
+builds. Only rung 04 changes the *representation* (how documents are chunked), so it re-ingests into
+its own store — and it says so.
+
+## The corpus
+
+`examples/docs/corpus-2/` is 12 Markdown documents, each engineered to break something specific:
+
+| Document | Engineered for |
+|----------|----------------|
+| `pump-maintenance.md` | Both directions at once: a **paraphrase** dense finds and BM25 misses, plus the opaque part number **`XQ-9920-A`** that dense misses and BM25 nails. |
+| `pump-cavitation.md` | The true answer the reranker must recover. |
+| `pump-vibration.md` | A **distractor** that shares "cavitation" and "noise" but answers nothing. |
+| `compressor-startup.md` | A procedure split across paragraphs — the **fragmentation** case auto-merge repairs. |
+| `compressor-models.md` + `lubrication-spec.md` | A **multi-hop bridge**: `TX-200` → `GMV frame` → `ISO VG 68`, which no single retrieve-and-read pass can gather. |
+| `tank-corrosion.md` · `tank-inspection.md` · `valve-maintenance.md` · `ndt-methods.md` · `safety-ppe.md` | Domain depth, acronyms (`API 653`, `NDT`, `OSHA`, `LOTO`), and lexical near-pairs. |
+| `quokka.md` | The off-topic distractor. Retrieval must discriminate; watch where it lands. |
+
+They are Markdown **with headings** on purpose: structure-aware chunking needs a section tree to
+build, and provenance needs a header path to cite. Design notes are in `examples/part_ii/CORPUS.md` —
+deliberately *not* inside the corpus directory, since ingesting a directory ingests every file in it.
 
 ---
 
-[← Tutorials](../index.md) · [← Part I](../part-i/index.md)
+[← Tutorials](../index.md) · [← Part I](../part-i/index.md) · [Start the ladder →](00-ingest-the-corpus.md)
