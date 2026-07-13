@@ -6,10 +6,69 @@ the shape and the invariants that hold it together; the full design specs live i
 
 ## The three engines
 
-```
-IngestionEngine   documents → (extract → enrich → clean → chunk → embed) → the §8 index
-RetrievalEngine   query → retrievers (dense/sparse) → fuse → hydrate → merge → rerank → ranked hits
-GenerationEngine  question → reason (retrieve ↔ read) → ground-check → proof tree + evidence
+```mermaid
+flowchart TB
+    CALLER(["your code · the tarnrag console · tiqtasq.backend"])
+
+    subgraph FACADE["TarnRag — facade & composition root: one store, one embedder"]
+        direction LR
+        IE["IngestionEngine"]
+        RE["RetrievalEngine"]
+        GE["GenerationEngine"]
+    end
+
+    CALLER -->|"ingest"| IE
+    CALLER -->|"retrieve"| RE
+    CALLER -->|"ask"| GE
+
+    subgraph INGEST["Ingestion — a job DAG"]
+        direction TB
+        ORCH["orchestrator — lifecycle + DAG walking"]
+        QUEUE[["job queue — InMemory · pgQueuer"]]
+        WORK["worker — runs the pure stages:<br/>extract → enrich → clean → chunk → embed"]
+        SINK["result sink — batched, atomic persistence"]
+        ORCH --> QUEUE
+        QUEUE --> WORK
+        WORK --> SINK
+    end
+
+    subgraph RETR["Retrieval — config-driven Components"]
+        direction TB
+        RTRS["retrievers: dense · sparse · hyde · multi_query<br/>license pre-filter in SQL"]
+        FUSE["fuser: rrf · identity"]
+        POST["hydrate → auto-merge? → rerank?"]
+        TOPK["top_k — ranked, provenance-bearing hits"]
+        RTRS --> FUSE
+        FUSE --> POST
+        POST --> TOPK
+    end
+
+    subgraph GENER["Generation — opt-in, LLM-pluggable"]
+        direction TB
+        REAS["reasoner: single_hop · iterative<br/>decomposition · table_lookup · …"]
+        GC["grounding check: heuristic · llm · cascading"]
+        ASSM["evidence assembler — provenance"]
+        ANS["grounded answer + proof tree"]
+        REAS --> GC
+        GC --> ASSM
+        ASSM --> ANS
+    end
+
+    IE --> INGEST
+    RE --> RETR
+    GE --> GENER
+    RE <-.->|"retrieve ↔ read"| GENER
+
+    EMB["Embedder — one pipeline for passages & queries; fingerprint in index_meta"]
+    LLM["LanguageModel — anthropic · openai-compatible"]
+    INGEST -.->|"embed passages"| EMB
+    RETR -.->|"embed queries"| EMB
+    GENER -.->|"read / decompose"| LLM
+
+    REPO[("DocumentRepository — the §8 index, one store<br/>documents · chunks · vectors (sqlite-vec / pgvector) · BM25 (FTS5) · provenance · job_status<br/>SQLite (embedded) · Postgres (distributed)")]
+
+    INGEST -->|"write: chunks · embeddings · job status"| REPO
+    RETR <-->|"read: dense_knn · sparse_search · hydrate"| REPO
 ```
 
 `TarnRag` is the composition root: it builds the one store (the repository) and the embedder once
