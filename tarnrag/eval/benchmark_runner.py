@@ -21,6 +21,7 @@ from contextlib import asynccontextmanager
 
 from bausatz import ComponentFactory
 from tarnrag.core.engine.config import DatabaseSettings, Settings
+from tarnrag.core.resources.cross_encoder import OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmarks import BenchItem
@@ -234,7 +235,8 @@ async def sweep_over_corpus(
     specs = {r: _reasoner_spec(r, grounding) for r in reasoners}
     factory = ComponentFactory.get()
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
-    ctx = GenerationContext(retrieval, llm)
+    # The lazy cross-encoder rides along like on the engine path — free unless a reasoner reranks.
+    ctx = GenerationContext(retrieval, llm, OnnxCrossEncoder.create(settings.rerank))
     pipelines = {name: factory.create_as(spec, GenerationPipeline) for name, spec in specs.items()}
     sem = asyncio.Semaphore(concurrency)
 

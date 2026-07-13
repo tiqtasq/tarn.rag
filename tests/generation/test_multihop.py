@@ -2,7 +2,10 @@
 
 import json
 
+import pytest
+
 from bausatz import ComponentFactory
+from tarnrag.core.exceptions import GenerationError
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import (
     DecompositionReasoner,
@@ -115,6 +118,70 @@ async def test_decomposition_falls_back_to_the_original_question(make_result):
         Query(text="original q"), GenerationContext(retrieval, llm)
     )
     assert retrieval.queries == ["original q"] and out.answer == "ok"  # decompose failed -> the question
+
+
+# ---------------- DecompositionReasoner + evidence rerank (P7) ----------------
+
+
+class _ScriptedCrossEncoder:
+    """A ``CrossEncoder`` double: scores each passage by a canned map (0.0 if unlisted) and records the
+    query it scored against."""
+
+    def __init__(self, scores_by_text):
+        self._scores = dict(scores_by_text)
+        self.seen_query = None
+
+    def score(self, query, passages):
+        self.seen_query = query
+        return [self._scores.get(p, 0.0) for p in passages]
+
+
+def _rerank_fixture(make_result):
+    """Three passages pooled in retrieval order a, b, c; the CE ranks them c > b > a against the
+    ORIGINAL question. Scripted LLM: decompose into two sub-questions, then synthesize."""
+    a, b, c = make_result("a", "Alpha fact."), make_result("b", "Beta fact."), make_result("c", "Gamma fact.")
+    retrieval = _RoutedRetrieval([("alpha", [a, b]), ("beta", [c])])
+    ce = _ScriptedCrossEncoder({"Alpha fact.": 0.1, "Beta fact.": 0.5, "Gamma fact.": 0.9})
+    llm = _scripted(
+        json.dumps({"sub_questions": ["the alpha part", "the beta part"]}),
+        json.dumps({"answer": "combined", "steps": [{"claim": "c", "cited": [1]}]}),
+    )
+    return retrieval, ce, llm
+
+
+async def test_decomposition_reranks_the_pool_against_the_original_question(make_result):
+    retrieval, ce, llm = _rerank_fixture(make_result)
+    out = await DecompositionReasoner(DecompositionReasoner.Config(rerank_evidence=True)).reason(
+        Query(text="alpha and beta?"), GenerationContext(retrieval, llm, ce)
+    )
+    assert ce.seen_query == "alpha and beta?"  # scored against the ORIGINAL question, not a sub-question
+    assert [r.chunk_id for r in out.evidence] == ["c", "b", "a"]  # CE order replaces retrieval order
+    assert out.steps[0].cited == [0]  # cited passage 1 = the reranked head ('c') — numbering is post-rerank
+
+
+async def test_decomposition_evidence_top_k_truncates_after_the_rerank(make_result):
+    retrieval, ce, llm = _rerank_fixture(make_result)
+    out = await DecompositionReasoner(
+        DecompositionReasoner.Config(rerank_evidence=True, evidence_top_k=2)
+    ).reason(Query(text="alpha and beta?"), GenerationContext(retrieval, llm, ce))
+    assert [r.chunk_id for r in out.evidence] == ["c", "b"]  # best two survive; 'a' never reaches the read
+
+
+async def test_decomposition_rerank_requires_a_cross_encoder(make_result):
+    retrieval, _, llm = _rerank_fixture(make_result)
+    with pytest.raises(GenerationError, match="no cross-encoder"):
+        await DecompositionReasoner(DecompositionReasoner.Config(rerank_evidence=True)).reason(
+            Query(text="alpha and beta?"), GenerationContext(retrieval, llm)  # no CE in the context
+        )
+
+
+async def test_decomposition_rerank_off_by_default_never_touches_the_model(make_result):
+    retrieval, ce, llm = _rerank_fixture(make_result)
+    out = await DecompositionReasoner(DecompositionReasoner.Config()).reason(
+        Query(text="alpha and beta?"), GenerationContext(retrieval, llm, ce)
+    )
+    assert ce.seen_query is None  # default config: the CE is never invoked
+    assert [r.chunk_id for r in out.evidence] == ["a", "b", "c"]  # retrieval order preserved
 
 
 # ---------------- GroundedRetrievalReasoner (γ-driven re-retrieval) ----------------
