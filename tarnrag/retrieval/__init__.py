@@ -22,7 +22,12 @@ from tarnrag.retrieval.components.merger import AutoMerger, Merger
 from tarnrag.retrieval.pipeline.pipeline import RetrievalPipeline
 from tarnrag.retrieval.engine.retrieval_engine_protocol import RetrievalEngineProtocol
 from tarnrag.retrieval.components.reranker import CrossEncoderReranker, LlmJudgeReranker, Reranker
-from tarnrag.retrieval.components.retriever import MultiQueryRetriever, RetrievalContext, Retriever
+from tarnrag.retrieval.components.retriever import (
+    HydeRetriever,
+    MultiQueryRetriever,
+    RetrievalContext,
+    Retriever,
+)
 from tarnrag.retrieval.pipeline.router import RoutingRetrievalPipeline
 from tarnrag.retrieval.pipeline.searcher import Searcher
 from tarnrag.retrieval.types import Query, RetrieverCandidates, SearchStage, SearchTrace
@@ -46,6 +51,7 @@ __all__ = [
     "StructuralQueryClassifier",
     "Retriever",
     "MultiQueryRetriever",
+    "HydeRetriever",
     "Fuser",
     "Merger",
     "AutoMerger",
