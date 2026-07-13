@@ -22,6 +22,7 @@ flowchart TB
     CALLER -->|"ask"| GE
 
     subgraph INGEST["Ingestion — a job DAG"]
+        direction TB
         ORCH["orchestrator — lifecycle + DAG walking"]
         QUEUE[["job queue — InMemory · pgQueuer"]]
         WORK["worker — runs the pure stages:<br/>extract → enrich → clean → chunk → embed"]
@@ -32,6 +33,7 @@ flowchart TB
     end
 
     subgraph RETR["Retrieval — config-driven Components"]
+        direction TB
         RTRS["retrievers: dense · sparse · hyde · multi_query<br/>license pre-filter in SQL"]
         FUSE["fuser: rrf · identity"]
         POST["hydrate → auto-merge? → rerank?"]
@@ -42,6 +44,7 @@ flowchart TB
     end
 
     subgraph GENER["Generation — opt-in, LLM-pluggable"]
+        direction TB
         REAS["reasoner: single_hop · iterative<br/>decomposition · table_lookup · …"]
         GC["grounding check: heuristic · llm · cascading"]
         ASSM["evidence assembler — provenance"]
