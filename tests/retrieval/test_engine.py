@@ -380,6 +380,34 @@ def test_rrf_fusion_tie_breaks_by_chunk_id():
     assert [h.chunk_id for h in hits] == ["a", "b"]
 
 
+def test_rrf_weights_tilt_the_fusion():
+    """S1 (weighted RRF): a per-retriever weight scales that arm's rank contributions — the
+    sparse-weighted hybrid promotes what the sparse arm ranked first, without touching the rank core."""
+    per_retriever = {
+        "dense": [Candidate("a", rank=1, raw_score=0.9), Candidate("b", rank=2, raw_score=0.5)],
+        "sparse": [Candidate("b", rank=1, raw_score=8.0), Candidate("a", rank=2, raw_score=7.0)],
+    }
+    unweighted = RRFFuser(RRFFuser.Config()).fuse(per_retriever)
+    assert [h.chunk_id for h in unweighted] == ["a", "b"]  # genuinely tied -> chunk_id asc
+    weighted = RRFFuser(RRFFuser.Config(weights={"sparse": 2.0})).fuse(per_retriever)
+    assert [h.chunk_id for h in weighted] == ["b", "a"]  # sparse's rank-1 ('b') now wins the tie
+    assert weighted[0].score == pytest.approx(2.0 / 61 + 1.0 / 62)  # weighted sparse + unit dense
+
+
+def test_rrf_unlisted_retrievers_weigh_one():
+    """Weights apply only to the named keys; every other retriever contributes at 1.0 — a partial map
+    leaves the unnamed arms exactly as unweighted RRF scores them."""
+    per_retriever = {"dense": [Candidate("a", rank=1, raw_score=0.9)]}
+    hits = RRFFuser(RRFFuser.Config(weights={"sparse": 3.0})).fuse(per_retriever)
+    assert hits[0].score == pytest.approx(1.0 / 61)
+
+
+def test_rrf_rejects_non_positive_weights():
+    """A zero/negative weight would silently corrupt the ranking — refuse it at config time."""
+    with pytest.raises(ValueError):
+        RRFFuser.Config(weights={"sparse": 0.0})
+
+
 def test_identity_fusion_orders_best_first():
     """The identity passthrough returns best-first by score (= -rank) with the same deterministic order,
     independent of the order candidates arrive in."""
