@@ -39,7 +39,30 @@ pip install "tarn-rag[all]"              # the full single-process runtime
 pip install "tarn-rag[postgres,queue]"  # the distributed backends
 ```
 
-## Quickstart
+## Quickstart — the interactive console
+
+The fastest way to try tarn.rag end to end (needs the `console` extra, included in `all`). Start it with
+one JSON config — a `Settings` document naming the database, embedder, LLM, and pipeline specs; a sample
+lives at [`examples/console.config.json`](./examples/console.config.json):
+
+```bash
+tarnrag examples/console.config.json     # or: python -m tarnrag.console <config.json>
+```
+
+The LLM key is read from the environment (`ANTHROPIC_API_KEY`), not the config, and the sample config
+expects the local embedding model fetched once with `scripts/fetch_model.py`. Then work the corpus at
+the `tarn>` prompt:
+
+```
+tarn> ingest examples/docs/corpus-1/    # ingest (or re-ingest) files; a directory ingests the files in it
+tarn> docs                  # list the ingested documents (id, chunks, embeddings)
+tarn> retrieve <query>      # retrieval only — the ranked passages
+tarn> explain <query>       # retrieval with its inner workings — per-retriever candidates, per-stage ranking
+tarn> ask <query>           # retrieval + generation — the grounded answer + its proof tree
+tarn> help                  # the full list (also: status, delete, quit)
+```
+
+## Quickstart — the Python API
 
 The high-level facade (`TarnRag`) wires ingestion + retrieval + generation over one store; each call returns
 an `Outcome` (the value) plus a `Report` of any non-fatal issues:
@@ -50,7 +73,7 @@ from tarnrag import TarnRag
 
 async def main():
     async with TarnRag("config.json") as tarn:   # a JSON Settings file
-        await tarn.ingest(["docs/"])             # ingest files / directories
+        await tarn.ingest(["documents/"])        # ingest files / directories
         hits = await tarn.retrieve("how do I inspect a tank?", top_k=8)
         answer = await tarn.ask("…")             # grounded answer + proof tree (needs an LLM key)
         print(answer.value.answer)
@@ -68,12 +91,6 @@ ids = await engine.ingest_paths(["/data/spec.pdf"])
 
 async with await RetrievalEngine.create() as r:   # validates schema + embedding fingerprint
     results = await r.search_text("how do I inspect a tank?", top_k=8)
-```
-
-An interactive console (needs the `console` extra):
-
-```bash
-tarnrag config.json          # or: python -m tarnrag.console config.json
 ```
 
 ## The quality profile
