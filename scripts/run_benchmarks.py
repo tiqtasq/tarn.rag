@@ -84,7 +84,7 @@ async def _run_over_pool(
     # Tag the index by embedder (model + dim) so different embedders get separate corpora — the index is
     # embedder-specific (its vectors + fingerprint), so a gte-small build mustn't be reused for te3-small.
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
-    db_path = f"./docs/bench_{dataset}_pool_{corpus_limit or 'full'}_{emb_tag}.db"
+    db_path = f"./data/bench_{dataset}_pool_{corpus_limit or 'full'}_{emb_tag}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building corpus index for {dataset}: {len(corpus)} passages -> {db_path} (cached) …")
     repo, embedder = await build_corpus_index(corpus, settings, db_path=db_path)
