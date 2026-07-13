@@ -21,36 +21,34 @@ flowchart TB
     CALLER -->|"retrieve"| RE
     CALLER -->|"ask"| GE
 
-    subgraph INGEST["Ingestion — a job DAG, one job per (item, stage)"]
-        direction TB
+    subgraph INGEST["Ingestion — a job DAG"]
         ORCH["orchestrator — lifecycle + DAG walking"]
-        QUEUE[["job queue — InMemory (embedded) · pgQueuer (distributed)"]]
-        WORKER["worker — compute only"]
-        STAGES["pure stages: extract → enrich → clean → chunk → embed"]
+        QUEUE[["job queue — InMemory · pgQueuer"]]
+        WORK["worker — runs the pure stages:<br/>extract → enrich → clean → chunk → embed"]
         SINK["result sink — batched, atomic persistence"]
-        ORCH -->|"enqueue"| QUEUE
-        ORCH -.->|"downstream jobs only after upstream persists"| QUEUE
-        QUEUE -->|"homogeneous batches"| WORKER
-        WORKER --> STAGES
-        STAGES --> SINK
+        ORCH --> QUEUE
+        QUEUE --> WORK
+        WORK --> SINK
     end
 
     subgraph RETR["Retrieval — config-driven Components"]
-        direction TB
-        RTRS["retrievers: dense · sparse · hyde · multi_query — license pre-filter in SQL"]
+        RTRS["retrievers: dense · sparse · hyde · multi_query<br/>license pre-filter in SQL"]
         FUSE["fuser: rrf · identity"]
-        POST["hydrate → auto-merge? → rerank? → top_k: ranked, provenance-bearing hits"]
+        POST["hydrate → auto-merge? → rerank?"]
+        TOPK["top_k — ranked, provenance-bearing hits"]
         RTRS --> FUSE
         FUSE --> POST
+        POST --> TOPK
     end
 
     subgraph GENER["Generation — opt-in, LLM-pluggable"]
-        direction TB
-        REAS["reasoner: single_hop · iterative · decomposition · …"]
+        REAS["reasoner: single_hop · iterative<br/>decomposition · table_lookup · …"]
         GC["grounding check: heuristic · llm · cascading"]
-        ANS["answer + proof tree + evidence"]
+        ASSM["evidence assembler — provenance"]
+        ANS["grounded answer + proof tree"]
         REAS --> GC
-        GC --> ANS
+        GC --> ASSM
+        ASSM --> ANS
     end
 
     IE --> ORCH
@@ -60,15 +58,14 @@ flowchart TB
 
     EMB["Embedder — one pipeline for passages & queries; fingerprint in index_meta"]
     LLM["LanguageModel — anthropic · openai-compatible"]
-    STAGES -.->|"embed passages"| EMB
+    WORK -.->|"embed passages"| EMB
     RTRS -.->|"embed queries"| EMB
     REAS -.->|"read / decompose"| LLM
 
-    REPO[("DocumentRepository — the §8 index, one store<br/>documents · chunks · dense vectors (sqlite-vec / pgvector) · BM25 (FTS5) · provenance · job_status<br/>SQLite (embedded) · Postgres (distributed)")]
+    REPO[("DocumentRepository — the §8 index, one store<br/>documents · chunks · vectors (sqlite-vec / pgvector) · BM25 (FTS5) · provenance · job_status<br/>SQLite (embedded) · Postgres (distributed)")]
 
     SINK --> REPO
     RTRS <--> REPO
-    ORCH -->|"job status"| REPO
 ```
 
 `TarnRag` is the composition root: it builds the one store (the repository) and the embedder once
