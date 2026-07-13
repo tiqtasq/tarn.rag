@@ -9,61 +9,58 @@ the shape and the invariants that hold it together; the full design specs live i
 ```mermaid
 flowchart TB
     CALLER(["your code · the tarnrag console · tiqtasq.backend"])
+    TARN["TarnRag — facade & composition root: one store, one embedder"]
 
-    subgraph FACADE["TarnRag — facade & composition root: one store, one embedder"]
-        direction LR
-        IE["IngestionEngine"]
-        RE["RetrievalEngine"]
-        GE["GenerationEngine"]
-    end
-
-    CALLER -->|"ingest"| IE
-    CALLER -->|"retrieve"| RE
-    CALLER -->|"ask"| GE
+    CALLER --> TARN
+    TARN -->|"ingest"| IE
+    TARN -->|"retrieve"| RE
+    TARN -->|"ask"| GE
 
     subgraph INGEST["Ingestion — a job DAG, one job per (item, stage)"]
+        direction TB
+        IE["IngestionEngine"]
         ORCH["orchestrator — lifecycle + DAG walking"]
         QUEUE[["job queue — InMemory (embedded) · pgQueuer (distributed)"]]
         WORKER["worker — compute only"]
         STAGES["pure stages: extract → enrich → clean → chunk → embed"]
         SINK["result sink — batched, atomic persistence"]
+        IE --> ORCH
+        ORCH -->|"enqueue"| QUEUE
+        ORCH -.->|"downstream jobs only after upstream persists"| QUEUE
+        QUEUE -->|"homogeneous batches"| WORKER
+        WORKER --> STAGES
+        STAGES --> SINK
     end
-
-    IE --> ORCH
-    ORCH -->|"enqueue"| QUEUE
-    QUEUE -->|"homogeneous batches"| WORKER
-    WORKER --> STAGES
-    STAGES --> SINK
-    ORCH -.->|"downstream jobs only after upstream persists"| QUEUE
 
     subgraph RETR["Retrieval — config-driven Components"]
+        direction TB
+        RE["RetrievalEngine"]
         RTRS["retrievers: dense · sparse · hyde · multi_query — license pre-filter in SQL"]
         FUSE["fuser: rrf · identity"]
-        POST["hydrate → auto-merge? → rerank? → top_k"]
+        POST["hydrate → auto-merge? → rerank? → top_k: ranked, provenance-bearing hits"]
+        RE --> RTRS
+        RTRS --> FUSE
+        FUSE --> POST
     end
 
-    RE --> RTRS
-    RTRS --> FUSE
-    FUSE --> POST
-    POST -->|"ranked, provenance-bearing hits"| RE
-
     subgraph GENER["Generation — opt-in, LLM-pluggable"]
+        direction TB
+        GE["GenerationEngine"]
         REAS["reasoner: single_hop · iterative · decomposition · …"]
         GC["grounding check: heuristic · llm · cascading"]
         ANS["answer + proof tree + evidence"]
+        GE --> REAS
+        REAS --> GC
+        GC --> ANS
     end
 
-    GE --> REAS
-    REAS <-->|"retrieve ↔ read"| RE
-    REAS --> GC
-    GC --> ANS
+    RE <-.->|"retrieve ↔ read"| REAS
 
-    EMB["Embedder — one pipeline for passages and queries; fingerprint in index_meta"]
+    EMB["Embedder — one pipeline for passages & queries; fingerprint in index_meta"]
     LLM["LanguageModel — anthropic · openai-compatible"]
-
-    EMB --> STAGES
-    EMB --> RTRS
-    LLM --> REAS
+    EMB -.-> STAGES
+    EMB -.-> RTRS
+    LLM -.-> REAS
 
     REPO[("DocumentRepository — the §8 index, one store<br/>documents · chunks · dense vectors (sqlite-vec / pgvector) · BM25 (FTS5) · provenance · job_status<br/>SQLite (embedded) · Postgres (distributed)")]
 
