@@ -19,6 +19,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
+    "bausatz>=0.1",  # the component framework (extracted from this repo; re-exported via core/components)
     "pydantic>=2",
     "pydantic-settings>=2",
     "sqlalchemy>=2",

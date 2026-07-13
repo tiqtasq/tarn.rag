@@ -1,6 +1,6 @@
-"""The Phase-2 bridge retrieval components: multi-query expansion (MultiQueryRetriever) + the LLM
-relevance judge (LlmJudgeReranker). Driven by a deterministic ``StaticLanguageModel`` + tiny fakes — no
-network, no key, no model."""
+"""The bridge retrieval components: multi-query expansion (MultiQueryRetriever, Phase 2), hypothetical-
+answer retrieval (HydeRetriever, S1) + the LLM relevance judge (LlmJudgeReranker). Driven by a
+deterministic ``StaticLanguageModel`` + tiny fakes — no network, no key, no model."""
 
 import json
 
@@ -11,7 +11,7 @@ from tarnrag.contracts.structure import Span
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.retrieval.components.reranker import LlmJudgeReranker
-from tarnrag.retrieval.components.retriever import MultiQueryRetriever, RetrievalContext
+from tarnrag.retrieval.components.retriever import HydeRetriever, MultiQueryRetriever, RetrievalContext
 from tarnrag.retrieval.types import Query
 
 
@@ -27,13 +27,37 @@ class _FakeStore:
         return list(self._results)
 
 
+class _SequenceStore:
+    """Returns the next canned candidate list per dense_knn call (repeating the last one)."""
+
+    def __init__(self, lists):
+        self._lists = [list(candidates) for candidates in lists]
+        self.calls = 0
+
+    async def dense_knn(self, vec, k, chunk_filter):
+        out = self._lists[min(self.calls, len(self._lists) - 1)]
+        self.calls += 1
+        return list(out)
+
+
 class _FakeEmbedder:
+    """Zero-vector embedder recording which space (query vs passage) each text was embedded in."""
+
+    def __init__(self):
+        self.query_texts = []
+        self.passage_texts = []
+
     def embed_query(self, text):
+        self.query_texts.append(text)
         return [0.0, 0.0, 0.0]
 
+    def embed_passages(self, texts):
+        self.passage_texts.append(list(texts))
+        return [[0.0, 0.0, 0.0] for _ in texts]
 
-def _ctx(store, llm=None):
-    return RetrievalContext(store=store, embedder=_FakeEmbedder(), llm=llm)
+
+def _ctx(store, llm=None, embedder=None):
+    return RetrievalContext(store=store, embedder=embedder or _FakeEmbedder(), llm=llm)
 
 
 def _result(chunk_id, text):
@@ -77,6 +101,77 @@ async def test_multi_query_unparseable_expansion_uses_original_only():
         Query(text="q"), _ctx(store, StaticLanguageModel("not json at all"))
     )
     assert store.calls == 1  # no parseable rewrites -> just the original query
+
+
+# ---------------- HydeRetriever ----------------
+
+
+async def test_hyde_embeds_hypothesis_as_passage_and_fuses_with_query():
+    store = _SequenceStore(
+        [
+            [Candidate("a", 1, 0.1), Candidate("b", 2, 0.2)],  # the original query's list
+            [Candidate("b", 1, 0.3), Candidate("c", 2, 0.4)],  # the hypothesis's list
+        ]
+    )
+    embedder = _FakeEmbedder()
+    llm = StaticLanguageModel("Paris is the capital of France.")
+    out = await HydeRetriever(HydeRetriever.Config()).retrieve(
+        Query(text="q"), _ctx(store, llm, embedder)
+    )
+    assert embedder.query_texts == ["q"]  # the literal query stays in the query space
+    assert embedder.passage_texts == [["Paris is the capital of France."]]  # the fake doc: passage space
+    assert store.calls == 2  # one KNN per vector: original + hypothesis
+    assert [c.chunk_id for c in out] == ["b", "a", "c"]  # b appears in both lists -> RRF-fused to the top
+    assert [c.rank for c in out] == [1, 2, 3]  # re-ranked, 1-based
+
+
+async def test_hyde_without_llm_is_single_dense():
+    store = _FakeStore([Candidate("a", 1, 0.1)])
+    embedder = _FakeEmbedder()
+    out = await HydeRetriever(HydeRetriever.Config()).retrieve(
+        Query(text="q"), _ctx(store, llm=None, embedder=embedder)
+    )
+    assert store.calls == 1 and [c.chunk_id for c in out] == ["a"]
+    assert embedder.passage_texts == []  # no hypothesis -> nothing embedded as a passage
+
+
+async def test_hyde_blank_completion_degrades_to_dense():
+    store = _FakeStore([Candidate("a", 1, 0.1)])
+    embedder = _FakeEmbedder()
+    await HydeRetriever(HydeRetriever.Config()).retrieve(
+        Query(text="q"), _ctx(store, StaticLanguageModel("   \n"), embedder)
+    )
+    assert store.calls == 1 and embedder.passage_texts == []  # nothing usable -> original query only
+
+
+async def test_hyde_num_hypotheses_samples_and_fuses_all():
+    store = _FakeStore([Candidate("a", 1, 0.1)])
+    embedder = _FakeEmbedder()
+    llm_calls = []
+
+    def reply(prompt):
+        llm_calls.append(prompt.user)
+        return f"hypothesis {len(llm_calls)}"
+
+    await HydeRetriever(HydeRetriever.Config(num_hypotheses=3)).retrieve(
+        Query(text="q"), _ctx(store, StaticLanguageModel(reply), embedder)
+    )
+    assert len(llm_calls) == 3  # one sample per hypothesis
+    assert embedder.passage_texts == [["hypothesis 1", "hypothesis 2", "hypothesis 3"]]  # one batch
+    assert store.calls == 4  # the original query + 3 hypotheses
+
+
+async def test_hyde_prompt_carries_the_word_cap():
+    captured = {}
+
+    def reply(prompt):
+        captured["system"], captured["user"] = prompt.system, prompt.user
+        return "h"
+
+    await HydeRetriever(HydeRetriever.Config(max_words=25)).retrieve(
+        Query(text="what is a tank?"), _ctx(_FakeStore([]), StaticLanguageModel(reply))
+    )
+    assert "25 words" in captured["system"] and "what is a tank?" in captured["user"]
 
 
 # ---------------- LlmJudgeReranker ----------------

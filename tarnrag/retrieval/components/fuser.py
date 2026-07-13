@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field
 
 from tarnrag.contracts import Candidate
-from tarnrag.core.components import Component
+from bausatz import Component
 
 
 @dataclass
@@ -70,12 +70,20 @@ class IdentityFuser(Fuser):
 
 
 class RRFFuser(Fuser):
-    """Reciprocal Rank Fusion: ``score(chunk) = Σ_retrievers 1 / (k + rank)`` — rank-based, so it fuses
-    retrievers with incomparable raw scores (cosine distance vs BM25)."""
+    """Reciprocal Rank Fusion: ``score(chunk) = Σ_retrievers weight_r / (k + rank)`` — rank-based, so it
+    fuses retrievers with incomparable raw scores (cosine distance vs BM25). Optional per-retriever
+    ``weights`` tilt the fusion (S1: the sparse-weighted hybrid for lexical queries) without touching
+    the rank-based core; the empty default is classic unweighted RRF."""
 
     class Config(Fuser.Config):
         class_name: Literal["rrf"] = "rrf"
         k: int = Field(default=60, gt=0)
+        # Per-retriever-key weight. Keys are the pipeline's retriever keys (configured ``name``, else
+        # ``class_name``, ``#n``-deduped — ``RetrievalPipeline._retriever_keys``); unlisted keys weigh
+        # 1.0, so the empty default keeps every existing spec's fusion byte-identical. Only the ratios
+        # matter: uniform scaling scales every fused score alike and never changes the ranking, so
+        # {sparse: 2} ≡ {sparse: 4, dense: 2} — don't normalize, compare weight configs by ratio.
+        weights: dict[str, Annotated[float, Field(gt=0)]] = Field(default_factory=dict)
 
     config: RRFFuser.Config
 
@@ -83,8 +91,9 @@ class RRFFuser(Fuser):
         scores: dict[str, float] = {}
         components: dict[str, dict[str, float]] = {}
         for name, candidates in per_retriever.items():
+            weight = self.config.weights.get(name, 1.0)
             for c in candidates:
-                scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + 1.0 / (self.config.k + c.rank)
+                scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + weight / (self.config.k + c.rank)
                 components.setdefault(c.chunk_id, {})[name] = c.raw_score
         return _ranked(
             [FusedHit(cid, score=s, component_scores=components[cid]) for cid, s in scores.items()]

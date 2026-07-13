@@ -1,4 +1,9 @@
+# The CI / dev environment (what .github/workflows/codecov.yml installs): base deps + every extra
+# the test suite exercises + the test tooling, loosely pinned. NOT the package interface — consumers
+# install via pyproject (`pip install tarn-rag[...]`); keep new runtime deps in pyproject first and
+# mirror them here only so CI sees them.
 aiosqlite>=0.22.1
+bausatz>=0.1
 numpy>=2.4.6
 pydantic>=2.13.4
 pydantic-settings>=2.14.1

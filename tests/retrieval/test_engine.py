@@ -61,8 +61,8 @@ async def _index(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=cids[0], vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=cids[1], vector=[0.0, 1.0, 0.0]),
     ])
     return cids
 
@@ -190,8 +190,8 @@ async def test_filter_drops_unavailable_and_respects_grounding(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)))
     # EXECUTION: the unavailable chunk is dropped; the grounding-disallowed one is kept.
@@ -235,8 +235,8 @@ async def test_default_license_policy_excludes_third_party_copyrighted(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     settings = Settings(_env_file=None)  # default components -> the default_license policy applies
     engine = await RetrievalEngine.open(repo, _FakeEmbedder(query_vec=(1.0, 0.0, 0.0)), settings=settings)
@@ -258,8 +258,8 @@ async def _index_tree(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=leaf1, vector=[1.0, 0.0, 0.0], model="f", dimension=3),
-        Embedding(chunk_id=leaf2, vector=[0.0, 1.0, 0.0], model="f", dimension=3),
+        Embedding(chunk_id=leaf1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=leaf2, vector=[0.0, 1.0, 0.0]),
     ])
     return parent, leaf1, leaf2
 
@@ -324,6 +324,29 @@ def _result(cid, score, **scores):
     )
 
 
+async def test_cross_encoder_reranker_caps_the_shortlist_and_tails_the_rest():
+    """P4: only the top-N incoming candidates are cross-encoder scored (bounds the CPU cost at corpus
+    scale); the tail keeps its first-pass order below the reranked shortlist."""
+
+    class _CE:
+        def __init__(self):
+            self.seen = None
+
+        def score(self, query, texts):
+            self.seen = list(texts)
+            return [0.1, 0.9][: len(texts)]  # second shortlist entry wins
+
+    ce = _CE()
+    ctx = RetrievalContext(store=None, embedder=None, cross_encoder=ce)
+    results = [_result("a", -1.0), _result("b", -2.0), _result("c", -3.0)]
+    out = await CrossEncoderReranker(CrossEncoderReranker.Config(top_n=2)).rerank(
+        Query(text="q"), results, ctx
+    )
+    assert ce.seen == ["a", "b"]  # only the capped shortlist reaches the model (text == cid here)
+    assert [r.chunk_id for r in out] == ["b", "a", "c"]  # reranked shortlist first, tail unchanged
+    assert "cross_encoder" not in out[2].component_scores  # the tail is never scored
+
+
 async def test_cross_encoder_reranker_rescores_and_reorders():
     """Unit: the cross-encoder score becomes the new score (re-ordering); first-pass scores are kept."""
     ce = _FakeCrossEncoder({"a": 0.2, "b": 0.95})
@@ -355,6 +378,34 @@ def test_rrf_fusion_tie_breaks_by_chunk_id():
     hits = RRFFuser(RRFFuser.Config()).fuse(per_retriever)
     assert hits[0].score == hits[1].score  # genuinely tied -> only the tie-break decides the order
     assert [h.chunk_id for h in hits] == ["a", "b"]
+
+
+def test_rrf_weights_tilt_the_fusion():
+    """S1 (weighted RRF): a per-retriever weight scales that arm's rank contributions — the
+    sparse-weighted hybrid promotes what the sparse arm ranked first, without touching the rank core."""
+    per_retriever = {
+        "dense": [Candidate("a", rank=1, raw_score=0.9), Candidate("b", rank=2, raw_score=0.5)],
+        "sparse": [Candidate("b", rank=1, raw_score=8.0), Candidate("a", rank=2, raw_score=7.0)],
+    }
+    unweighted = RRFFuser(RRFFuser.Config()).fuse(per_retriever)
+    assert [h.chunk_id for h in unweighted] == ["a", "b"]  # genuinely tied -> chunk_id asc
+    weighted = RRFFuser(RRFFuser.Config(weights={"sparse": 2.0})).fuse(per_retriever)
+    assert [h.chunk_id for h in weighted] == ["b", "a"]  # sparse's rank-1 ('b') now wins the tie
+    assert weighted[0].score == pytest.approx(2.0 / 61 + 1.0 / 62)  # weighted sparse + unit dense
+
+
+def test_rrf_unlisted_retrievers_weigh_one():
+    """Weights apply only to the named keys; every other retriever contributes at 1.0 — a partial map
+    leaves the unnamed arms exactly as unweighted RRF scores them."""
+    per_retriever = {"dense": [Candidate("a", rank=1, raw_score=0.9)]}
+    hits = RRFFuser(RRFFuser.Config(weights={"sparse": 3.0})).fuse(per_retriever)
+    assert hits[0].score == pytest.approx(1.0 / 61)
+
+
+def test_rrf_rejects_non_positive_weights():
+    """A zero/negative weight would silently corrupt the ranking — refuse it at config time."""
+    with pytest.raises(ValueError):
+        RRFFuser.Config(weights={"sparse": 0.0})
 
 
 def test_identity_fusion_orders_best_first():

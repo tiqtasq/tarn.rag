@@ -52,28 +52,31 @@ class EmbedStage(PipelineStage):
         (``chunk_id`` taken from ``metadata['chunk_id']``).
         """
         embedder = self._get_embedder()
-        inject = self.config.embedding.inject_header_path
-        batch_size = self.config.embedding.batch_size
+        embedding = self.config.embedding
+        batch_size = embedding.batch_size
         for i in range(0, len(items), batch_size):
             sub = items[i : i + batch_size]
-            vectors = embedder.embed_passages([self._embed_text(it, inject) for it in sub])
+            vectors = embedder.embed_passages(
+                [self._embed_text(it, embedding.inject_header_path, embedding.contextualize_tables) for it in sub]
+            )
             for it, vec in zip(sub, vectors):
-                yield Embedding(
-                    chunk_id=it.metadata["chunk_id"],
-                    vector=list(vec),
-                    model=self.config.embedding.model,
-                    dimension=len(vec),
-                    metadata={"source_id": it.metadata.get("source_id")},
-                )
+                # Just the chunk key + its vector: embedder identity is index-wide (index_meta).
+                yield Embedding(chunk_id=it.metadata["chunk_id"], vector=list(vec))
 
     @staticmethod
-    def _embed_text(item: PipelineItem, inject: bool) -> str:
-        """The passage text to embed: the chunk content, optionally prefixed with its section header
-        path (header-path injection — gives short chunks their structural context). No-op when the
-        item has no header path (the plain-text path), so the content is always embedded."""
+    def _embed_text(item: PipelineItem, inject: bool, contextualize: bool) -> str:
+        """The passage text to embed. Base: the chunk content — except a TABLE chunk under
+        ``contextualize_tables`` (P1), which embeds its header-contextualized rendering (each value
+        bound to its row/column headers) instead of the raw grid; the stored/BM25 text is untouched.
+        ``inject_header_path`` then prefixes the section header path on top (the two compose). Both
+        are no-ops when the item lacks the structure (the plain-text path), so content is always
+        embedded."""
+        text = item.content
+        if contextualize and item.provenance and item.provenance.table:
+            text = item.provenance.table.contextual_text() or item.content
         if inject and item.provenance and item.provenance.header_path:
-            return " > ".join(item.provenance.header_path) + "\n" + item.content
-        return item.content
+            text = " > ".join(item.provenance.header_path) + "\n" + text
+        return text
 
     def _get_embedder(self):
         if self._embedder is None:

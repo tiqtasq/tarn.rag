@@ -30,7 +30,7 @@ GenerationEngine.create() → await answer → reason (retrieve↔read) → grou
 Design specs: `doc/FUNCTIONAL_REQUIREMENTS.md` (ingestion), `doc/ModusQ_RetrievalSubsystemSpec.md` +
 `doc/retrieval-architecture-design.md` (retrieval), and `doc/generation-architecture-design.md` (generation).
 Retrieval methods, generation steps, extractors, chunkers, and enrichers are all config-driven **Components**
-(`core/components`) composed by spec under `Settings.components`.
+(the standalone [`bausatz`](https://pypi.org/project/bausatz/) package — `Component` + `ComponentFactory` + `Registry`, imported directly) composed by spec under `Settings.components`.
 
 ## Using the engines
 
@@ -73,7 +73,7 @@ async with await RetrievalEngine.create() as r:      # validates schema + embedd
 
 ```
 tarnrag/
-├── core/         # infra: components/ (Component + ComponentFactory + registry), engine/ (config,
+├── core/         # infra: engine/ (config,
 │                 #   Engine base, observability), resources/ (Embedder · CrossEncoder · LanguageModel),
 │                 #   exceptions, hashing
 ├── contracts/    # cross-boundary shared kernel: dtos · ports · results · structure · index_meta
@@ -83,11 +83,13 @@ tarnrag/
 ├── retrieval/    # components/ (retriever · fuser · merger · reranker · classifier · license_policy),
 │                 #   pipeline/ (searcher · pipeline · router), engine/ (engine · protocol), types
 ├── generation/   # components/ (reasoner · grounding · assembler), pipeline/, engine/, context · types
-├── eval/         # retrieval + generation eval harnesses (metrics · dataset · harness · generation)
+├── eval/         # eval harnesses: retrieval (metrics · dataset · harness), generation (generation),
+│                 #   public benchmarks (benchmarks · benchmark_runner), layout/TAT-QA (layout)
 ├── tarnrag.py    # TarnRag — high-level facade + composition root over the three engines
-├── report.py · console.py            # Outcome/Report/Issue/Severity · interactive rich console
+├── report.py · console.py · _cli.py  # Outcome/Report/Issue/Severity · rich console · entry wrapper
 run_worker.py            # distributed consumer entry: asyncio.run(run_worker())
 scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
+scripts/run_benchmarks.py · run_layout_eval.py   # QA-benchmark + TAT-QA layout eval CLIs
 ```
 
 `tarnrag/__init__.py` re-exports the public API; consumers import from `tarnrag`, not the submodules.
@@ -101,9 +103,11 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   orchestrator) and **`JobConsumer`** (`set_handler` / `run`, the consumer runtime). The worker is a
   registered handler, not a puller. **`PgQueuerJobQueue`** is the only file that imports pgQueuer
   (which owns SKIP LOCKED / retries / NOTIFY / dead-lettering); **`InMemoryJobQueue`** is the
-  in-process double (embedded mode + tests, no Postgres). The consumer hands the worker a **`Batch`**
-  (`ingestion/engine/jobs.py`) — homogeneous (all jobs share one `stage_name`, enforced by the
-  constructor). Keep the port a delegating seam — never reimplement queue mechanics in it.
+  production embedded-mode queue (and the test double — no Postgres). The consumer hands the worker
+  a **`Batch`** (`ingestion/engine/jobs.py`) — homogeneous (all jobs share one `stage_name`, enforced
+  by the constructor); the InMemory queue groups each wave into real multi-job batches, the pgQueuer
+  adapter still dispatches single-job batches. Keep the port a delegating seam — never reimplement
+  queue mechanics in it.
 - **Three-layer split:**
   - **Worker = compute only** (`ingestion/engine/worker.py`). A pure handler holding only the coordinator
     (no queue, no run loop): `handle_batch(batch)` gets the stage via
@@ -149,9 +153,12 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   the repository.
 - **Database agnosticism** (`storage/repository/`). All document storage goes through
   `DocumentRepository` (SQLAlchemy 2.0 Core, async): shared tables + dialect-agnostic CRUD in
-  `base.py`; `postgres.py` / `sqlite.py` override only the hooks (`_driver_url`, `_vector_type`,
-  `_encode_vector` / `_decode_vector`, `_upsert_document`, `_create_dialect_objects`,
-  `dense_knn` / `hydrate`). Postgres uses pgvector; SQLite uses sqlite-vec (`vec_chunks`) for dense
+  `base.py` (read-model assembly lives in its companion `read_assembly.py`, held as `repo.reads`);
+  `postgres.py` / `sqlite.py` supply only the dialect hooks — `_driver_url`, `_vector_type`,
+  `_encode_vector` / `_decode_vector`, `_before_create_schema` / `_after_create_schema`,
+  `_index_chunk_text`, `_clear_chunk_index`, `_count_doc_embeddings`,
+  `_embedding_counts_by_document` — plus the `RetrievalStore` port (`dense_knn` / `sparse_search` /
+  `hydrate`). Postgres uses pgvector; SQLite uses sqlite-vec (`vec_chunks`) for dense
   KNN + FTS5 for sparse. Selection is driven by `settings.database.document_url` (a `postgres` substring
   → Postgres, else SQLite). Put shared logic in the base, dialect specifics in the hooks.
 - **Transactional guarantees & idempotency.** `store_document_with_chunks` / `store_chunks` /
@@ -166,8 +173,8 @@ scripts/fetch_model.py   # fetch the ONNX model + tokenizer into the model dir
   `settings.database.document_url` (document/chunk/embedding storage). Never conflate them.
 - **Observability is optional.** Core logic must work with `observability=None` (guard every `self.obs`
   call); `Observability.create(settings.observability)` returns the configured adapter or `None` when
-  disabled. Only `NoOpObservability` ships today, so an *enabled* observability installs the no-op until a
-  real adapter (Prometheus, structured logging) is registered there — by design, not an oversight.
+  disabled. Adapters: `structured_logging` (JSON-lines over stdlib logging — one machine-parseable line
+  per metric/log event); any other `type` (incl. the not-yet-implemented `prometheus`) installs the no-op.
 - **Retrieval is config-driven Components.** `RetrievalEngine.search` delegates to a `Searcher` built from
   `Settings.components[RETRIEVAL_PIPELINE]` — a `RetrievalPipeline` (parallel `Retriever`s {dense/sparse} →
   `Fuser` {identity/rrf, `(score desc, chunk_id asc)` tie-break} → hydrate → optional `Merger` {auto-merge}

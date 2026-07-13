@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.generation import GenerationContext, GenerationPipeline, GenerationResult
 from tarnrag.retrieval.types import Purpose, Query
 

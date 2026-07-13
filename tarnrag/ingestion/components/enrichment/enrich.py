@@ -15,7 +15,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import PipelineItem
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.ingestion.components.enrichment.enricher import Enricher
 from tarnrag.ingestion.pipeline.pipeline import PipelineStage
 

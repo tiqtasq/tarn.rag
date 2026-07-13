@@ -115,6 +115,31 @@ class Table(BaseModel):
         """The row-header cells whose rows overlap ``cell`` (its row header(s))."""
         return [c for c in self.cells if c.is_row_header and self._rows_overlap(c, cell)]
 
+    def contextual_text(self) -> str:
+        """The header-contextualized linearization — one line per data row, each value bound to its
+        headers: ``{row header} — {column header}: {value}; …``. This is the *embedding-friendly*
+        rendering (P1): a raw grid buries what a number means several lines from where it sits, so cell
+        tokens embed weakly against a natural-language question; binding every value to its headers puts
+        the question's vocabulary ("goodwill impairment in 2019") and the value in one breath.
+        ``markdown`` remains the display / BM25 form. Empty when the table has no data cells."""
+        data = [c for c in self.cells if not (c.is_column_header or c.is_row_header) and c.text.strip()]
+        by_row: dict[int, list[TableCell]] = {}
+        for cell in data:
+            by_row.setdefault(cell.row, []).append(cell)
+        lines: list[str] = []
+        for row in sorted(by_row):
+            cells = sorted(by_row[row], key=lambda c: c.col)
+            row_label = " ".join(h.text.strip() for h in self.row_headers_for(cells[0]) if h.text.strip())
+            pairs = []
+            for cell in cells:
+                col_label = " ".join(
+                    h.text.strip() for h in self.column_headers_for(cell) if h.text.strip()
+                )
+                pairs.append(f"{col_label}: {cell.text.strip()}" if col_label else cell.text.strip())
+            line = "; ".join(pairs)
+            lines.append(f"{row_label} — {line}" if row_label else line)
+        return "\n".join(lines)
+
     @staticmethod
     def _cols_overlap(a: TableCell, b: TableCell) -> bool:
         return a.col < b.col + b.col_span and b.col < a.col + a.col_span

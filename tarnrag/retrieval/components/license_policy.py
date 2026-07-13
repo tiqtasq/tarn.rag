@@ -23,7 +23,7 @@ from typing import Literal
 from pydantic import Field
 
 from tarnrag.contracts import ChunkFilter
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.retrieval.types import Query
 
 # ModusQ §5.6 default: the shippable classes every purpose may see; ``third_party_copyrighted`` is

@@ -17,7 +17,7 @@ from dataclasses import replace
 from typing import Any, Literal
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import Component
+from bausatz import Component
 from tarnrag.core.exceptions import RetrievalError
 from tarnrag.core.parsing import extract_json
 from tarnrag.core.resources.llm import Prompt
@@ -46,6 +46,10 @@ class CrossEncoderReranker(Reranker):
     class Config(Reranker.Config):
         class_name: Literal["cross_encoder"] = "cross_encoder"
         score_key: str = "cross_encoder"  # key the rerank score is surfaced under in component_scores
+        top_n: int = 20  # rerank only the top-N incoming candidates (parity with llm_judge): bounds the
+        # CPU cost at corpus scale — an uncapped hybrid shortlist (~dense_k + sparse_k hydrated hits)
+        # measured ~11s/query on CPU; the tail keeps its first-pass order below the reranked shortlist
+        # and never reaches top_k (≪ top_n), so nothing is lost.
 
     config: CrossEncoderReranker.Config
 
@@ -59,14 +63,15 @@ class CrossEncoderReranker(Reranker):
                 "a cross_encoder reranker is configured but the RetrievalContext has no cross-encoder "
                 "model — set the `rerank` settings (model dir) so the engine can build it"
             )
+        shortlist, tail = results[: self.config.top_n], results[self.config.top_n :]
         # Cross-encoders are CPU-bound (ONNX) — score off the event loop, like query embedding.
-        scores = await asyncio.to_thread(ctx.cross_encoder.score, query.text, [r.text for r in results])
+        scores = await asyncio.to_thread(ctx.cross_encoder.score, query.text, [r.text for r in shortlist])
         rescored = [
             replace(r, score=s, component_scores={**r.component_scores, self.config.score_key: s})
-            for r, s in zip(results, scores)
+            for r, s in zip(shortlist, scores)
         ]
         rescored.sort(key=lambda r: r.score, reverse=True)
-        return rescored
+        return rescored + tail  # reranked shortlist first; the unranked tail trails (never reaches top_k)
 
 
 _JUDGE_SYSTEM = (

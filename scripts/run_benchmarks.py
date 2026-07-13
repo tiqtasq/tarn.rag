@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 from pathlib import Path
 
 from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
@@ -40,7 +41,7 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 async def _run(
     dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
     corpus: str, corpus_limit: int | None, concurrency: int, reasoners: list[str] | None, grounding: str | None,
-    hybrid: bool,
+    hybrid: bool, retrieval_spec: str | None,
 ) -> None:
     settings = get_settings()
     tag = ""
@@ -50,6 +51,9 @@ async def _run(
     if hybrid:  # dense + sparse BM25, RRF-fused (overrides --bridge if both given)
         settings.components[RETRIEVAL_PIPELINE] = HYBRID_RETRIEVAL
         tag = " + hybrid"
+    if retrieval_spec:  # an explicit pinned spec (e.g. the S1 routed profile) — overrides the flags above
+        settings.components[RETRIEVAL_PIPELINE] = json.loads(retrieval_spec)
+        tag = " + custom-retrieval"
     llm = LanguageModel.create(settings.llm)
     if corpus == "pool":
         await _run_over_pool(
@@ -84,7 +88,7 @@ async def _run_over_pool(
     # Tag the index by embedder (model + dim) so different embedders get separate corpora — the index is
     # embedder-specific (its vectors + fingerprint), so a gte-small build mustn't be reused for te3-small.
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
-    db_path = f"./docs/bench_{dataset}_pool_{corpus_limit or 'full'}_{emb_tag}.db"
+    db_path = f"./data/bench_{dataset}_pool_{corpus_limit or 'full'}_{emb_tag}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building corpus index for {dataset}: {len(corpus)} passages -> {db_path} (cached) …")
     repo, embedder = await build_corpus_index(corpus, settings, db_path=db_path)
@@ -130,6 +134,11 @@ def main(argv: list[str] | None = None) -> None:
         help="use the Phase-2 bridge retrieval (multi-query expansion + LLM relevance judge) — needs an LLM",
     )
     parser.add_argument(
+        "--retrieval-spec", default=None, metavar="JSON",
+        help="pin an explicit RETRIEVAL_PIPELINE spec as JSON (e.g. the S1 routed profile) — "
+             "overrides --hybrid/--bridge; a measurement never inherits a default",
+    )
+    parser.add_argument(
         "--corpus", choices=["distractor", "pool"], default="distractor",
         help="retrieval setting: 'distractor' (per-question pool, default) or 'pool' (one shared corpus "
              "built from the dev set — the fullwiki-style setting; built once + cached)",
@@ -162,7 +171,7 @@ def main(argv: list[str] | None = None) -> None:
         _run(
             args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge,
             args.corpus, args.corpus_limit, args.concurrency, args.reasoners, args.grounding,
-            args.hybrid,
+            args.hybrid, args.retrieval_spec,
         )
     )
 

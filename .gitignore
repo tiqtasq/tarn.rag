@@ -1,8 +1,11 @@
 # ModusQ: bundled embedding model artifacts + built retrieval index + uploads
 models/
 *.db
+*.db-journal
 index.db
 uploads/
+# runtime data: benchmark index stores + staged uploads (design docs in doc/, user docs in docs/)
+data/
 # the MOTHRAG paper — kept locally for reference, not committed
 doc/main.pdf
 

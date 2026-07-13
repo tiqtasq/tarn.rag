@@ -83,6 +83,53 @@ async def test_embedded_auto_drain_processes_inline(repo):
     assert status.embedding_count == status.chunk_count >= 1
 
 
+async def test_concurrent_ingests_single_flight_the_drain(repo):
+    """Two+ concurrent embedded ingests must not interleave two ``run()`` loops over the one queue (waves
+    and batches would be split arbitrarily between them): the drain lock serializes them, and every
+    document still completes."""
+    import asyncio
+
+    engine, queue = _wire(repo, auto_drain=True)
+    active = {"now": 0, "max": 0}
+    original_run = queue.run
+
+    async def tracked_run():
+        active["now"] += 1
+        active["max"] = max(active["max"], active["now"])
+        try:
+            await original_run()
+        finally:
+            active["now"] -= 1
+
+    queue.run = tracked_run
+    batches = [[{"content": f"Document {i} text. " * 10, "source_id": f"d{i}"}] for i in range(4)]
+    results = await asyncio.gather(*(engine.ingest_content(b) for b in batches))
+
+    assert active["max"] == 1  # never two drain loops at once
+    for [doc_id] in results:  # a drain may have processed a peer's jobs — every doc still completes
+        assert (await engine.status(doc_id)).status == "complete"
+
+
+async def test_aclose_closes_a_closable_queue(repo):
+    """``aclose`` releases the queue the engine was built with (the pgQueuer pool in distributed mode)
+    before the repository — through the same duck-typed ``aclose`` seam the facade uses."""
+    engine, queue = _wire(repo)
+    closed = []
+
+    async def record():
+        closed.append("queue")
+
+    queue.aclose = record  # the InMemory queue has none; give this instance a recording one
+    await engine.aclose()
+    assert closed == ["queue"]
+
+
+async def test_aclose_without_a_closable_queue_still_releases_the_store(repo):
+    """The InMemory queue holds nothing to close — ``aclose`` skips it and still releases the store."""
+    engine, _ = _wire(repo)
+    await engine.aclose()  # no error; repository disconnected (idempotent under the fixture's teardown)
+
+
 async def test_unknown_document_status_is_none(repo):
     engine, _ = _wire(repo)
     assert await engine.status("does-not-exist") is None
@@ -178,6 +225,18 @@ async def test_ingest_paths_uses_supplied_source_ids(repo, tmp_path):
     # Each supplied id rides on its matching path's root job.
     by_id = {j.item.metadata["source_id"]: j.item.metadata["source_path"] for j in enq.jobs}
     assert by_id == {"id-a": str(a), "id-b": str(b)}
+
+
+async def test_ingest_paths_persists_the_source_kind(repo, tmp_path):
+    """The extractor-confirmed kind lands in the document row. It used to fall back to ``'document'``
+    for every ingest — the engine stamped ``source_type`` while the repository read ``source_kind``."""
+    f = tmp_path / "spec.txt"
+    f.write_text("Hello world. " * 10, encoding="utf-8")
+    engine, queue = _wire(repo)
+    await engine.ingest_paths([str(f)], source_ids=["spec"])
+    await queue.run()
+    doc = await repo.get_document("spec")
+    assert doc.metadata["source_kind"] == "txt"  # the real kind, not the 'document' default
 
 
 async def test_ingest_streams_uses_supplied_source_ids(repo, tmp_path):

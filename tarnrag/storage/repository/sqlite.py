@@ -28,7 +28,10 @@ from sqlalchemy import Text, event
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from tarnrag.contracts import Candidate, Chunk, ChunkFilter, ChunkRecord, Embedding
+from tarnrag.core.text import looks_like_identifier, quoted_spans
 from tarnrag.storage.repository.base import DocumentRepository
+
+_QUOTED_SPAN = re.compile(r'"[^"]*"')  # strip consumed quoted spans out of the OR remainder
 
 
 class SqliteRepository(DocumentRepository):
@@ -126,9 +129,8 @@ class SqliteRepository(DocumentRepository):
     async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
         """
         §8: dense vectors live in the sqlite-vec ``vec_chunks`` virtual table, not the embeddings
-        table (which stays empty on SQLite). Only ``chunk_id`` + ``vector`` are stored — the
-        ``Embedding``'s ``id`` / ``model`` / ``dimension`` / ``metadata`` are dropped here (they
-        are columns only on the Postgres ``embeddings`` table); nothing reads them back.
+        table (which stays empty on SQLite). Stores exactly the DTO — ``chunk_id`` + ``vector`` —
+        idempotently (``INSERT OR REPLACE`` on the chunk_id key).
         """
         if not embeddings:
             return []
@@ -259,9 +261,38 @@ class SqliteRepository(DocumentRepository):
 
     @staticmethod
     def _fts_query(text: str) -> str:
-        """A safe FTS5 ``MATCH`` expression from arbitrary text: alphanumeric tokens OR-ed and quoted,
-        so query punctuation can't trip the FTS5 parser. Empty ⇒ no match (caller returns nothing)."""
-        return " OR ".join(f'"{t}"' for t in re.findall(r"\w+", text.lower()))
+        """A safe FTS5 ``MATCH`` expression honoring exact-match intent (the same cues the structural
+        classifier labels lexical — ``core.text``):
+
+        - a double-quoted span is a REQUIRED phrase (tokens adjacent, in order);
+        - an identifier whose punctuation splits under unicode61 (``6.4.2``, ``2024-01``, ``§6.4``) is a
+          required phrase too — OR-ing its pieces would match them scattered anywhere in a chunk;
+        - everything else stays an OR of quoted tokens (recall-first, exactly as before).
+
+        Required parts are ``AND``-ed with the OR-group (explicit — FTS5's implicit AND only joins bare
+        phrases, not a phrase with a parenthesized group); all tokens are quoted so query punctuation
+        can't trip the FTS5 parser. Empty ⇒ no match (caller returns nothing). Plain queries (no quotes,
+        no split identifiers) produce byte-identical expressions to the old builder."""
+        phrases = [
+            " ".join(pieces)
+            for span in quoted_spans(text)
+            if (pieces := re.findall(r"\w+", span.lower()))
+        ]
+        remainder = _QUOTED_SPAN.sub(" ", text)  # quoted spans are consumed — not re-OR-ed
+        or_tokens: list[str] = []
+        for token in remainder.split():
+            pieces = re.findall(r"\w+", token.lower())
+            if len(pieces) > 1 and looks_like_identifier(token):
+                phrases.append(" ".join(pieces))  # split identifier ⇒ adjacency is the meaning
+            else:
+                for piece in pieces:  # dedupe one at a time — a token like 20,000,000 repeats pieces
+                    if piece not in or_tokens:
+                        or_tokens.append(piece)
+        parts = [f'"{p}"' for p in phrases]
+        if or_tokens:
+            group = " OR ".join(f'"{t}"' for t in or_tokens)
+            parts.append(f"({group})" if parts else group)
+        return " AND ".join(parts)
 
     async def hydrate(self, chunk_ids: list[str]) -> list[ChunkRecord]:
         """
@@ -281,19 +312,13 @@ class SqliteRepository(DocumentRepository):
                 )
             ).fetchall()
             by_id = {r[0]: r for r in rows}
-            prov = await self._chunk_provenance(conn, chunk_ids)
-            records: list[ChunkRecord] = []
-            for cid in chunk_ids:
-                r = by_id.get(cid)
-                if r is None:
-                    continue
-                methods = (
-                    await conn.exec_driver_sql(
-                        "SELECT method_id, method_version FROM method_chunks WHERE chunk_id = ?",
-                        (cid,),
-                    )
-                ).fetchall()
-                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
+            prov = await self.reads.chunk_provenance(conn, chunk_ids)
+            methods = await self.reads.methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
+            records = [
+                self.reads.create_chunk_record(r, methods.get(cid, []), prov.get(cid))
+                for cid in chunk_ids
+                if (r := by_id.get(cid)) is not None
+            ]
         return records
 
     # ----- §8 search-index hooks (vec0 + FTS5 live outside the FK graph) -----

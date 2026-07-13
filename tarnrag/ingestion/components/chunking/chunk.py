@@ -17,7 +17,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import Element, ElementKind, PipelineItem, Span, StructuredDocument
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.hashing import compute_content_hash
 from tarnrag.ingestion.components.chunking.chunker import Chunker
 from tarnrag.ingestion.pipeline.pipeline import PipelineStage

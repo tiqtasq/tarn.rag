@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Self
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
@@ -32,32 +32,43 @@ class GenerationEngine:
         retrieval: RetrievalEngineProtocol,
         llm: LanguageModel,
         pipeline: GenerationPipeline,
+        *,
+        owns_resources: bool = False,
     ) -> None:
         self.retrieval = retrieval
         self.llm = llm
         self._pipeline = pipeline
+        # Whether aclose() releases the retrieval port + LLM: True only on the standalone ``create``
+        # path, which builds them itself. Injected resources (a composition root's — TarnRag's shared
+        # retrieval engine and LLM) are closed by their owner, never here.
+        self._owns_resources = owns_resources
 
     @classmethod
     def assemble(
-        cls, retrieval: RetrievalEngineProtocol, llm: LanguageModel, settings: Settings
+        cls,
+        retrieval: RetrievalEngineProtocol,
+        llm: LanguageModel,
+        settings: Settings,
+        *,
+        owns_resources: bool = False,
     ) -> GenerationEngine:
         """Build the engine over a pre-built retrieval port + LLM, with the ``GenerationPipeline`` from
         ``Settings`` (``Settings`` guarantees the spec is present). The shared wiring used by both
-        ``create`` (full standalone) and a composition root (``TarnRag``) that injects an already-open
-        retrieval engine."""
+        ``create`` (full standalone — which passes ``owns_resources=True``) and a composition root
+        (``TarnRag``) that injects an already-open retrieval engine it keeps ownership of."""
         pipeline = ComponentFactory.get().create_as(
             settings.components[GENERATION_PIPELINE], GenerationPipeline
         )
-        return cls(retrieval, llm, pipeline)
+        return cls(retrieval, llm, pipeline, owns_resources=owns_resources)
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> GenerationEngine:
         """Wire the composition standalone: build the retrieval engine (as the port) + the LLM, then
-        :meth:`assemble`."""
+        :meth:`assemble`. The engine owns what it built, so ``aclose`` releases both."""
         settings = settings or get_settings()
         retrieval = await RetrievalEngine.create(settings)
         llm = LanguageModel.create(settings.llm)
-        return cls.assemble(retrieval, llm, settings)
+        return cls.assemble(retrieval, llm, settings, owns_resources=True)
 
     async def answer(self, query: Query) -> GenerationResult:
         """Answer a question: retrieve, read, and return the answer + proof tree + evidence."""
@@ -68,7 +79,12 @@ class GenerationEngine:
         return await self.answer(Query(text=text))
 
     async def aclose(self) -> None:
-        """Release the underlying retrieval engine's resources (best-effort — the port may be a fake)."""
+        """Release the retrieval engine + LLM **when this engine built them** (the standalone ``create``
+        path); an engine assembled over injected resources closes nothing — their owner (the composition
+        root) does. Best-effort on the retrieval port (a fake may expose no ``aclose``)."""
+        if not self._owns_resources:
+            return
+        await self.llm.aclose()
         closer = getattr(self.retrieval, "aclose", None)
         if closer is not None:
             await closer()

@@ -129,6 +129,129 @@ async def test_ingest_missing_paths_and_empty_store_queries(tmp_path):
         assert (await tarn.delete("nope")).value is False
 
 
+def _caller_hash_settings(tmp_path: Path) -> Settings:
+    """Embedded settings with ``ID_POLICY='caller'`` (stems are document ids) + the hash embedder, so the
+    ingest-behavior tests actually ingest without a model."""
+    return Settings(
+        _env_file=None,
+        MODE="embedded",
+        EMBEDDING_DIMENSION=8,
+        ID_POLICY="caller",
+        database=DatabaseSettings(document_url=f"sqlite:///{tmp_path}/store.db"),
+        embedding=EmbeddingSettings(provider="hash"),
+    )
+
+
+async def test_ingest_reports_stem_collisions_instead_of_overwriting(tmp_path):
+    """Under ``ID_POLICY='caller'`` the document id is the file stem, so ``a.md`` + ``a.txt`` share the id
+    ``'a'`` — the second must not silently upsert over the first: it is skipped with an ERROR issue naming
+    both files, and exactly one document lands. The hash embedder keeps this model-free."""
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "a.md").write_text("alpha as markdown")
+    (src / "a.txt").write_text("alpha as text")
+    settings = _caller_hash_settings(tmp_path)
+    async with TarnRag(settings) as tarn:
+        outcome = await tarn.ingest([str(src)])
+        assert [s.document_id for s in outcome.value] == ["a"]  # the first file per stem is kept
+        [issue] = outcome.report.issues
+        assert issue.severity is Severity.ERROR
+        assert issue.subject == str(src / "a.txt")  # the skipped file
+        assert "'a'" in issue.message and "a.md" in issue.message  # names the id and the kept file
+        assert len((await tarn.docs()).value) == 1  # nothing was overwritten
+
+
+async def test_ingest_warns_when_replacing_a_document_of_a_different_kind(tmp_path):
+    """Cross-call stem reuse: ``a.txt`` ingested earlier, then ``a.md`` from elsewhere — same stem = same
+    id, so the replace proceeds (the upsert contract), but the **kind change** is WARNING-reported
+    (probably a different document, not a re-ingest). A same-kind re-ingest stays silent."""
+    run1, run2 = tmp_path / "one", tmp_path / "two"
+    run1.mkdir()
+    run2.mkdir()
+    (run1 / "a.txt").write_text("alpha as text")
+    (run2 / "a.md").write_text("alpha as markdown")
+    async with TarnRag(_caller_hash_settings(tmp_path)) as tarn:
+        assert (await tarn.ingest([str(run1)])).report.ok  # fresh id — nothing replaced, no issues
+        assert (await tarn.ingest([str(run1)])).report.ok  # same-kind re-ingest — the normal upsert, silent
+
+        outcome = await tarn.ingest([str(run2)])  # a.md replaces the txt-sourced document 'a'
+        [issue] = outcome.report.issues
+        assert issue.severity is Severity.WARNING
+        assert issue.subject == str(run2 / "a.md")
+        assert "'txt'" in issue.message and "'md'" in issue.message  # names both kinds
+        assert [s.status for s in outcome.value] == ["complete"]  # the replace still went through
+        assert len((await tarn.docs()).value) == 1  # still one document 'a'
+
+
+async def test_ingest_stays_silent_over_an_unknown_stored_kind(tmp_path):
+    """No spurious warnings where the kind can't be compared: a stored kind of ``'document'`` (the
+    pre-fix default — legacy stores) and an incoming file with no extension are both unknown."""
+    from tarnrag.contracts import Document
+
+    src = tmp_path / "in"
+    src.mkdir()
+    (src / "a.md").write_text("alpha as markdown")
+    (src / "b").write_text("bare beta")  # no extension — incoming kind unknown
+    async with TarnRag(_caller_hash_settings(tmp_path)) as tarn:
+        # Seed 'a' the way a pre-fix store looks (source_kind fell back to 'document') and 'b' with a
+        # real kind; the a.md replace can't compare against 'document', the 'b' file has no extension.
+        await tarn._repository.store_document(Document(content="old alpha", metadata={"source_id": "a"}))
+        await tarn._repository.store_document(
+            Document(content="old beta", metadata={"source_id": "b", "source_kind": "txt"})
+        )
+        outcome = await tarn.ingest([str(src)])
+        assert outcome.report.ok  # both replacements proceed silently — nothing comparable changed
+
+
+def test_split_stem_collisions_keeps_the_first_per_stem(tmp_path):
+    """The partition itself: first file per stem kept in order; later same-stem files come back as
+    ``(skipped, kept)`` pairs — including a same-name file from a different directory."""
+    a_md, a_txt = tmp_path / "a.md", tmp_path / "a.txt"
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    a_sub = sub / "a.rst"
+    b = tmp_path / "b.md"
+    kept, collisions = TarnRag._split_stem_collisions([a_md, a_txt, b, a_sub])
+    assert kept == [a_md, b]
+    assert collisions == [(a_txt, a_md), (a_sub, a_md)]
+
+
+async def test_close_releases_built_resources(tmp_path):
+    """``close`` releases what the facade BUILT: the generation LLM (when not injected) and the ingestion
+    engine's queue — plus the shared store. Recorded through the same ``aclose`` seams the engines use."""
+    settings = _plumbing_settings(tmp_path)
+    settings.llm.api_key = "k"  # lets _build_llm construct a backend (lazily connecting — no network)
+    tarn = await TarnRag(settings).open()
+    await tarn.docs()  # lazily builds the ingestion engine
+    tarn._gen()  # lazily builds the generation engine over the built LLM
+    closed: list[str] = []
+
+    class _Closable:
+        def __init__(self, name: str):
+            self._name = name
+
+        async def aclose(self) -> None:
+            closed.append(self._name)
+
+    tarn._generation.llm = _Closable("llm")
+    tarn._ingestion._queue = _Closable("queue")
+    await tarn.close()
+    assert closed == ["llm", "queue"]  # the built LLM and the engine's queue are both released
+
+
+async def test_close_leaves_an_injected_llm_to_its_owner(tmp_path):
+    """An INJECTED LLM is closed by whoever supplied it, never by the facade."""
+    closed: list[str] = []
+
+    class _InjectedLLM(StaticLanguageModel):
+        async def aclose(self) -> None:
+            closed.append("llm")
+
+    async with TarnRag(_plumbing_settings(tmp_path), llm=_InjectedLLM("{}")) as tarn:
+        tarn._gen()
+    assert closed == []  # __aexit__ -> close() did not touch the injected model
+
+
 def test_expand_resolves_files_dirs_and_reports_missing(tmp_path):
     """``_expand`` (path resolution only): a file is taken as-is, a directory contributes the files in it
     (sorted), and a path that matches nothing comes back as missing — never silently dropped."""

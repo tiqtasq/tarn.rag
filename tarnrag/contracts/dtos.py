@@ -122,17 +122,36 @@ class Chunk(BaseModel):
 class Embedding(BaseModel):
     """
     A chunk's dense vector — at-rest ONLY (terminal stage output; never flows). A write-side DTO:
-    nothing reconstructs an ``Embedding`` from storage. Persisted to the ``embeddings`` table on
-    Postgres; on SQLite only ``chunk_id`` + ``vector`` are written (to the sqlite-vec
-    ``vec_chunks`` table), so ``id`` / ``model`` / ``dimension`` / ``metadata`` are dropped there.
+    nothing reconstructs an ``Embedding`` from storage.
+
+    The embedding vectors themselves are stored in both backends, in the SAME shape — one store is
+    one vector space (the ``index_meta`` fingerprint enforces one embedder per index), so a stored
+    embedding is exactly its chunk key + its vector, keyed 1:1. It is the terminal output of the
+    ingestion pipeline:
+
+    EmbedStage ──yields──▶  Embedding(chunk_id, vector)     ← the DTO
+                                  │
+                                  ▼  EmbeddingResultSink → repo.store_embeddings([...])
+                  ┌───────────────┴────────────────┐
+              Postgres                          SQLite
+    UPSERT INTO embeddings            INSERT OR REPLACE INTO vec_chunks
+    (chunk_id PK, vector ←pgvector)   (chunk_id PK, embedding — the sqlite-vec
+                                       virtual table)
+
+    Embedder identity (model / revision / dimension / …) is NOT per-row data: it lives once per
+    index in ``index_meta``, where the fingerprint gate validates it at ``open()``. (Per-row
+    ``id`` / ``model`` / ``dimension`` columns existed historically on Postgres only — schema v2
+    removed them; multiple models per corpus would be a designed "vector spaces" feature, not a
+    schema leniency.)
+
+    Why the DTO is "write-only": retrieval never reads Embedding objects back. Dense search (dense_knn) queries the vector
+    index directly — sqlite-vec's MATCH / pgvector's cosine operator — and gets back (chunk_id, distance) pairs; the text
+    and provenance are then hydrated from the chunks table. No code path ever materializes a stored vector back into an
+    Embedding.
     """
 
-    id: str | None = None
     chunk_id: str
     vector: list[float]
-    model: str
-    dimension: int
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

@@ -7,7 +7,8 @@ component depends only on its slice — env vars use the ``GROUP__FIELD`` conven
 ``EMBEDDING__MODEL``). The few cross-cutting knobs (``MODE``, ``EMBEDDING_DIMENSION``,
 ``UPLOAD_DIR``) stay top-level.
 
-Pipeline composition lives in ``IngestionEngine.build_pipeline`` (it consumes ``Settings``).
+The default pipeline compositions live here too (``_fill_default_components`` fills
+``Settings.components``); the engines' ``build_*`` methods only read them.
 """
 
 from __future__ import annotations
@@ -81,6 +82,11 @@ class EmbeddingSettings(BaseModel):
     # injected index has a distinct fingerprint and won't ``open()`` with a non-injecting embedder —
     # the two are compared by building separate indexes.
     inject_header_path: bool = False
+    # Table contextualization (P1): embed a TABLE chunk as its header-contextualized rendering (each
+    # value bound to its row/column headers — ``Table.contextual_text``) instead of the raw grid text.
+    # Embed-time only: the stored/BM25 text stays the grid. Part of the embedding identity, like
+    # ``inject_header_path`` — compared by building separate indexes.
+    contextualize_tables: bool = False
 
     # API providers only (provider != 'onnx'):
     api_key: str = ""  # falls back to the provider's standard env var (OPENAI_API_KEY / VOYAGE_API_KEY / GEMINI_API_KEY)
@@ -220,14 +226,17 @@ class Settings(BaseSettings):
                 ],
             },
         )
-        # The retrieval composition (the analog of INGESTION_PIPELINE): dense-only by default; set
-        # ``retrievers`` + a ``fuser: {"class_name": "rrf"}`` for hybrid. Comparing methods = vary this.
+        # The retrieval composition (the analog of INGESTION_PIPELINE): HYBRID by default — dense KNN +
+        # sparse BM25, RRF-fused. Measured (doc/phases.md, post-MOTHRAG Options 1–2): never lost on any
+        # segment, +0.057 source-hit on layout/table corpora (tables +0.074), and free at query time
+        # (the FTS index is built at ingest regardless). Dense-only remains one config edit away
+        # (drop the sparse retriever + set ``fuser: identity``). Comparing methods = vary this.
         self.components.setdefault(
             RETRIEVAL_PIPELINE,
             {
                 "class_name": "retrieval_pipeline",
-                "retrievers": [{"class_name": "dense"}],
-                "fuser": {"class_name": "identity"},
+                "retrievers": [{"class_name": "dense"}, {"class_name": "sparse"}],
+                "fuser": {"class_name": "rrf"},
             },
         )
         # The generation composition: a decomposition reasoner + provenance assembler by default. Phase 0

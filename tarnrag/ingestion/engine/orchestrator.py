@@ -27,9 +27,24 @@ class PipelineDAG:
     """
     The pipeline as a directed acyclic graph. Sequential edges for now:
     ``stage[i] -> stage[i+1]``.
+
+    Also the **naming authority**: node names are the routing identity — every queued job carries a
+    ``stage_name`` that the *consumer's* DAG resolves (in distributed mode, a different process) — so
+    they must be derivable from the pipeline definition alone. An unnamed stage is assigned
+    ``{tag}-{position}`` here (same ``Settings`` ⇒ same names in every process, every restart); an
+    explicit ``config.name`` wins. Duplicate names are refused up front — ``get_stage`` would silently
+    route every job to the first match. A stage instance belongs to one pipeline: re-using it in a
+    second DAG at a different position would rename it out from under the first DAG's edges.
     """
 
     def __init__(self, stages: list):
+        for i, stage in enumerate(stages):
+            if getattr(stage.config, "name", None) is None:
+                stage._name = f"{stage.tag}-{i}"  # positional — no process-local state in the identity
+        names = [stage.name for stage in stages]
+        if len(set(names)) != len(names):
+            dupes = sorted({n for n in names if names.count(n) > 1})
+            raise ValueError(f"duplicate stage name(s) {dupes} — every DAG node needs a unique name")
         self.stages = stages
         self.edges = [(stages[i].name, stages[i + 1].name) for i in range(len(stages) - 1)]
 
@@ -102,10 +117,9 @@ class PipelineOrchestrator(BatchCoordinator):
     async def _record(
         self, jobs: list[IngestionJob], status: str, error: str | None = None
     ) -> None:
-        for job in jobs:
-            await self.repository.record_job(
-                job.document_id, job.job_id, job.stage_name, status, error
-            )
+        await self.repository.record_jobs(  # one transaction for the whole batch's status rows
+            [(job.document_id, job.job_id, job.stage_name) for job in jobs], status, error
+        )
 
     def _make_job(self, item: PipelineItem, stage_name: str) -> IngestionJob:
         return IngestionJob(

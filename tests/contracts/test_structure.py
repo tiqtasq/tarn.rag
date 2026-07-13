@@ -152,3 +152,36 @@ def test_pipelineitem_round_trips_through_json():
     restored = PipelineItem.model_validate_json(item.model_dump_json())
     assert restored.document.elements[0].geometry[0].boxes[0].page == 1
     assert restored.document.content_hash == "h"
+
+
+def test_table_contextual_text_binds_values_to_headers():
+    """The embedding-friendly rendering (P1): one line per data row, every value bound to its row and
+    column headers — so 'goodwill in 2019' and '1,910' share one breath."""
+    from tarnrag.contracts import Table, TableCell
+
+    table = Table(
+        n_rows=3, n_cols=3,
+        cells=[
+            TableCell(id="h1", row=0, col=1, is_column_header=True, text="2019"),
+            TableCell(id="h2", row=0, col=2, is_column_header=True, text="2018"),
+            TableCell(id="r1", row=1, col=0, is_row_header=True, text="Goodwill"),
+            TableCell(id="v1", row=1, col=1, text="1,910"),
+            TableCell(id="v2", row=1, col=2, text="2,130"),
+            TableCell(id="r2", row=2, col=0, is_row_header=True, text="Revenue"),
+            TableCell(id="v3", row=2, col=1, text="10"),
+            TableCell(id="v4", row=2, col=2, text="8"),
+        ],
+    )
+    assert table.contextual_text() == (
+        "Goodwill \u2014 2019: 1,910; 2018: 2,130\nRevenue \u2014 2019: 10; 2018: 8"
+    )
+
+
+def test_table_contextual_text_without_headers_or_cells():
+    from tarnrag.contracts import Table, TableCell
+
+    bare = Table(n_rows=1, n_cols=2, cells=[
+        TableCell(id="a", row=0, col=0, text="x"), TableCell(id="b", row=0, col=1, text="y"),
+    ])
+    assert bare.contextual_text() == "x; y"  # no headers to bind -> plain values, one row-line
+    assert Table(n_rows=0, n_cols=0, cells=[]).contextual_text() == ""  # no data cells

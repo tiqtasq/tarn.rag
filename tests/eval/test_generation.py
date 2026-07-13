@@ -3,7 +3,7 @@
 import json
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.eval import (
     GenEvalQuery,

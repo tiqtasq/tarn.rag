@@ -10,7 +10,7 @@ retrieval sees ingests live, and works on an empty store); the generation engine
 first ``ask``. Use it directly::
 
     async with TarnRag("config.json") as tarn:
-        ingested = await tarn.ingest(["docs/"])
+        ingested = await tarn.ingest(["path/to/your/files"])
         for issue in ingested.report.issues:
             ...  # e.g. a path that wasn't found
         answer = await tarn.ask("…")
@@ -29,6 +29,7 @@ from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.generation.types import GenerationResult
+from tarnrag.ingestion.components.extraction.load_parse import infer_source_kind
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.ingestion.engine.types import DocumentStatus, DocumentSummary
 from tarnrag.report import Issue, Outcome, Report, Severity
@@ -78,6 +79,13 @@ class TarnRag:
         return self
 
     async def close(self) -> None:
+        """Release everything this facade built: the generation LLM (unless it was injected — an
+        injected one is closed by its owner), the ingestion engine (its queue — the pgQueuer pool in
+        distributed mode), and the one shared store."""
+        if self._generation is not None and self._injected_llm is None:
+            await self._generation.llm.aclose()  # the LLM _build_llm created
+        if self._ingestion is not None:
+            await self._ingestion.aclose()  # the queue it built (+ the shared store, idempotently)
         if self._repository is not None:
             await self._repository.disconnect()  # the one store, shared by every engine
 
@@ -93,9 +101,27 @@ class TarnRag:
         """Ingest (or re-ingest) the given files / directories — a directory contributes the files in it.
         The document id is each file's stem, so re-ingesting a file upserts in place (under
         ``ID_POLICY='caller'``). The value is the resulting per-document statuses; the report flags paths
-        that matched nothing and documents that failed to ingest — neither is dropped silently."""
+        that matched nothing, files skipped because their stem (= id) collides with another file's,
+        replacements whose source kind differs from the stored document's (probably a different file
+        sharing the stem), and documents that failed to ingest — nothing is dropped silently."""
         files, missing = self._expand(paths)
         issues = [Issue("not found", Severity.WARNING, subject=raw) for raw in missing]
+        if self.settings.ID_POLICY == "caller":
+            # The stem is the document id — two files sharing one stem (a.md + a.txt, or one name in two
+            # directories) would silently upsert over each other. Keep the first, report the rest.
+            files, collisions = self._split_stem_collisions(files)
+            issues += [
+                Issue(
+                    f"skipped — its document id {skipped.stem!r} is already taken by {kept}",
+                    Severity.ERROR,
+                    subject=str(skipped),
+                )
+                for skipped, kept in collisions
+            ]
+            # Cross-call guard: an id that already exists is a legitimate re-ingest (upsert) — but if the
+            # STORED source kind differs from the incoming file's, this is probably a different file that
+            # happens to share the stem (a.pdf then a.md). The replace proceeds; the report says so.
+            issues += await self._kind_change_warnings(files)
         if not files:
             return Outcome([], Report(tuple(issues)))
         ingestion = await self._ingestion_engine()
@@ -170,6 +196,48 @@ class TarnRag:
                 "(the provider / model are in the config)"
             )
         return LanguageModel.create(self.settings.llm)
+
+    async def _kind_change_warnings(self, files: list[Path]) -> list[Issue]:
+        """A WARNING per file that is about to replace a stored document of a **different source kind**
+        (the ``a.pdf`` then ``a.md`` case — same stem, so same id, but almost certainly a different
+        document). A same-kind replace is the normal re-ingest contract and stays silent; a stored kind of
+        ``""``/``"document"`` is the pre-fix unknown default, so it can't be compared and stays silent too.
+        The replace itself proceeds either way — this is the report, not a refusal."""
+        issues: list[Issue] = []
+        for path in files:
+            existing = await self._repository.get_document(path.stem)
+            if existing is None:
+                continue  # a fresh id — nothing is replaced
+            stored = (existing.metadata or {}).get("source_kind") or ""
+            incoming = infer_source_kind(str(path))
+            if stored not in ("", "document") and incoming and stored != incoming:
+                issues.append(
+                    Issue(
+                        f"replacing document {path.stem!r}, previously ingested from a {stored!r} "
+                        f"source, with this {incoming!r} file",
+                        Severity.WARNING,
+                        subject=str(path),
+                    )
+                )
+        return issues
+
+    @staticmethod
+    def _split_stem_collisions(files: list[Path]) -> tuple[list[Path], list[tuple[Path, Path]]]:
+        """Partition ``files`` by stem uniqueness: the kept files (first file per stem, in order) and the
+        collisions as ``(skipped, kept-it-collides-with)`` pairs. Only used under ``ID_POLICY='caller'``,
+        where the stem is the document id — a collision would be a silent overwrite, so it is skipped and
+        reported instead. Deterministic: ``_expand`` yields a stable order, so re-runs keep the same file."""
+        first_by_stem: dict[str, Path] = {}
+        kept: list[Path] = []
+        collisions: list[tuple[Path, Path]] = []
+        for path in files:
+            existing = first_by_stem.get(path.stem)
+            if existing is None:
+                first_by_stem[path.stem] = path
+                kept.append(path)
+            else:
+                collisions.append((path, existing))
+        return kept, collisions
 
     @staticmethod
     def _expand(paths: list[str]) -> tuple[list[Path], list[str]]:

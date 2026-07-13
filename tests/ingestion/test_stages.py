@@ -2,7 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from tarnrag.contracts import ChunkProvenance, PipelineItem
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import EmbeddingSettings
 from tarnrag.ingestion.pipeline.pipeline import Pipeline
 from tarnrag.ingestion.components.chunking.chunk import ChunkStage
@@ -82,7 +82,7 @@ def test_embed_produces_embeddings_with_model_batching():
     ]
     embs = list(stage.process_batch(items))
     assert [e.chunk_id for e in embs] == ["c0", "c1", "c2"]
-    assert all(e.dimension == 3 and e.model.endswith("gte-small") for e in embs)
+    assert all(len(e.vector) == 3 for e in embs)  # just the key + vector — identity is index-wide
     # batch_size=2 over 3 items -> two embed calls (two-tier batching)
     assert len(stage._embedder.calls) == 2
 
@@ -111,6 +111,39 @@ def test_embed_injects_header_path_when_enabled():
     assert on2._embedder.calls[-1] == ["plain text"]
 
 
+def test_embed_contextualizes_table_chunks_when_enabled():
+    """contextualize_tables embeds a TABLE chunk as its header-contextualized rendering (values bound
+    to headers) instead of the raw grid; stored text is untouched, non-table chunks are unaffected,
+    and header-path injection composes on top."""
+    from tarnrag.contracts import Table, TableCell
+
+    table = Table(n_rows=2, n_cols=2, cells=[
+        TableCell(id="h", row=0, col=1, is_column_header=True, text="2019"),
+        TableCell(id="r", row=1, col=0, is_row_header=True, text="Goodwill"),
+        TableCell(id="v", row=1, col=1, text="1,910"),
+    ])
+    item = PipelineItem(
+        content="| 2019 |\n| Goodwill | 1,910 |", metadata={"chunk_id": "c0", "source_id": "s1"},
+        provenance=ChunkProvenance(content_hash="h", header_path=["Notes"], table=table),
+    )
+    on = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings(contextualize_tables=True)))
+    on._embedder = _FakeEmbedder()
+    list(on.process_batch([item]))
+    assert on._embedder.calls[-1] == ["Goodwill \u2014 2019: 1,910"]  # rendered from cells, not the grid
+
+    off = EmbedStage(EmbedStage.Config(embedding=EmbeddingSettings()))
+    off._embedder = _FakeEmbedder()
+    list(off.process_batch([item]))
+    assert off._embedder.calls[-1] == [item.content]  # default: the grid text as stored
+
+    both = EmbedStage(EmbedStage.Config(
+        embedding=EmbeddingSettings(contextualize_tables=True, inject_header_path=True)
+    ))
+    both._embedder = _FakeEmbedder()
+    list(both.process_batch([item]))
+    assert both._embedder.calls[-1] == ["Notes\nGoodwill \u2014 2019: 1,910"]  # the two compose
+
+
 def test_stage_built_from_dict_spec_via_component_factory():
     """The migration's goal: a stage (and its chunker child) instantiated from a plain dict spec."""
     chunk = ComponentFactory.get().create(
@@ -119,7 +152,7 @@ def test_stage_built_from_dict_spec_via_component_factory():
     assert isinstance(chunk, ChunkStage)
     assert (chunk._chunker.config.chunk_size, chunk._chunker.config.overlap) == (16, 4)  # child built by the factory
     assert chunk.tag == "Chunk"  # the type tag (the sink/metrics key)
-    assert chunk.name.startswith("Chunk-")  # unnamed instance -> counter-suffixed unique id
+    assert chunk.name == "Chunk"  # unnamed ⇒ the bare tag; PipelineDAG adds the positional suffix
     assert chunk.to_json()["class_name"] == "Chunk"  # round-trips back to a spec
 
 
