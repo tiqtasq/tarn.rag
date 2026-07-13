@@ -62,6 +62,8 @@ tarn> ask <query>           # retrieval + generation — the grounded answer + i
 tarn> help                  # the full list (also: status, delete, quit)
 ```
 
+Full walkthrough: [docs/tutorials/console-session.md](./docs/tutorials/console-session.md).
+
 ## Quickstart — the Python API
 
 The high-level facade (`TarnRag`) wires ingestion + retrieval + generation over one store; each call returns
@@ -92,6 +94,9 @@ ids = await engine.ingest_paths(["/data/spec.pdf"])
 async with await RetrievalEngine.create() as r:   # validates schema + embedding fingerprint
     results = await r.search_text("how do I inspect a tank?", top_k=8)
 ```
+
+Full walkthrough: [docs/tutorials/getting-started.md](./docs/tutorials/getting-started.md) — and the
+[documentation index](./docs/index.md) for everything beyond the quickstarts.
 
 ## The quality profile
 
