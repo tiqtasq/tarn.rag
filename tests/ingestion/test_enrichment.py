@@ -10,7 +10,7 @@ from tarnrag.contracts import (
     Span,
     StructuredDocument,
 )
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.ingestion.components.enrichment.acronyms import AcronymEnricher
 from tarnrag.ingestion.components.enrichment.enrich import EnrichStage
 from tarnrag.ingestion.components.enrichment.enricher import Enricher

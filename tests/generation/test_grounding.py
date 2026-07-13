@@ -2,7 +2,7 @@
 
 import json
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import (
     GenerationContext,
@@ -127,3 +127,41 @@ async def test_cascade_skips_the_llm_when_the_heuristic_resolves_everything(make
     cascade = _cascade({"class_name": "heuristic_grounding"}, {"class_name": "llm_grounding"})
     assert await cascade.check(reasoned, ctx) == [Verdict.GROUNDED]
     assert calls == []  # the expensive checker was never called
+
+
+async def test_llm_judge_sees_the_configured_table_view():
+    """The fact-checker renders cited TABLE chunks per its table_view — structured by default, the raw
+    grid when pinned to 'text' — so it judges the same representation the reader read."""
+    import json as _json
+
+    from tarnrag.contracts import ChunkProvenance, RetrievalResult, Table, TableCell
+    from tarnrag.core.resources.llm import StaticLanguageModel
+    from tarnrag.generation.components.grounding import LLMGroundingChecker
+    from tarnrag.generation.components.reasoner import ReasonedAnswer, ReasonedStep
+    from tarnrag.generation.context import GenerationContext
+
+    table = Table(n_rows=2, n_cols=2, cells=[
+        TableCell(id="h", row=0, col=1, is_column_header=True, text="2019"),
+        TableCell(id="r", row=1, col=0, is_row_header=True, text="Goodwill"),
+        TableCell(id="v", row=1, col=1, text="1,910"),
+    ])
+    hit = RetrievalResult(
+        chunk_id="t", text=" | 2019\nGoodwill | 1,910", score=1.0, component_scores={},
+        document_id="d", source_kind="table", standard_id=None, locator=None, license_class="open",
+        provenance=ChunkProvenance(content_hash="h", table=table),
+    )
+    reasoned = ReasonedAnswer("1,910", [ReasonedStep(claim="Goodwill was 1,910 in 2019", cited=[0])], [hit])
+    seen = {}
+
+    def reply(prompt):
+        seen["user"] = prompt.user
+        return _json.dumps({"verdicts": [True]})
+
+    ctx = GenerationContext(retrieval=None, llm=StaticLanguageModel(reply))
+    checker = LLMGroundingChecker(LLMGroundingChecker.Config())
+    assert await checker.check(reasoned, ctx)  # runs; and the judge saw the structured rendering
+    assert "Goodwill \u2014 2019: 1,910" in seen["user"]
+
+    pinned = LLMGroundingChecker(LLMGroundingChecker.Config(table_view="text"))
+    await pinned.check(reasoned, ctx)
+    assert " | 2019\nGoodwill | 1,910" in seen["user"]  # the raw grid under the pinned baseline view

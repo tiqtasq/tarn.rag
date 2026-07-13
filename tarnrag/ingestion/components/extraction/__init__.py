@@ -13,6 +13,7 @@ from tarnrag.ingestion.components.extraction.html import HtmlExtractor
 from tarnrag.ingestion.components.extraction.markdown import MarkdownExtractor
 from tarnrag.ingestion.components.extraction.pdf import PdfTextExtractor
 from tarnrag.ingestion.components.extraction.plain_text import PlainTextExtractor
+from tarnrag.ingestion.components.extraction.table_json import TableJsonExtractor
 from tarnrag.ingestion.components.extraction.load_parse import LoadAndParseStage
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     "MarkdownExtractor",
     "PdfTextExtractor",
     "PlainTextExtractor",
+    "TableJsonExtractor",
     "LoadAndParseStage",
 ]

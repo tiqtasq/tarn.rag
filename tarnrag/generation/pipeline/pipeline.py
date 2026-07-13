@@ -16,7 +16,7 @@ from typing import Any, Literal
 
 from pydantic import Field
 
-from tarnrag.core.components import Component, ComponentFactory
+from bausatz import Component, ComponentFactory
 from tarnrag.generation.components.assembler import EvidenceAssembler
 from tarnrag.generation.components.grounding import GroundingChecker, Verdict
 from tarnrag.generation.components.reasoner import Reasoner
@@ -62,6 +62,11 @@ class GenerationPipeline(Component):
     async def answer(self, query: Query, ctx: GenerationContext) -> GenerationResult:
         self._ensure_children()
         reasoned = await self._reasoner.reason(query, ctx)
+        if reasoned.abstained:  # a gate refused BEFORE the read — surface it; nothing to verify
+            return GenerationResult(
+                answer=reasoned.answer, proof=[], evidence=reasoned.evidence,
+                grounded=False, abstained=True,
+            )
         flags = None
         if self._grounding is not None:
             verdicts = await self._grounding.check(reasoned, ctx)

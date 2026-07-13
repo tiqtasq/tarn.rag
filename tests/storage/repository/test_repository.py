@@ -224,7 +224,7 @@ async def test_document_status_and_jobs(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     assert await repo.document_status("s1") == {
         "document_id": "s1",
@@ -250,7 +250,7 @@ async def test_delete_document_keeps_jobs_until_cleared(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     await repo.record_job("s1", "j1", "LoadAndParse", "completed")
     assert (await repo.document_status("s1"))["status"] == "complete"
@@ -276,7 +276,7 @@ async def test_delete_document_and_jobs_removes_both(repo):
         [_chunk("a", 0, 1)],
     )
     await repo.store_embeddings(
-        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0], model="m", dimension=3)]
+        [Embedding(chunk_id=cid, vector=[1.0, 0.0, 0.0])]
     )
     await repo.record_job("s1", "j1", "LoadAndParse", "completed")
     assert (await repo.document_status("s1"))["status"] == "complete"
@@ -324,8 +324,8 @@ async def test_dense_knn_and_hydrate(repo):
         [_chunk("tank inspection", 0, 2), _chunk("quokka", 1, 2)],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=cid_a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=cid_b, vector=[0.0, 1.0, 0.0]),
     ])
     cands = await repo.dense_knn([0.9, 0.1, 0.0], k=2)
     assert cands[0].chunk_id == cid_a  # nearest first
@@ -370,10 +370,10 @@ async def test_dense_knn_filter_backfills_past_disallowed(repo):
         ],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c3, vector=[0.8, 0.2, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c4, vector=[0.0, 1.0, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0]),
+        Embedding(chunk_id=c3, vector=[0.8, 0.2, 0.0]),
+        Embedding(chunk_id=c4, vector=[0.0, 1.0, 0.0]),
     ])
     query = [1.0, 0.0, 0.0]  # nearest order: c1, c2, c3, c4
     assert [c.chunk_id for c in await repo.dense_knn(query, k=2)] == [c1, c2]  # unfiltered: nearest two
@@ -396,8 +396,8 @@ async def test_dense_knn_filter_restricts_to_method_scope(repo):
         [_chunk("in scope", 0, 2), _chunk("out of scope", 1, 2)],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=c1, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=c2, vector=[0.9, 0.1, 0.0]),
     ])
     async with repo.engine.begin() as conn:
         await conn.execute(
@@ -409,6 +409,109 @@ async def test_dense_knn_filter_restricts_to_method_scope(repo):
     assert await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=())) == []
 
 
+async def test_method_bundle_registers_replaces_and_clears(repo):
+    """``register_method_bundle`` is the §8 bundle writer the scope-filter path was missing: it writes
+    the bundle, REPLACES it on re-registration (idempotent), clears on an empty list — and a scoped
+    dense search honors it end to end."""
+    _, (c1, c2, c3) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("one", 0, 3), _chunk("two", 1, 3), _chunk("three", 2, 3)],
+    )
+    await repo.store_embeddings([
+        Embedding(chunk_id=c, vector=v)
+        for c, v in ((c1, [1.0, 0.0, 0.0]), (c2, [0.9, 0.1, 0.0]), (c3, [0.8, 0.2, 0.0]))
+    ])
+    await repo.register_method_bundle("M1", "v1", [c1, c2])
+    assert await repo.method_bundle("M1", "v1") == sorted([c1, c2])
+    scoped = await repo.dense_knn(
+        [1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=(MethodRef("M1", "v1"),))
+    )
+    assert {c.chunk_id for c in scoped} == {c1, c2}  # the registered bundle, through the filter
+
+    await repo.register_method_bundle("M1", "v1", [c3])  # re-register REPLACES the bundle
+    assert await repo.method_bundle("M1", "v1") == [c3]
+    await repo.register_method_bundle("M1", "v1", [])  # empty clears it
+    assert await repo.method_bundle("M1", "v1") == []
+    assert (
+        await repo.dense_knn([1.0, 0.0, 0.0], k=5, filter=ChunkFilter(method_scope=(MethodRef("M1"),)))
+        == []
+    )
+
+
+async def test_hydrate_returns_registered_methods_batched(repo):
+    """``hydrate`` carries each chunk's method refs (now fetched in ONE query, not one per chunk),
+    ordered by method id for determinism."""
+    _, (c1, c2) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [_chunk("one", 0, 2), _chunk("two", 1, 2)],
+    )
+    await repo.register_method_bundle("M2", "v2", [c1, c2])
+    await repo.register_method_bundle("M1", "v1", [c1])
+    rec1, rec2 = await repo.hydrate(["not-a-chunk", c1, c2])  # unknown ids are skipped, order kept
+    assert rec1.methods == [("M1", "v1"), ("M2", "v2")]  # ordered by method_id
+    assert rec2.methods == [("M2", "v2")]
+    async with repo.engine.connect() as conn:  # the helpers' empty early-outs (hydrate returns before them)
+        assert await repo.reads.methods_by_chunk(conn, []) == {}
+        assert await repo.reads.chunk_provenance(conn, []) == {}
+        assert await repo.reads.child_rows_by_chunk(conn, repo.table_cells, []) == {}
+
+
+def test_fts_query_composes_exact_match_intent():
+    """The FTS5 MATCH builder (P3): plain queries are byte-identical to the old OR builder; quoted spans
+    and punctuation-split identifiers become REQUIRED phrases, AND-ed with the OR remainder."""
+    q = SqliteRepository._fts_query
+    assert q("tank inspection") == '"tank" OR "inspection"'  # plain: unchanged
+    assert q('check the "goodwill impairment" note') == '"goodwill impairment" AND ("check" OR "the" OR "note")'
+    assert q("torque for 6.4.2") == '"6 4 2" AND ("torque" OR "for")'  # dotted identifier ⇒ adjacency
+    assert q("§6.4 applies") == '"6 4" AND ("applies")'
+    assert q('"exact phrase"') == '"exact phrase"'  # phrase-only query
+    assert q("BM25 ranking") == '"bm25" OR "ranking"'  # single-piece identifier is a plain token already
+    assert q('find " " it') == '"find" OR "it"'  # a blank quoted span contributes nothing
+    assert q("under 20,000,000 total") == '"under" OR "20" OR "000" OR "total"'  # dedupe within one token too
+    assert q("!!! ...") == ""  # nothing usable ⇒ no match
+
+
+async def test_sparse_search_requires_phrase_adjacency(repo):
+    """A quoted span or dotted identifier must appear as an ADJACENT phrase — token scatter no longer
+    matches (P3); plain multi-token queries stay recall-first (OR)."""
+    _, (a, b) = await repo.store_document_with_chunks(
+        Document(content="d", metadata={"source_id": "s1"}),
+        [
+            _chunk("apply the torque from section 6.4.2 of the manual", 0, 2),
+            _chunk("6 bolts, 4 nuts and 2 washers in the torque kit", 1, 2),
+        ],
+    )
+    plain = await repo.sparse_search("torque kit", 5)  # plain OR: both chunks match
+    assert {c.chunk_id for c in plain} == {a, b}
+    scoped = await repo.sparse_search("torque 6.4.2", 5)  # the identifier is a required phrase
+    assert [c.chunk_id for c in scoped] == [a]  # b has 6 / 4 / 2 scattered — excluded
+    quoted = await repo.sparse_search('"torque kit"', 5)  # quoted span: adjacency required
+    assert [c.chunk_id for c in quoted] == [b]  # a has 'torque from …' — not the phrase
+    assert await repo.sparse_search("!!! ...", 5) == []  # nothing usable ⇒ no match, no FTS error
+
+
+async def test_hydrate_carries_table_and_annotations(repo):
+    """``hydrate`` (the retrieval read path) rebuilds a chunk's table cells AND annotations onto its
+    provenance — the same assembly ``get_chunk`` uses, through the hydrate-side ``chunk_provenance``."""
+    chunk = Chunk(
+        parent_doc_id="",
+        content="| Bolt | Torque |",
+        chunk_index=0,
+        provenance=ChunkProvenance(
+            content_hash=_h("t"),
+            table=Table(n_rows=1, n_cols=1, cells=[TableCell(id="c0", row=0, col=0, text="Bolt")]),
+            annotations=[Annotation(producer="acronyms", type="entity", value={"text": "M6"})],
+        ),
+        metadata={"source_id": "s1"},
+    )
+    _, (cid,) = await repo.store_document_with_chunks(
+        Document(content="full", metadata={"source_id": "s1"}), [chunk]
+    )
+    [rec] = await repo.hydrate([cid])
+    assert rec.provenance.table is not None and rec.provenance.table.cell_at(0, 0).text == "Bolt"
+    assert [a.type for a in rec.provenance.annotations] == ["entity"]
+
+
 async def test_dense_knn_filter_by_license_class(repo):
     """The permitted-chunk filter restricts by license_class (the ModusQ §5.6 policy axis)."""
     _, (a, b) = await repo.store_document_with_chunks(
@@ -417,8 +520,8 @@ async def test_dense_knn_filter_by_license_class(repo):
          _chunk("copyrighted", 1, 2, license_class="third_party_copyrighted")],
     )
     await repo.store_embeddings([
-        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0], model="m", dimension=3),
-        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0], model="m", dimension=3),
+        Embedding(chunk_id=a, vector=[1.0, 0.0, 0.0]),
+        Embedding(chunk_id=b, vector=[0.9, 0.1, 0.0]),
     ])
     hits = await repo.dense_knn(
         [1.0, 0.0, 0.0], k=5, filter=ChunkFilter(license_classes=("public_domain", "customer_licensed"))

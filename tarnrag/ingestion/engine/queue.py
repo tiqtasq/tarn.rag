@@ -17,9 +17,10 @@ from tarnrag.ingestion.engine.jobs import Batch, IngestionJob
 
 ENTRYPOINT = "ingest"  # single pgQueuer entrypoint; the consumer forms homogeneous Batches
 
-# A handler receives a Batch — a homogeneous unit (all jobs share one stage_name). Today
-# every dispatch is a single job; batch dispatch must group claims by stage_name (Batch
-# enforces it). Forming the Batch is the consumer's job; the worker just runs it.
+# A handler receives a Batch — a homogeneous unit (all jobs share one stage_name; the Batch
+# constructor enforces it). Forming the Batch is the consumer's job; the worker just runs it.
+# The InMemory queue groups each wave into real multi-job batches per stage; the pgQueuer
+# adapter still dispatches single-job batches (claim-side batching is a pending optimization).
 JobHandler = Callable[[Batch], Awaitable[None]]
 
 
@@ -49,19 +50,21 @@ class JobConsumer(ABC):
 
 class InMemoryJobQueue(JobEnqueuer, JobConsumer):
     """
-    In-process job queue for tests — no Postgres, no pgQueuer. Emulates pgQueuer's
-    at-least-once + requeue-on-raise semantics so tests reflect reality.
+    The **production embedded-mode queue** (and the test double) — in-process, no Postgres, no
+    pgQueuer. Emulates pgQueuer's at-least-once + requeue-on-raise semantics so embedded mode and
+    the tests behave like the distributed queue.
 
     ``requeue_on_error=True`` (default) re-queues a failing job up to ``max_attempts``
     (recovery tests); ``False`` re-raises immediately (sharp unit failures). pgQueuer
     does NOT guarantee ordering — tests must not rely on it.
     """
 
-    def __init__(self, requeue_on_error: bool = True, max_attempts: int = 3):
+    def __init__(self, requeue_on_error: bool = True, max_attempts: int = 3, max_batch_size: int = 256):
         self._jobs: asyncio.Queue[tuple[IngestionJob, int]] = asyncio.Queue()
         self._handler: JobHandler | None = None
         self.requeue_on_error = requeue_on_error
         self.max_attempts = max_attempts
+        self.max_batch_size = max_batch_size  # jobs grouped per dispatch (one stage runs over many docs at once)
         self.dead_letters: list[IngestionJob] = []
 
     async def enqueue(self, job: IngestionJob) -> None:
@@ -71,20 +74,41 @@ class InMemoryJobQueue(JobEnqueuer, JobConsumer):
         self._handler = handler
 
     async def run(self) -> None:
-        """Drain all jobs (including any enqueued while handling) and stop — so tests
-        terminate. Use as the test entrypoint instead of a forever loop."""
+        """Drain all jobs (including any enqueued while handling) and stop — so tests terminate. Each wave
+        drains the currently-queued jobs and **dispatches them in homogeneous batches** (grouped by
+        ``stage_name``, capped at ``max_batch_size``), so a stage runs over many documents at once — Embed
+        batches their chunks, and each sink commits once per batch instead of once per document. The DAG
+        advance re-enqueues next-stage jobs, which the next wave picks up."""
         assert self._handler is not None, "set_handler() before run()"
         while not self._jobs.empty():
-            job, attempts = await self._jobs.get()
-            try:
-                await self._handler(Batch([job]))  # one job per dispatch today
-            except Exception:
-                if not self.requeue_on_error:
-                    raise
+            wave: list[tuple[IngestionJob, int]] = []
+            while not self._jobs.empty():
+                wave.append(self._jobs.get_nowait())  # snapshot the current queue (this stage-wave)
+            by_stage: dict[str, list[tuple[IngestionJob, int]]] = {}
+            for entry in wave:
+                by_stage.setdefault(entry[0].stage_name, []).append(entry)
+            for stage_jobs in by_stage.values():
+                for i in range(0, len(stage_jobs), self.max_batch_size):
+                    await self._dispatch(stage_jobs[i : i + self.max_batch_size])
+
+    async def _dispatch(self, batch: list[tuple[IngestionJob, int]]) -> None:
+        """Dispatch one homogeneous batch. On failure with requeue, **isolate**: re-run each job solo so a
+        single bad job doesn't penalize the rest — preserving the per-job at-least-once / dead-letter
+        semantics (a solo failure requeues that job or, past ``max_attempts``, dead-letters it)."""
+        try:
+            await self._handler(Batch([job for job, _ in batch]))
+        except Exception:
+            if not self.requeue_on_error:
+                raise
+            if len(batch) == 1:
+                job, attempts = batch[0]
                 if attempts + 1 >= self.max_attempts:
                     self.dead_letters.append(job)
                 else:
                     await self._jobs.put((job, attempts + 1))
+            else:  # a batched failure — re-run each job alone to find (and isolate) the culprit
+                for entry in batch:
+                    await self._dispatch([entry])
 
 
 class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
@@ -94,7 +118,7 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
     propagates so pgQueuer requeues the job (= recovery, D5).
     """
 
-    def __init__(self, driver):
+    def __init__(self, driver, pool=None):
         from pgqueuer import QueueManager
         from pgqueuer.queries import Queries
 
@@ -102,6 +126,7 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         # raw driver — passing the driver makes run()/verify_structure fail with AttributeError.
         self._queries = Queries(driver)
         self._qm = QueueManager(self._queries)
+        self._pool = pool  # the asyncpg pool connect() opened (None when a driver is injected)
 
     @classmethod
     async def connect(cls, connection_url: str) -> "PgQueuerJobQueue":
@@ -112,7 +137,14 @@ class PgQueuerJobQueue(JobEnqueuer, JobConsumer):
         from pgqueuer.db import AsyncpgPoolDriver
 
         pool = await asyncpg.create_pool(connection_url)
-        return cls(AsyncpgPoolDriver(pool))
+        return cls(AsyncpgPoolDriver(pool), pool=pool)
+
+    async def aclose(self) -> None:
+        """Release the asyncpg pool :meth:`connect` opened. Idempotent; a driver-injected instance owns
+        no pool and closes nothing (its owner does)."""
+        if self._pool is not None:
+            pool, self._pool = self._pool, None
+            await pool.close()
 
     async def enqueue(self, job: IngestionJob) -> None:
         # payload is the full IngestionJob (incl. the inline item, D1)

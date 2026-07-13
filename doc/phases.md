@@ -419,3 +419,203 @@ attribution 0.88 vs 0.99, citation-coverage 0.73 vs 0.88 (table vs text). Tables
 answer *and* attribute, which points at the **linearized-table representation** (rendered to text) as the
 next lever — the motivation for ingesting tables through the native structured `Table`-element path (a
 follow-up). Run via `scripts/run_layout_eval.py --attribution`.
+
+---
+
+## Option 3 — bulk-ingest throughput (2026-06-25)
+
+The per-doc ingest path gated every corpus build this session (~2/s). Profiling a 100-doc ingest (offline
+hash embedder, isolating orchestration from embedding) found **~64 `engine.begin()` transactions per
+document** — transaction-count *overhead* (~5 ms each of asyncio+SQLAlchemy machinery; not fsync, not the
+inserts, which total ~1 s). Two causes:
+1. the embedded queue dispatched **one document at a time** (`Batch([job])`), so each doc ran the DAG solo;
+2. **two per-doc loops** persisted per document even within a batch — `DocumentResultSink._persist`
+   (`store_document` per doc) and the orchestrator's `_record` (status per job, per stage).
+
+**Fix (two parts):**
+- **Batched dispatch** — `InMemoryJobQueue` groups a wave's queued jobs by `stage_name` into homogeneous
+  `Batch`es (capped at `max_batch_size`), so a stage runs over many docs at once (the worker/sink already
+  supported multi-job batches). On a batch failure it re-runs each job solo, preserving per-job
+  at-least-once / dead-letter semantics.
+- **Bulk-persist** the two hot loops — `store_documents` (one transaction for the batch's documents) and
+  `record_jobs` (one transaction for the batch's status rows), reusing the exact per-row logic.
+
+**Result** (300 docs, offline): **3.6 → 9.4 docs/s, ~2.6×**. Equivalence verified — the batched + bulk index
+is identical to the per-doc index (same documents, chunks, embeddings); only the transaction count drops.
+Batched dispatch also batches the **Embed** stage, so API embedders make far fewer requests (the cost that
+made the te3 corpus build take ~2.6 h). Remaining floor: per-row inserts + ~5 stages; further wins would need
+cross-stage batching.
+
+---
+
+## Option 4 — robustness: deterministic drift-guards (2026-06-25)
+
+The gains this track measured (hybrid retrieval, attribution, ingest throughput) had no regression guard — a
+refactor could silently undo them. CI shapes what a guard can check: the lean push CI (`codecov.yml`) has no
+models / datasets / LLM key; the gated `model-tests.yml` job has the ONNX models but still no LLM key; and the
+LLM metrics (attribution, multi-hop F1) are non-deterministic (gpt-4o-mini ±0.02–0.03). So the **deterministic,
+every-push** guards are:
+
+- **Hybrid mechanic** (`tests/retrieval/test_hybrid_regression.py`) — the *cause* of the TAT-QA table lift,
+  distilled into an invariant: with a controlled embedder, a 'table' chunk whose exact tokens are present but
+  whose dense vector is far from the query is ranked **below** the top-k by dense-only, and **rescued** by
+  hybrid (BM25 → RRF ranks it first). Breaks if the sparse arm or RRF fusion regresses. No model needed.
+- **Ingest equivalence** (`tests/ingestion/test_bulk_ingest.py`, from Option 3) — the batched + bulk-persist
+  index is identical to the per-doc index.
+
+The full, real-data quality metrics (gte-small table lift, gpt-4o-mini attribution / multi-hop F1) need
+corpus scale and/or an LLM key, so they're tracked **on-demand** via `scripts/run_layout_eval.py` and
+`scripts/run_benchmarks.py` rather than as committed CI assertions.
+
+---
+
+## P2 + P3 — hybrid default + phrase-aware sparse: measurement (2026-07-05)
+
+Setup: `scripts/run_layout_eval.py --limit 100 -k 10` (TAT-QA, n=334 extractive queries, same
+parameters as the Option-2 baseline), store rebuilt from scratch under **schema v2**.
+
+| segment    |   n | DENSE | HYBRID (P3) | HYBRID (2026-06-24, pre-P3) |
+|------------|----:|------:|------------:|----------------------------:|
+| table      |  95 | 0.779 |       0.853 |                        0.853 |
+| table-text | 110 | 0.855 |       0.945 |                        0.945 |
+| text       | 129 | 0.938 |       0.953 |                        0.953 |
+| OVERALL    | 334 | 0.865 |   **0.922** |                        0.922 |
+
+Findings:
+
+1. **Clean A/A.** Dense reproduces the June baseline digit-for-digit on a from-scratch schema-v2
+   rebuild — B7, the read-assembly split, the method-bundle writer, and the hybrid-default flip
+   moved retrieval by exactly zero. End-to-end regression-freedom, not just unit-level.
+2. **P3 is a null result on TAT-QA** — hybrid-with-phrase-awareness equals pre-P3 hybrid exactly.
+   TAT-QA *questions* are natural-language financial prose: no quoted spans, no `§` references,
+   (almost) no dotted identifiers — the phrase path never fires. This also confirms the
+   "plain queries compile byte-identically" claim in the strongest possible way.
+3. **Where P3 pays** is identifier-style queries (`§6.4.2`, `"exact phrase"`, version numbers) —
+   the technical-manual / ModusQ query style the behavior tests exercise. The roadmap's
+   "TAT-QA (identifier-heavy)" measurement assumption was wrong for its question side; a real P3
+   measurement needs a lexical-classified query slice over a manuals-style corpus (open item).
+
+---
+
+## P1 PR-1 — native table ingest + contextualized embedding: measurement (2026-07-05)
+
+Setup as before (`--limit 100 -k 10`, n=334). New: tables ingest through the native `table_json`
+extractor (chunks carry a real `Table`; cells persisted), and `EMBEDDING__CONTEXTUALIZE_TABLES`
+embeds a table chunk as its header-contextualized rendering (`Table.contextual_text` — each value
+bound to its row/column headers). Stored/BM25 text stays the grid.
+
+| config                       | table | table-text | text  | overall |
+|------------------------------|------:|-----------:|------:|--------:|
+| plain-text tables, dense     | 0.779 |      0.855 | 0.938 |   0.865 |
+| plain-text tables, hybrid    | 0.853 |      0.945 | 0.953 |   0.922 |
+| **native ingest**, dense     | 0.768 |      0.864 | 0.938 |   0.865 |
+| native ingest, hybrid        | 0.853 |      0.945 | 0.953 |   0.922 |
+| native + **ctx**, dense      | 0.747 |      0.891 | 0.930 |   0.865 |
+| native + ctx, hybrid         | 0.863 |      0.945 | 0.953 | **0.925** |
+
+Findings:
+
+1. **Native ingest is behavior-preserving**: hybrid digit-identical; dense a wash (−0.011 table /
+   +0.009 table-text — the atomic table leaf vs the old char-split of oversize tables).
+2. **Contextualized embedding is a small, mixed lever at the retrieval level**: on the shipped
+   hybrid default +0.010 table / +0.003 overall; on pure dense it helps table-text (+0.027) but
+   hurts pure-table (−0.021), netting flat. Hybrid had already closed most of the table
+   *retrieval* gap. The flag ships **default-off** (an embed-time index variant, fingerprinted).
+3. **The big measured table penalty is reader-side** (attribution 0.88 vs 0.99, F1 0.51 vs 0.60)
+   — PR-2's territory (structured table view + cell citations for the reader). PR-1's real
+   deliverable is the substrate PR-2 needs: real `Table`s with persisted cells flowing through
+   ingest → chunks → hydrate.
+4. Eval-script fix along the way: since P2 made hybrid the Settings default, the script's
+   "DENSE" leg (which passed no spec) silently ran hybrid — it now pins an explicit dense-only
+   spec.
+
+---
+
+## P1 PR-2 — structured table view for the reader: measurement (2026-07-06)
+
+The reader (and the grounding judge, kept in lockstep) now sees a TABLE chunk as its
+header-contextualized rendering (`passage_text` / `Table.contextual_text`) instead of the raw grid;
+`table_view ∈ {structured, text}` is pinned explicitly on both components in the eval (never
+inherited). Setup: native store, hybrid retrieval (pinned), `gpt-4o-mini`, n=334.
+
+| segment    | F1 text→struct | EM          | attrib          | cite        |
+|------------|----------------|-------------|-----------------|-------------|
+| table      | 0.532→0.497    | 0.389→0.368 | **0.874→0.895** | 0.732→0.711 |
+| table-text | 0.577→0.560    | 0.427→0.400 | **0.927→0.945** | 0.724→0.706 |
+| text       | 0.577→0.589    | 0.333→0.341 | 0.984→0.984     | 0.868→0.876 |
+| OVERALL    | 0.564→0.553    | 0.380→0.368 | **0.934→0.946** | 0.782→0.773 |
+
+Findings:
+
+1. **Attribution — the measured penalty PR-2 targets — improves on exactly the penalized
+   segments** (table +0.021, table-text +0.018, overall +0.012), with the text segment as a clean
+   control (0.984 both). The text-view leg reproduces the June baseline (0.874/0.532 vs 0.88/0.51)
+   on the new native store — a valid A/A.
+2. **F1/EM tick down ~0.01–0.035 on table segments** — at n=95/segment with gpt-4o-mini's
+   ±0.02–0.03 nondeterminism both movements sit at the noise edge; no reliable answer-quality
+   cost, no reliable gain. A larger-n run would resolve; not spent here.
+3. Ships with ``structured`` as the default view (the principled representation; the judge always
+   renders what the reader read). ``text`` remains one pinned config away for baselines.
+4. Keyless-run footgun worth remembering: ``OPENAI_LLM_KEY`` in ``.env`` reaches Settings fields,
+   **not** ``os.environ`` — an unexported key makes every LLM call fail silently through
+   ``_safe_answer`` (F1 0.000 / attrib 1.000 across the board is the signature).
+
+---
+
+## P4 — reranker sweep → the quality profile (2026-07-06)
+
+Setup: TAT-QA source-hit@10, n=334, native store, every leg's spec pinned (incl. `top_n`).
+
+| leg                        | table | table-text | text  | overall |
+|----------------------------|------:|-----------:|------:|--------:|
+| DENSE                      | 0.768 |      0.864 | 0.938 |   0.865 |
+| HYBRID (shipped default)   | 0.853 |      0.945 | 0.953 |   0.922 |
+| HYBRID + cross_encoder (uncapped) | 0.895 | 0.964 | 0.946 | 0.937 |
+| HYBRID + cross_encoder (top_n=20) | **0.926** | **0.964** | 0.946 | **0.946** |
+| HYBRID + llm_judge (top_n=20)     | 0.874 | 0.936 | 0.953 |   0.925 |
+
+Findings:
+
+1. **The local cross-encoder wins decisively** (+0.024 overall, +0.073 table over hybrid) and the
+   **LLM judge is noise-level** (+0.003) while costing an API call per query — the offline model
+   beats it on every axis. Fits the offline differentiator.
+2. **Capping helps quality, not just cost**: uncapped, the CE reranks the whole fused shortlist
+   (~60 hydrated candidates) and promotes junk from the deep tail where it's miscalibrated
+   (table 0.895); capped to the top-20 it works only where the first pass is already good
+   (0.926) — and runs ~2.5× faster (26 min vs ~70 min for 334 queries on this CPU;
+   `CrossEncoderReranker` now has `top_n=20`, parity with `llm_judge`).
+3. **The table retrieval gap is essentially closed**: 0.926 vs 0.946 text (was 0.779 vs 0.938
+   dense-only in June).
+4. **The quality profile** = the shipped hybrid default + `reranker: {class_name: cross_encoder,
+   top_n: 20}` (README snippet). The lean default stays reranker-free: ~2–4s/query of CPU rerank
+   is a real cost; the profile is one config edit.
+
+---
+
+## PP-6 — table_lookup: deterministic numeric answers from cells (2026-07-06)
+
+The production pattern's "route structured-data questions to tooling, not the reader" — in-library:
+a `table_lookup` reasoner computes change / %-change / sum / average over one row's year-columns
+straight from the persisted `table_cells` (accounting-format parsing, later-minus-earlier by year
+value regardless of column order), cites the table chunk, and DELEGATES anything it can't resolve
+confidently (cross-row, nested, text-sourced derivations). Eval: the TAT-QA **arithmetic** slice
+(n=253 — previously filtered out entirely), numeric EM at gold precision (2dp), specs fully pinned.
+
+| leg                                        | attempted | EM attempted | EM overall | LLM calls |
+|--------------------------------------------|----------:|-------------:|-----------:|----------:|
+| table_lookup only (no fallback)            | 95 (37.5%)|    **0.432** |      0.162 |     **0** |
+| reader only (single_hop, structured tables)|       253 |        0.261 |      0.261 |       253 |
+| **composed: table_lookup → reader fallback**|      253 |        0.304 |  **0.304** |       158 |
+
+Findings:
+
+1. **Where the deterministic path fires, it is 1.65× more accurate than the reader** (0.432 vs
+   0.261) at zero cost — and it never guesses: the 37.5% attempt-rate is the conservative resolve
+   gate abstaining on derivations outside its op set.
+2. **The composition beats the reader on accuracy AND cost**: +4.3 EM pts overall while cutting
+   LLM calls by 37.5%. This is the shipped default for the component
+   (``fallback: single_hop``); ``fallback: null`` is the LLM-free / abstaining posture.
+3. Levers left on the table (recorded, not spent): pct-change sign conventions (TAT-QA golds are
+   inconsistent — some magnitude-based), count questions, cross-row derivations, row-matching
+   recall. The reader's own 0.261 confirms LLM grid arithmetic is weak — routing was the right
+   call.

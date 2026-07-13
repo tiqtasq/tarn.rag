@@ -28,9 +28,10 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import Component, ComponentFactory
+from bausatz import Component, ComponentFactory
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components._parsing import extract_json
+from tarnrag.generation.components._passages import passage_text
 from tarnrag.generation.components.reasoner import ReasonedAnswer, ReasonedStep
 from tarnrag.generation.context import GenerationContext
 
@@ -50,6 +51,11 @@ class GroundingChecker(Component):
 
     class Config(Component.Config):
         """Base grounding-checker config; concrete checkers pin ``class_name``."""
+
+        # How a cited TABLE chunk is rendered for verification (P1 PR-2) — keep it equal to the
+        # reasoner's ``table_view`` so the fact-checker judges the same representation the reader
+        # read. Evals pin this explicitly.
+        table_view: Literal["structured", "text"] = "structured"
 
     @abstractmethod
     async def check(self, reasoned: ReasonedAnswer, ctx: GenerationContext) -> list[Verdict]:
@@ -92,7 +98,9 @@ class HeuristicGroundingChecker(GroundingChecker):
             if not claim_words:
                 verdicts.append(Verdict.UNGROUNDED)  # a claim with no content words can't be grounded
                 continue
-            cited_text = " ".join(p.text for p in self._cited_passages(step, reasoned))
+            cited_text = " ".join(
+                passage_text(p, self.config.table_view) for p in self._cited_passages(step, reasoned)
+            )
             overlap = len(claim_words & self._content_words(cited_text, stop)) / len(claim_words)
             if overlap >= self.config.high_overlap:
                 verdicts.append(Verdict.GROUNDED)
@@ -130,13 +138,17 @@ class LLMGroundingChecker(GroundingChecker):
         completion = await ctx.llm.complete(Prompt(system=_SYSTEM, user=self._format(reasoned)))
         return self._parse(completion.text, len(reasoned.steps))
 
-    @staticmethod
-    def _format(reasoned: ReasonedAnswer) -> str:
-        """The user message: each numbered claim + the passages it cites."""
+    def _format(self, reasoned: ReasonedAnswer) -> str:
+        """The user message: each numbered claim + the passages it cites (rendered per ``table_view``,
+        so the judge sees what the reader saw)."""
         blocks = []
         for n, step in enumerate(reasoned.steps, 1):
             cited = GroundingChecker._cited_passages(step, reasoned)
-            passages = "\n".join(f"  - {p.text}" for p in cited) if cited else "  (no passages cited)"
+            passages = (
+                "\n".join(f"  - {passage_text(p, self.config.table_view)}" for p in cited)
+                if cited
+                else "  (no passages cited)"
+            )
             blocks.append(f"Claim {n}: {step.claim}\nCited passages:\n{passages}")
         return "\n\n".join(blocks)
 

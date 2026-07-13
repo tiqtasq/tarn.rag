@@ -18,7 +18,7 @@ from typing import Any, Literal
 from pydantic import Field
 
 from tarnrag.contracts import RetrievalResult
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.retrieval.components.fuser import Fuser
 from tarnrag.retrieval.components.merger import Merger
 from tarnrag.retrieval.components.reranker import Reranker

@@ -83,6 +83,9 @@ class IngestionEngine(Engine):
         self._auto_drain = auto_drain
         self._debug = debug
         self._id_policy = id_policy
+        # Serializes the embedded drain: two concurrent ingest() calls would otherwise interleave two
+        # run() loops over the one queue (splitting waves/batches arbitrarily between them).
+        self._drain_lock = asyncio.Lock()
 
     # ----- construction -----
 
@@ -186,6 +189,8 @@ class IngestionEngine(Engine):
         assigns ids). Content dedup is separate — every document stores a ``content_hash``
         (query :meth:`find_by_content_hash`). Returns the document IDs (poll :meth:`status`)."""
         ids = self._resolve_document_ids(source_ids, len(paths))
+        # Hash off the event loop — file hashing is blocking I/O (large files would stall the loop).
+        hashes = await asyncio.gather(*(asyncio.to_thread(sha256_file, path) for path in paths))
         items = [
             self._item(
                 source_id=ids[i],
@@ -193,7 +198,7 @@ class IngestionEngine(Engine):
                 extra={
                     "source_path": path,
                     "source_type": infer_source_kind(path),
-                    "content_hash": sha256_file(path),  # dedup key (sha256 of the file bytes)
+                    "content_hash": hashes[i],  # dedup key (sha256 of the file bytes)
                     **({"extractor": extractor} if extractor else {}),
                 },
             )
@@ -296,6 +301,14 @@ class IngestionEngine(Engine):
         status pointing at deleted data. Idempotent: deleting an unknown document is a no-op."""
         return await self.repository.delete_document_and_jobs(document_id)
 
+    async def aclose(self) -> None:
+        """Release what this engine built: the queue (the pgQueuer asyncpg pool in distributed mode —
+        the InMemory queue holds nothing) and then the repository (the base ``Engine`` lifecycle)."""
+        closer = getattr(self._queue, "aclose", None)
+        if closer is not None:
+            await closer()
+        await super().aclose()
+
     # ----- debug (gated on APP__DEBUG) -----
 
     async def document_jobs(self, document_id: str) -> list[dict]:
@@ -354,7 +367,11 @@ class IngestionEngine(Engine):
             self.obs.counter("ingestion.documents_queued", len(items))
             await self.obs.log("info", "documents queued", count=len(document_ids))
         if self._auto_drain and isinstance(self._queue, JobConsumer):
-            await self._queue.run()  # embedded: process the whole DAG in-process
+            # Embedded: process the whole DAG in-process. Single-flight (the lock): a concurrent ingest
+            # waits rather than starting a second run() loop over the one queue; if the first loop already
+            # drained the second call's jobs (enqueued above), its run() finds an empty queue and returns.
+            async with self._drain_lock:
+                await self._queue.run()
         return document_ids
 
     def _item(self, source_id: str, content: str, extra: dict[str, Any]) -> PipelineItem:

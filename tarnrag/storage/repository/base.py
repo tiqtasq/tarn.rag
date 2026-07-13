@@ -37,17 +37,15 @@ from tarnrag.storage.repository import chunk_provenance as cp
 from tarnrag.contracts import (
     Candidate,
     Chunk,
-    ChunkProvenance,
-    ChunkRecord,
     ChunkStore,
     CorpusStatus,
     Document,
     DocumentFacts,
     DocumentFactsSource,
-    Embedding,
     JobStatusSource,
     RetrievalStore,
 )
+from tarnrag.storage.repository.read_assembly import ReadAssembler
 from tarnrag.storage.status import DocumentStatusReader
 
 # §8 license_class is a closed enum (matches the strategy doc). Single source of truth for the
@@ -126,6 +124,11 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         self.engine: AsyncEngine = create_async_engine(self._driver_url(connection_url))
         self.metadata = MetaData()
         self._define_tables()
+        # The read-side assembly companion (child-table fetches + ChunkProvenance/ChunkRecord
+        # construction) — split out of this class so it stays the port implementation.
+        self.reads = ReadAssembler(
+            self.chunks, self.table_cells, self.chunk_annotations, self.method_chunks
+        )
 
     # ---------------- dialect hooks (subclasses implement) ----------------
 
@@ -266,20 +269,21 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             PrimaryKeyConstraint("method_id", "method_version", "chunk_id"),
             Index("idx_method_chunks_chunk", "chunk_id"),
         )
+        # Schema v2: embeddings are strictly 1:1 with chunks (``chunk_id`` IS the identity — the same
+        # shape as SQLite's ``vec_chunks``). Embedder identity (model/dimension/…) is index-wide and
+        # lives in ``index_meta``, never per row; the historical surrogate ``id`` + ``model`` /
+        # ``dimension`` columns are gone (multi-model corpora would be a designed vector-spaces
+        # feature, not schema slack).
         self.embeddings = Table(
             "embeddings",
             self.metadata,
-            Column("id", Text, primary_key=True),
             Column(
                 "chunk_id",
                 Text,
                 ForeignKey("chunks.chunk_id", ondelete="CASCADE"),
-                nullable=False,
+                primary_key=True,
             ),
             Column("vector", self._vector_type(), nullable=False),
-            Column("model", Text, nullable=False),
-            Column("dimension", Integer, nullable=False),
-            Index("idx_embeddings_chunk", "chunk_id"),
         )
         # Document-keyed status PROJECTION for the API (the queue itself is pgQueuer's).
         self.job_status = Table(
@@ -361,6 +365,20 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             )
             return doc_id
 
+    async def store_documents(self, docs: list[Document]) -> list[str]:
+        """Bulk ``store_document``: upsert every document — each replacing its derived chunks/search indexes
+        — in **one** transaction, so a batch of documents costs a single commit instead of one per document
+        (the ingest hot path). Reuses the exact per-document logic; result is identical to looping
+        ``store_document``."""
+        async with self.engine.begin() as conn:
+            ids: list[str] = []
+            for doc in docs:
+                doc_id = await self._upsert_document(conn, self._doc_values(doc))
+                await self._clear_chunk_index(conn, doc_id)
+                await conn.execute(self.chunks.delete().where(self.chunks.c.document_id == doc_id))
+                ids.append(doc_id)
+            return ids
+
     async def store_document_with_chunks(
         self, doc: Document, chunks: list[Chunk]
     ) -> tuple[str, list[str]]:
@@ -378,24 +396,47 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         async with self.engine.begin() as conn:
             return await self._insert_chunks(conn, None, chunks)
 
-    async def store_embeddings(self, embeddings: list[Embedding]) -> list[str]:
-        rows, ids = [], []
-        for emb in embeddings:
-            eid = emb.id or str(uuid.uuid4())
-            ids.append(eid)
-            rows.append(
-                {
-                    "id": eid,
-                    "chunk_id": emb.chunk_id,
-                    "vector": self._encode_vector(emb.vector),
-                    "model": emb.model,
-                    "dimension": emb.dimension,
-                }
-            )
+    # ``store_embeddings`` is dialect-owned (the ``ChunkStore`` port keeps it abstract here):
+    # SQLite writes the sqlite-vec ``vec_chunks`` virtual table; Postgres upserts the
+    # ``embeddings`` table (``ON CONFLICT (chunk_id)``). Both are idempotent per chunk.
+
+    async def register_method_bundle(
+        self, method_id: str, method_version: str, chunk_ids: list[str]
+    ) -> None:
+        """Register the §8 method bundle — the resolved set of chunks for ``(method_id,
+        method_version)``. REPLACES any existing bundle for that pair in one transaction (idempotent
+        re-registration); an empty ``chunk_ids`` just clears it. A retrieval scoped to a matching
+        ``MethodRef`` then returns only these chunks (the ``method_scope`` pre-filter). The chunks must
+        already be stored (FK). This is the writer the method-scope query path was missing."""
+        mc = self.method_chunks.c
         async with self.engine.begin() as conn:
-            if rows:
-                await conn.execute(insert(self.embeddings), rows)
-        return ids
+            await conn.execute(
+                self.method_chunks.delete().where(
+                    (mc.method_id == method_id) & (mc.method_version == method_version)
+                )
+            )
+            if chunk_ids:
+                await conn.execute(
+                    insert(self.method_chunks),
+                    [
+                        {"method_id": method_id, "method_version": method_version, "chunk_id": cid}
+                        for cid in chunk_ids
+                    ],
+                )
+
+    async def method_bundle(self, method_id: str, method_version: str) -> list[str]:
+        """The chunk ids registered for ``(method_id, method_version)`` (empty if unregistered) —
+        the read-back for :meth:`register_method_bundle`, sorted for determinism."""
+        mc = self.method_chunks.c
+        async with self.engine.connect() as conn:
+            rows = (
+                await conn.execute(
+                    select(mc.chunk_id)
+                    .where((mc.method_id == method_id) & (mc.method_version == method_version))
+                    .order_by(mc.chunk_id)
+                )
+            ).all()
+        return [r[0] for r in rows]
 
     async def update_chunk_metadata(self, chunk_id: str, updates: dict[str, Any]) -> None:
         # No-op BY DESIGN (not unfinished): §8 chunks carry no free-form metadata column. Enrichment
@@ -440,7 +481,7 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
         return dict(
             (
                 await conn.execute(
-                    select(self.chunks.c.document_id, func.count(self.embeddings.c.id))
+                    select(self.chunks.c.document_id, func.count(self.embeddings.c.chunk_id))
                     .select_from(
                         self.chunks.join(
                             self.embeddings,
@@ -475,8 +516,8 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             if row is None:
                 return None
             chunk = self._row_to_chunk(row)
-            await self._attach_tables(conn, [chunk])
-            await self._attach_annotations(conn, [chunk])
+            await self.reads.attach_tables(conn, [chunk])
+            await self.reads.attach_annotations(conn, [chunk])
             return chunk
 
     async def get_chunks_by_document(self, doc_id: str) -> list[Chunk]:
@@ -489,8 +530,8 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                 )
             ).mappings().all()
             chunks = [self._row_to_chunk(r) for r in rows]
-            await self._attach_tables(conn, chunks)
-            await self._attach_annotations(conn, chunks)
+            await self.reads.attach_tables(conn, chunks)
+            await self.reads.attach_annotations(conn, chunks)
             return chunks
 
     async def query_chunks(
@@ -522,6 +563,19 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
                 {"status": status, "error": error, "updated_at": func.now()},
                 insert_extra={"document_id": document_id, "stage_name": stage_name},
             )
+
+    async def record_jobs(
+        self, jobs: list[tuple[str, str, str]], status: str, error: str | None = None
+    ) -> None:
+        """Bulk ``record_job``: upsert many jobs' status rows in **one** transaction — one commit per batch of
+        jobs instead of one per job (the ingest hot path). ``jobs`` is ``(document_id, job_id, stage_name)``."""
+        async with self.engine.begin() as conn:
+            for document_id, job_id, stage_name in jobs:
+                await self._upsert(
+                    conn, self.job_status, self.job_status.c.job_id, job_id,
+                    {"status": status, "error": error, "updated_at": func.now()},
+                    insert_extra={"document_id": document_id, "stage_name": stage_name},
+                )
 
     async def document_jobs(self, document_id: str) -> list[dict[str, Any]]:
         """Debug-only per-job breakdown for one document."""
@@ -798,80 +852,6 @@ class DocumentRepository(ChunkStore, RetrievalStore, JobStatusSource, DocumentFa
             provenance=cp.row_to_provenance(r),
             metadata=self._chunk_metadata(r),
         )
-
-    @staticmethod
-    def _create_chunk_record(row, methods, provenance: ChunkProvenance | None) -> ChunkRecord:
-        """Assemble a ``ChunkRecord`` from a hydrate row + its method refs + provenance — the one place
-        the field list lives. Both dialects' ``hydrate`` queries select the same column order:
-        (chunk_id, text, document_id, source_kind, standard_id, locator, license_class,
-        ai_grounding_allowed, available), so the positional row is shared."""
-        return ChunkRecord(
-            chunk_id=row[0], text=row[1], document_id=row[2], source_kind=row[3],
-            standard_id=row[4], locator=row[5], license_class=row[6],
-            ai_grounding_allowed=bool(row[7]), available=bool(row[8]),
-            methods=[(mid, ver) for mid, ver in methods], provenance=provenance,
-        )
-
-    async def _attach_tables(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
-        """Rebuild each table chunk's ``provenance.table`` from its ``table_cells`` rows (one query)."""
-        grouped = await self._child_rows_by_chunk(
-            conn, self.table_cells, [c.id for c in chunks if c.id], self.table_cells.c.row, self.table_cells.c.col
-        )
-        for chunk in chunks:
-            if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
-                chunk.provenance.table = cp.rebuild_table(rows)
-
-    async def _attach_annotations(self, conn: AsyncConnection, chunks: list[Chunk]) -> None:
-        """Rebuild each chunk's ``provenance.annotations`` from its ``chunk_annotations`` rows (one query)."""
-        grouped = await self._child_rows_by_chunk(
-            conn, self.chunk_annotations, [c.id for c in chunks if c.id], self.chunk_annotations.c.ordinal
-        )
-        for chunk in chunks:
-            if (rows := grouped.get(chunk.id)) and chunk.provenance is not None:
-                chunk.provenance.annotations = [cp.row_to_annotation(r) for r in rows]
-
-    async def _chunk_provenance(
-        self, conn: AsyncConnection, chunk_ids: list[str]
-    ) -> dict[str, ChunkProvenance]:
-        """``ChunkProvenance`` per chunk id — provenance columns + ``table_cells`` + ``chunk_annotations``.
-        The shared, dialect-agnostic provenance fetch behind both dialects' ``hydrate``."""
-        if not chunk_ids:
-            return {}
-        c = self.chunks.c
-        rows = (
-            await conn.execute(
-                select(c.chunk_id, c.header_path, c.level, c.parent_chunk_id, c.geometry, c.content_hash)
-                .where(c.chunk_id.in_(chunk_ids))
-            )
-        ).mappings().all()
-        cells = await self._child_rows_by_chunk(
-            conn, self.table_cells, chunk_ids, self.table_cells.c.row, self.table_cells.c.col
-        )
-        anns = await self._child_rows_by_chunk(conn, self.chunk_annotations, chunk_ids, self.chunk_annotations.c.ordinal)
-        provenance: dict[str, ChunkProvenance] = {}
-        for r in rows:
-            prov = cp.row_to_provenance(r)
-            if cell_rows := cells.get(r["chunk_id"]):
-                prov.table = cp.rebuild_table(cell_rows)
-            if ann_rows := anns.get(r["chunk_id"]):
-                prov.annotations = [cp.row_to_annotation(a) for a in ann_rows]
-            provenance[r["chunk_id"]] = prov
-        return provenance
-
-    async def _child_rows_by_chunk(
-        self, conn: AsyncConnection, table: Table, chunk_ids: list[str], *order_by: Any
-    ) -> dict[str, list[Any]]:
-        """Fetch a chunk-child table's rows for ``chunk_ids``, grouped by ``chunk_id`` (ordered by
-        ``order_by``) — the shared fetch behind the ``_attach_*`` / provenance reads."""
-        if not chunk_ids:
-            return {}
-        rows = (
-            await conn.execute(select(table).where(table.c.chunk_id.in_(chunk_ids)).order_by(*order_by))
-        ).mappings().all()
-        grouped: dict[str, list[Any]] = {}
-        for r in rows:
-            grouped.setdefault(r["chunk_id"], []).append(r)
-        return grouped
 
     @staticmethod
     def _doc_metadata(r) -> dict[str, Any]:

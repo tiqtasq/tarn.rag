@@ -51,7 +51,10 @@ class IngestionWorker:
             timer   = self.obs.timer(f"stage.{tag}.process") if self.obs else nullcontext()
             with timer:
                 for result in stage.process_batch(items):
-                    if getattr(result, "id", None) is None:
+                    # Re-id items that FLOW onward (a PipelineItem with its id reset). A result
+                    # without an ``id`` field at all — the terminal ``Embedding``, keyed by
+                    # chunk_id — has no identity to assign (getattr default: absent ≠ unset).
+                    if getattr(result, "id", "") is None:
                         result.id = str(uuid.uuid4())
                     ctx.submit([result])
                     produced += 1

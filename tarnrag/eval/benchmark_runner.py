@@ -19,7 +19,7 @@ import tempfile
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import DatabaseSettings, Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel

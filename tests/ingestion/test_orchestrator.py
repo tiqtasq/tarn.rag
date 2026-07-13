@@ -40,6 +40,47 @@ def _item(source_id="s1", **meta):
     return PipelineItem(content="x", metadata={"source_id": source_id, **meta})
 
 
+# ---------------- DAG naming (A3: names must be deterministic across processes) ----------------
+
+
+def test_stage_names_are_deterministic_across_builds():
+    """A3: node names derive from the pipeline definition alone. A producer enqueues jobs whose
+    ``stage_name`` must resolve in the CONSUMER's DAG — a different process with its own construction
+    history — so two builds of the same Settings must agree, whatever was constructed in between."""
+    from tarnrag.core.engine.config import Settings
+    from tarnrag.ingestion.engine.engine import IngestionEngine
+    from tarnrag.ingestion.pipeline.clean_normalize import CleanAndNormalizeStage
+
+    settings = Settings(_env_file=None)
+    producer = PipelineDAG(IngestionEngine.build_pipeline(settings).stages)
+    CleanAndNormalizeStage(CleanAndNormalizeStage.Config())  # unrelated construction between builds
+    consumer = PipelineDAG(IngestionEngine.build_pipeline(settings).stages)
+
+    assert [s.name for s in producer.stages] == [s.name for s in consumer.stages]
+    for job_stage_name in (s.name for s in producer.stages):  # every producer job routes
+        assert consumer.get_stage(job_stage_name) is not None
+
+
+def test_dag_names_unnamed_stages_by_position():
+    """Unnamed stages get ``{tag}-{position}`` — two same-class stages coexist with distinct,
+    deterministic identities."""
+    from tarnrag.ingestion.pipeline.clean_normalize import CleanAndNormalizeStage
+
+    dag = PipelineDAG([CleanAndNormalizeStage(CleanAndNormalizeStage.Config()) for _ in range(2)])
+    assert [s.name for s in dag.stages] == ["CleanAndNormalize-0", "CleanAndNormalize-1"]
+
+
+def test_explicit_stage_names_are_kept():
+    dag = _dag("first", "second")
+    assert [s.name for s in dag.stages] == ["first", "second"]
+
+
+def test_dag_refuses_duplicate_stage_names():
+    """Two nodes with one name would silently route every job to the first match — fail at build."""
+    with pytest.raises(ValueError, match="duplicate stage name"):
+        _dag("same", "same")
+
+
 async def test_ingest_documents_enqueues_root_jobs(repo):
     q = RecordingEnqueuer()
     orch = PipelineOrchestrator(

@@ -49,6 +49,25 @@ class PostgresRepository(DocumentRepository):
             "CREATE INDEX IF NOT EXISTS idx_chunks_fts ON chunks USING gin (to_tsvector('english', text))"
         )
 
+    async def store_embeddings(self, embeddings) -> list[str]:
+        """Upsert dense vectors into the ``embeddings`` table — ``ON CONFLICT (chunk_id)`` replaces,
+        so re-embedding a chunk is idempotent (the Postgres counterpart of SQLite's
+        ``INSERT OR REPLACE`` into ``vec_chunks``). Returns the chunk ids written."""
+        if not embeddings:
+            return []
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        rows = [
+            {"chunk_id": e.chunk_id, "vector": self._encode_vector(e.vector)} for e in embeddings
+        ]
+        stmt = pg_insert(self.embeddings).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[self.embeddings.c.chunk_id], set_={"vector": stmt.excluded.vector}
+        )
+        async with self.engine.begin() as conn:
+            await conn.execute(stmt)
+        return [e.chunk_id for e in embeddings]
+
     async def dense_knn(
         self, query_vec: list[float], k: int, filter: ChunkFilter | None = None
     ) -> list[Candidate]:
@@ -95,10 +114,15 @@ class PostgresRepository(DocumentRepository):
         self, query_text: str, k: int, filter: ChunkFilter | None = None
     ) -> list[Candidate]:
         """§8 sparse retrieval over a ``to_tsvector('english', text)`` GIN index (``ts_rank_cd``, best
-        first). ``plainto_tsquery`` parses the raw text safely; ``raw_score`` is ts_rank (higher better).
-        A ``filter`` is applied as in :meth:`dense_knn` (pre-filtered + over-fetched via ``_overfetch``)."""
+        first). ``websearch_to_tsquery`` parses the raw text safely AND honors exact-match intent — a
+        double-quoted span becomes a phrase query (adjacency-required, the Postgres counterpart of the
+        SQLite builder's required phrases); unquoted terms are AND-ed exactly as ``plainto_tsquery`` did.
+        Dotted identifiers (``6.4.2``) tokenize as single version/file lexemes on BOTH the index and the
+        query side (the same ``english`` parser), so they match exactly without special handling.
+        ``raw_score`` is ts_rank (higher better). A ``filter`` is applied as in :meth:`dense_knn`
+        (pre-filtered + over-fetched via ``_overfetch``)."""
         tsv = func.to_tsvector("english", self.chunks.c.text)
-        tsq = func.plainto_tsquery("english", query_text)
+        tsq = func.websearch_to_tsquery("english", query_text)
         score = func.ts_rank_cd(tsv, tsq).label("score")
         base = select(self.chunks.c.chunk_id, score).where(tsv.op("@@")(tsq))
         if filter is None:
@@ -151,7 +175,7 @@ class PostgresRepository(DocumentRepository):
         """
         if not chunk_ids:
             return []
-        c, d, m = self.chunks, self.documents, self.method_chunks
+        c, d = self.chunks, self.documents
         stmt = (
             select(
                 c.c.chunk_id, c.c.text, c.c.document_id, d.c.source_kind,
@@ -163,16 +187,11 @@ class PostgresRepository(DocumentRepository):
         )
         async with self.engine.connect() as conn:
             by_id = {r[0]: r for r in (await conn.execute(stmt)).all()}
-            prov = await self._chunk_provenance(conn, chunk_ids)
-            records: list[ChunkRecord] = []
-            for cid in chunk_ids:
-                r = by_id.get(cid)
-                if r is None:
-                    continue
-                methods = (
-                    await conn.execute(
-                        select(m.c.method_id, m.c.method_version).where(m.c.chunk_id == cid)
-                    )
-                ).all()
-                records.append(self._create_chunk_record(r, methods, prov.get(cid)))
+            prov = await self.reads.chunk_provenance(conn, chunk_ids)
+            methods = await self.reads.methods_by_chunk(conn, chunk_ids)  # one query, not one per chunk
+            records = [
+                self.reads.create_chunk_record(r, methods.get(cid, []), prov.get(cid))
+                for cid in chunk_ids
+                if (r := by_id.get(cid)) is not None
+            ]
         return records

@@ -29,7 +29,7 @@ from pathlib import Path
 from tarnrag import TarnRag
 from tarnrag.contracts import ChunkProvenance, RetrievalResult
 from tarnrag.contracts.structure import Span
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.resources.llm import StaticLanguageModel
 from tarnrag.generation import GenerationContext, GenerationPipeline, GenerationResult
 from tarnrag.retrieval import Query

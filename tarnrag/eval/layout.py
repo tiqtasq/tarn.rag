@@ -14,13 +14,16 @@ Extractive only: arithmetic / count answers have no retrievable source span, so 
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, DatabaseSettings, Settings
 from tarnrag.core.resources.embedder import Embedder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import _safe_answer
 from tarnrag.eval.generation import GenEvalQuery, GenEvalReport, _aggregate, _score
+from tarnrag.generation import GenerationContext, Reasoner
 from tarnrag.generation.engine.engine import GenerationEngine
 from tarnrag.ingestion.engine.engine import IngestionEngine
 from tarnrag.retrieval.engine.engine import RetrievalEngine
@@ -31,11 +34,14 @@ _EXTRACTIVE = frozenset({"span", "multi-span"})  # arithmetic/count have no retr
 
 # Attribution measurement: read the answer with a single_hop reasoner, then have an LLM judge whether each
 # cited span supports its claim (grounding). ``grounded_rate`` is the answer-level attribution precision.
-_ATTRIBUTION_PIPELINE = {
-    "class_name": "generation_pipeline",
-    "reasoner": {"class_name": "single_hop"},
-    "grounding_checker": {"class_name": "llm_grounding"},
-}
+def _attribution_pipeline(table_view: str) -> dict:
+    """The attribution generation spec with the table view PINNED on both the reasoner and the judge —
+    a measurement never inherits a default (the P2 default-flip lesson)."""
+    return {
+        "class_name": "generation_pipeline",
+        "reasoner": {"class_name": "single_hop", "table_view": table_view},
+        "grounding_checker": {"class_name": "llm_grounding", "table_view": table_view},
+    }
 
 
 @dataclass
@@ -51,23 +57,28 @@ class TatQaQuery:
 
 def render_table(grid: list[list[str]]) -> str:
     """Linearize a TAT-QA table grid (rows of cells) to text — cells joined by ``|`` per row — preserving the
-    exact cell tokens (so BM25 can match them) and the row structure."""
+    exact cell tokens (so BM25 can match them) and the row structure. (The ``table_json`` extractor produces
+    the same rendering as the element text, so the native path keeps the BM25 tokens identical.)"""
     return "\n".join(" | ".join(c for c in row) for row in grid)
 
 
-def load_tatqa(rows: list[dict], *, limit: int | None = None) -> tuple[list[tuple[str, str]], list[TatQaQuery]]:
-    """Map TAT-QA records (``{table, paragraphs, questions}``) → a deduped corpus of ``(uid, text)`` elements
-    (each table rendered, each paragraph) and the extractive ``TatQaQuery`` list. ``limit`` caps records.
-    Pure (no network) — pass ``rows`` from :func:`stream_tatqa` or a fixture."""
-    corpus: dict[str, str] = {}
+def load_tatqa(
+    rows: list[dict], *, limit: int | None = None
+) -> tuple[list[tuple[str, str, str]], list[TatQaQuery]]:
+    """Map TAT-QA records (``{table, paragraphs, questions}``) → a deduped corpus of
+    ``(uid, content, kind)`` elements — each table as its **JSON grid** (``kind='table'``, ingested through
+    the native ``table_json`` extractor so chunks carry a real ``Table``), each paragraph as text — and the
+    extractive ``TatQaQuery`` list. ``limit`` caps records. Pure (no network) — pass ``rows`` from
+    :func:`stream_tatqa` or a fixture."""
+    corpus: dict[str, tuple[str, str]] = {}  # uid -> (content, kind)
     queries: list[TatQaQuery] = []
     for rec in rows[:limit] if limit else rows:
         table = rec["table"]
         tuid = table["uid"]
-        corpus[tuid] = render_table(table["table"])
+        corpus[tuid] = (json.dumps(table["table"]), "table")
         para_uid_by_order = {}
         for p in rec["paragraphs"]:
-            corpus[p["uid"]] = p["text"]
+            corpus[p["uid"]] = (p["text"], "text")
             para_uid_by_order[str(p["order"])] = p["uid"]
         for q in rec["questions"]:
             if q.get("answer_type") not in _EXTRACTIVE:
@@ -83,7 +94,7 @@ def load_tatqa(rows: list[dict], *, limit: int | None = None) -> tuple[list[tupl
             queries.append(
                 TatQaQuery(question=q["question"], answers=list(q.get("answer", [])), gold_source_ids=sorted(gold), answer_from=af)
             )
-    return list(corpus.items()), queries
+    return [(uid, content, kind) for uid, (content, kind) in corpus.items()], queries
 
 
 def stream_tatqa(limit: int | None = None) -> list[dict]:
@@ -105,11 +116,13 @@ class SourceHitReport:
 
 
 async def build_tatqa_index(
-    corpus: list[tuple[str, str]], settings: Settings, *, db_path: str
+    corpus: list[tuple[str, str, str]], settings: Settings, *, db_path: str
 ) -> tuple[DocumentRepository, Embedder]:
-    """Ingest each ``(uid, text)`` element with ``source_id == uid`` (so ``document_id`` maps a retrieved
-    chunk back to its element) into a persistent, **cached** store. Mirrors ``build_corpus_index``: a
-    full store is reused (skip the slow embed), a partial one is rebuilt."""
+    """Ingest each ``(uid, content, kind)`` element with ``source_id == uid`` (so ``document_id`` maps a
+    retrieved chunk back to its element) into a persistent, **cached** store. Tables (``kind='table'``)
+    go through the native ``table_json`` extractor — chunks carry a real ``Table`` (persisted cells,
+    contextualizable at embed time); paragraphs stay on the text path. Mirrors ``build_corpus_index``:
+    a full store is reused (skip the slow embed), a partial one is rebuilt."""
     settings.ID_POLICY = "caller"  # ingest each element under its uid, so document_id maps back for source-hit
     embedder = Embedder.create(settings.embedding, settings.EMBEDDING_DIMENSION)
     repo = await DocumentRepository.create(
@@ -122,7 +135,16 @@ async def build_tatqa_index(
     for summary in await ingest.list_documents():
         await ingest.delete_document(summary.document_id)
     await ingest.ingest_content(
-        [{"source_id": uid, "content": text, "title": uid, "source_type": "text"} for uid, text in corpus]
+        [
+            {
+                "source_id": uid,
+                "content": content,
+                "title": uid,
+                "source_type": kind,
+                **({"extractor": "table_json"} if kind == "table" else {}),
+            }
+            for uid, content, kind in corpus
+        ]
     )
     return repo, embedder
 
@@ -191,12 +213,14 @@ async def tatqa_attribution(
     embedder: Embedder,
     *,
     settings: Settings,
+    table_view: str,
     concurrency: int = 8,
 ) -> tuple[GenEvalReport, dict[str, GenEvalReport]]:
     """Answer each question over the shared corpus and have an LLM judge the citations: returns the overall
     ``GenEvalReport`` (F1/EM + ``grounded_rate`` = attribution precision + ``citation_coverage``) and one per
-    ``answer_from`` segment — so a table-vs-text attribution gap is visible. Bounded ``concurrency``."""
-    settings.components[GENERATION_PIPELINE] = _ATTRIBUTION_PIPELINE
+    ``answer_from`` segment — so a table-vs-text attribution gap is visible. ``table_view`` is REQUIRED
+    (pinned onto reasoner + judge — a measurement never inherits a default). Bounded ``concurrency``."""
+    settings.components[GENERATION_PIPELINE] = _attribution_pipeline(table_view)
     retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
     generation = GenerationEngine.assemble(retrieval, llm, settings)
     sem = asyncio.Semaphore(concurrency)
@@ -227,3 +251,109 @@ def format_attribution(overall: GenEvalReport, by_segment: dict[str, GenEvalRepo
     lines += [row(seg, r) for seg, r in by_segment.items()]
     lines.append(row("OVERALL", overall))
     return "\n".join(lines)
+
+
+# ---------------- the numeric slice (PP-6): arithmetic questions, answered without an LLM ----------
+
+
+@dataclass
+class TatQaNumericQuery:
+    """One arithmetic TAT-QA question: the text, the numeric gold (already in cell units — TAT-QA's
+    ``scale`` rides along for reporting), and the gold source segmentation."""
+
+    question: str
+    gold: float
+    scale: str
+    answer_from: str
+
+
+def load_tatqa_numeric(rows: list[dict], *, limit: int | None = None) -> list[TatQaNumericQuery]:
+    """The arithmetic questions (the slice ``load_tatqa`` filters out) with parseable numeric golds —
+    the ready-made eval for the deterministic ``table_lookup`` reasoner."""
+    queries: list[TatQaNumericQuery] = []
+    for rec in rows[:limit] if limit else rows:
+        for q in rec["questions"]:
+            if q.get("answer_type") != "arithmetic":
+                continue
+            raw = q.get("answer")
+            try:
+                gold = float(str(raw).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            queries.append(
+                TatQaNumericQuery(
+                    question=q["question"], gold=gold, scale=q.get("scale", ""),
+                    answer_from=q.get("answer_from", ""),
+                )
+            )
+    return queries
+
+
+@dataclass
+class NumericReport:
+    """The table_lookup eval: how many questions it ATTEMPTED (vs abstained — never guessed), and
+    numeric exact-match both among attempts and overall (an abstention counts as a miss overall)."""
+
+    n: int
+    attempted: int
+    correct: int
+
+    @property
+    def attempted_rate(self) -> float:
+        return self.attempted / self.n if self.n else 0.0
+
+    @property
+    def em_attempted(self) -> float:
+        return self.correct / self.attempted if self.attempted else 0.0
+
+    @property
+    def em_overall(self) -> float:
+        return self.correct / self.n if self.n else 0.0
+
+
+async def tatqa_numeric(
+    queries: list[TatQaNumericQuery],
+    repo: DocumentRepository,
+    embedder: Embedder,
+    *,
+    settings: Settings,
+    reasoner_spec: dict,
+    llm: LanguageModel | None = None,
+    k: int = 10,
+    concurrency: int = 8,
+) -> NumericReport:
+    """Run every arithmetic question through the caller-PINNED ``reasoner_spec`` (a measurement never
+    inherits a default) — e.g. the LLM-free ``table_lookup`` posture, or a reader leg for comparison
+    (pass its ``llm``). Numeric exact-match = equality after rounding both sides to 2 decimals (the
+    gold precision); an abstention counts as unattempted."""
+    retrieval = await RetrievalEngine.create(settings, repository=repo, embedder=embedder)
+    reasoner = ComponentFactory.get().create_as(reasoner_spec, Reasoner)
+    ctx = GenerationContext(retrieval, llm=llm)
+    sem = asyncio.Semaphore(concurrency)
+
+    async def _one(q: TatQaNumericQuery) -> tuple[bool, bool]:
+        async with sem:
+            out = await reasoner.reason(Query(text=q.question, top_k=k), ctx)
+        if out.abstained:
+            return False, False
+        try:
+            got = float(out.answer.replace(",", "").replace("$", "").replace("%", "").strip())
+        except (ValueError, AttributeError):
+            return True, False
+        return True, round(got, 2) == round(q.gold, 2)
+
+    scored = await asyncio.gather(*(_one(q) for q in queries))
+    return NumericReport(
+        n=len(scored),
+        attempted=sum(a for a, _ in scored),
+        correct=sum(c for _, c in scored),
+    )
+
+
+def format_numeric(report: NumericReport, *, tag: str = "") -> str:
+    return "\n".join([
+        f"TAT-QA numeric (table_lookup, no LLM){(' ' + tag) if tag else ''}  (n={report.n})",
+        f"attempted   {report.attempted:>5}  ({report.attempted_rate:.3f})",
+        f"EM attempted{report.em_attempted:>12.3f}",
+        f"EM overall  {report.em_overall:>12.3f}   (abstentions count as misses)",
+    ])

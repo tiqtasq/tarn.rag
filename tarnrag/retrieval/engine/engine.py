@@ -2,16 +2,17 @@
 
 A thin async facade over the §8 repository: it validates index compatibility (``open()`` — the one place
 checked, refusing an index built with a different embedding pipeline (fingerprint) or schema), builds the
-``Searcher`` from ``Settings`` (the ``RETRIEVAL_PIPELINE`` spec — a ``RetrievalPipeline`` (dense by default;
-configure ``retrievers`` + a ``fuser`` for hybrid) or a ``RoutingRetrievalPipeline``), and delegates
-``search`` to it. **Comparing retrieval methods = varying the ``RETRIEVAL_PIPELINE`` spec.**
+``Searcher`` from ``Settings`` (the ``RETRIEVAL_PIPELINE`` spec — a ``RetrievalPipeline`` (**hybrid** by
+default from ``Settings``: dense + sparse, RRF-fused; a bare spec is the minimal dense-only building
+block) or a ``RoutingRetrievalPipeline``), and delegates ``search`` to it. **Comparing retrieval
+methods = varying the ``RETRIEVAL_PIPELINE`` spec.**
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from tarnrag.core.components import ComponentFactory
+from bausatz import ComponentFactory
 from tarnrag.core.engine.config import LICENSE_POLICY, RETRIEVAL_PIPELINE, Settings, get_settings
 from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.embedder import Embedder
@@ -58,8 +59,10 @@ class RetrievalEngine(Engine):
 
     @staticmethod
     def build_searcher(settings: Settings | None = None) -> Searcher:
-        """Build the retrieval ``Searcher`` from the ``RETRIEVAL_PIPELINE`` spec (default: dense + identity
-        fuser) — the retrieval analog of ``IngestionEngine.build_pipeline``."""
+        """Build the retrieval ``Searcher`` from the ``RETRIEVAL_PIPELINE`` spec — the retrieval analog of
+        ``IngestionEngine.build_pipeline``. A ``Settings``-driven build defaults to HYBRID (dense + sparse,
+        RRF — filled by ``Settings``); the settings-less fallback stays the minimal dense-only pipeline
+        (the low-level seam makes no composition choice)."""
         spec = settings.components.get(RETRIEVAL_PIPELINE) if settings is not None else None
         return ComponentFactory.get().create_as(spec or _DEFAULT_PIPELINE, Searcher)
 

@@ -80,7 +80,10 @@ def test_exact_match_cues_force_lexical(text):
 
 def test_punctuation_only_token_is_not_an_identifier():
     # A token that strips to empty (all punctuation) isn't an identifier — the empty-core guard.
-    assert StructuralQueryClassifier._looks_like_identifier("--") is False
+    # (The cue lives in core.text now, shared with the sparse-query builders.)
+    from tarnrag.core.text import looks_like_identifier
+
+    assert looks_like_identifier("--") is False
     assert _classify("corrosion -- inspection").query_type == "lexical"  # still a plain keyword phrase
 
 
@@ -107,3 +110,45 @@ def test_supplied_query_type_can_be_overwritten_by_the_classifier():
     q = Query(text="shell thickness ultrasonic testing", query_type="semantic")
     _structural().classify(q, None)
     assert q.query_type == "lexical"
+
+
+# ---------------- the intent taxonomy (PP-1) ----------------
+
+
+def _intent(text, **cfg):
+    from tarnrag.retrieval.components.classifier import IntentQueryClassifier
+
+    q = Query(text=text)
+    IntentQueryClassifier(IntentQueryClassifier.Config(**cfg)).classify(q, None)
+    return q
+
+
+def test_intent_labels_the_production_classes():
+    """PP-1: deterministic intent labels for router dispatch — one exemplar per class."""
+    assert _intent("How many pumps failed inspection in 2019?").query_type == "aggregation"
+    assert _intent("What is the difference between grade A and grade B bolts?").query_type == "comparison"
+    assert _intent("The pump fails with error E42 on startup").query_type == "troubleshooting"
+    assert _intent("Are we permitted to store solvents next to oxidizers?").query_type == "policy"
+    assert _intent("Give me an overview of the maintenance chapter").query_type == "summarization"
+    assert _intent("torque spec for the M6 flange bolt").query_type == "lookup"  # no cue -> lookup
+
+
+def test_intent_order_is_by_routing_consequence():
+    # 'how many errors' carries aggregation AND troubleshooting cues — the numeric route wins
+    # (structured-data dispatch is the most consequential decision).
+    q = _intent("How many errors were logged last week?")
+    assert q.query_type == "aggregation"
+    [ann] = q.annotations
+    assert "how many" in ann.value["matched_cues"]  # the finding is recorded, producer stamped
+    assert ann.producer == "intent" and ann.deterministic is True
+
+
+def test_intent_single_word_cues_match_on_word_boundaries():
+    # 'vs' must not fire inside a larger word; as a standalone token it does.
+    assert _intent("configure the vsphere cluster").query_type == "lookup"
+    assert _intent("throughput sqlite vs postgres").query_type == "comparison"
+
+
+def test_intent_cues_are_config():
+    q = _intent("wie viele Pumpen sind ausgefallen?", cues={"aggregation": ["wie viele"]})
+    assert q.query_type == "aggregation"  # taxonomy overridable per deployment/language
