@@ -84,19 +84,30 @@ class SparseRetriever(Retriever):
         return await ctx.store.sparse_search(query.text, query.sparse_k, ctx.filter_for(query))
 
 
-def _rrf_fuse(lists: list[list[Candidate]], k: int) -> list[Candidate]:
-    """RRF the per-source candidate lists into one ranked ``Candidate`` list (deterministic tie-break:
-    fused score desc, then chunk_id asc — the ModusQ §5.5 contract). The bridge retrievers' in-component
-    fusion — the ``RRFFuser`` analog for lists produced *within* one retriever (per query variant, per
-    hypothesis) rather than across retrievers."""
-    scores: dict[str, float] = {}
-    raw: dict[str, float] = {}
-    for candidates in lists:
-        for c in candidates:
-            scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + 1.0 / (k + c.rank)
-            raw.setdefault(c.chunk_id, c.raw_score)
-    ranked = sorted(scores, key=lambda cid: (-scores[cid], cid))
-    return [Candidate(chunk_id=cid, rank=i + 1, raw_score=raw[cid]) for i, cid in enumerate(ranked)]
+class _BridgeRetriever(Retriever):
+    """Shared base for the LLM-assisted *bridge* retrievers (``multi_query``, ``hyde``): each turns one
+    query into several dense-retrieval candidate lists and RRF-fuses them back into the port's single
+    ranked list. Owns the shared ``rrf_k`` knob + that in-component fusion — the ``RRFFuser`` analog for
+    lists produced *within* one retriever (per query variant, per hypothesis) rather than across
+    retrievers. No ``class_name`` is pinned, so the base itself stays unregistered (not spec-addressable);
+    it is structure, not a strategy."""
+
+    class Config(Retriever.Config):
+        rrf_k: int = 60  # RRF constant fusing the per-list rankings
+
+    config: _BridgeRetriever.Config
+
+    def _rrf_fuse(self, lists: list[list[Candidate]]) -> list[Candidate]:
+        """RRF the per-source candidate lists into one ranked ``Candidate`` list (deterministic
+        tie-break: fused score desc, then chunk_id asc — the ModusQ §5.5 contract)."""
+        scores: dict[str, float] = {}
+        raw: dict[str, float] = {}
+        for candidates in lists:
+            for c in candidates:
+                scores[c.chunk_id] = scores.get(c.chunk_id, 0.0) + 1.0 / (self.config.rrf_k + c.rank)
+                raw.setdefault(c.chunk_id, c.raw_score)
+        ranked = sorted(scores, key=lambda cid: (-scores[cid], cid))
+        return [Candidate(chunk_id=cid, rank=i + 1, raw_score=raw[cid]) for i, cid in enumerate(ranked)]
 
 
 # The bridge query-expansion prompt — rewrite into several focused search queries (paraphrases + per-sub-fact
@@ -108,17 +119,16 @@ _EXPAND_SYSTEM = (
 )
 
 
-class MultiQueryRetriever(Retriever):
+class MultiQueryRetriever(_BridgeRetriever):
     """Bridge retriever: expand the query into several variants via ``ctx.llm``, dense-retrieve each, and
     RRF-fuse the candidate lists — lifts recall on under-specified / multi-hop questions (Phase-2 bridge
     substrate). The original query is always included; with no ``ctx.llm`` it degrades gracefully to a
     single dense retrieval over the original. An LLM call per query (the bridge is opt-in, off the lean
     default)."""
 
-    class Config(Retriever.Config):
+    class Config(_BridgeRetriever.Config):
         class_name: Literal["multi_query"] = "multi_query"
         num_variants: int = 3  # LLM rewrites (the original query is always included as well)
-        rrf_k: int = 60  # RRF constant fusing the per-variant rankings
 
     config: MultiQueryRetriever.Config
 
@@ -129,7 +139,7 @@ class MultiQueryRetriever(Retriever):
         lists = await asyncio.gather(
             *(ctx.store.dense_knn(vec, query.dense_k, chunk_filter) for vec in vectors)
         )
-        return _rrf_fuse(lists, self.config.rrf_k)
+        return self._rrf_fuse(lists)
 
     async def _expand(self, query: Query, ctx: RetrievalContext) -> list[str]:
         """``[original, *rewrites]`` — the original plus up to ``num_variants`` LLM rewrites (just the
@@ -154,7 +164,7 @@ _HYDE_SYSTEM = (
 )
 
 
-class HydeRetriever(Retriever):
+class HydeRetriever(_BridgeRetriever):
     """Bridge retriever (HyDE): ask ``ctx.llm`` for a short *hypothetical answer*, embed it in the
     **passage** space (``embed_passages`` — a fake document, so the passage prefix/pooling applies on
     asymmetric models), and dense-retrieve by answer-to-passage similarity. The original query's own
@@ -165,11 +175,10 @@ class HydeRetriever(Retriever):
     default). Complementary to ``multi_query``: that one rewrites the question, this one fakes the
     answer."""
 
-    class Config(Retriever.Config):
+    class Config(_BridgeRetriever.Config):
         class_name: Literal["hyde"] = "hyde"
         num_hypotheses: int = 1  # LLM samples; each is embedded + retrieved, all lists fuse
         max_words: int = 80  # length cap folded into the prompt
-        rrf_k: int = 60  # RRF constant fusing the hypothesis rankings with the original query's
 
     config: HydeRetriever.Config
 
@@ -188,7 +197,7 @@ class HydeRetriever(Retriever):
                 for vec in [query_vec, *passage_vecs]
             )
         )
-        return _rrf_fuse(lists, self.config.rrf_k)
+        return self._rrf_fuse(lists)
 
     async def _hypothesize(self, query: Query, ctx: RetrievalContext) -> list[str]:
         """Up to ``num_hypotheses`` LLM-written hypothetical answers (``[]`` if no LLM, or no completion
