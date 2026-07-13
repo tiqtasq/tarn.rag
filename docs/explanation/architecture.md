@@ -51,21 +51,21 @@ flowchart TB
         ASSM --> ANS
     end
 
-    IE --> ORCH
-    RE --> RTRS
-    GE --> REAS
-    RE <-.->|"retrieve ↔ read"| REAS
+    IE --> INGEST
+    RE --> RETR
+    GE --> GENER
+    RE <-.->|"retrieve ↔ read"| GENER
 
     EMB["Embedder — one pipeline for passages & queries; fingerprint in index_meta"]
     LLM["LanguageModel — anthropic · openai-compatible"]
-    WORK -.->|"embed passages"| EMB
-    RTRS -.->|"embed queries"| EMB
-    REAS -.->|"read / decompose"| LLM
+    INGEST -.->|"embed passages"| EMB
+    RETR -.->|"embed queries"| EMB
+    GENER -.->|"read / decompose"| LLM
 
     REPO[("DocumentRepository — the §8 index, one store<br/>documents · chunks · vectors (sqlite-vec / pgvector) · BM25 (FTS5) · provenance · job_status<br/>SQLite (embedded) · Postgres (distributed)")]
 
-    SINK --> REPO
-    RTRS <--> REPO
+    INGEST -->|"write: chunks · embeddings · job status"| REPO
+    RETR <-->|"read: dense_knn · sparse_search · hydrate"| REPO
 ```
 
 `TarnRag` is the composition root: it builds the one store (the repository) and the embedder once
