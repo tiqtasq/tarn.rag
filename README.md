@@ -73,7 +73,7 @@ from tarnrag import TarnRag
 
 async def main():
     async with TarnRag("config.json") as tarn:   # a JSON Settings file
-        await tarn.ingest(["documents/"])        # ingest files / directories
+        await tarn.ingest(["path/to/your/files"]) # ingest files / directories
         hits = await tarn.retrieve("how do I inspect a tank?", top_k=8)
         answer = await tarn.ask("…")             # grounded answer + proof tree (needs an LLM key)
         print(answer.value.answer)
