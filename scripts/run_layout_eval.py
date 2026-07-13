@@ -42,7 +42,7 @@ async def _run(
     emb_tag = f"{settings.embedding.model.split('/')[-1]}_{settings.EMBEDDING_DIMENSION}"
     if settings.embedding.contextualize_tables:  # a distinct index — the embed text differs (P1)
         emb_tag += "_ctx"
-    db_path = f"./docs/tatqa_{limit or 'full'}_{emb_tag}.db"
+    db_path = f"./data/tatqa_{limit or 'full'}_{emb_tag}.db"
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     print(f"building TAT-QA corpus: {len(corpus)} elements -> {db_path} (cached) … ; {len(queries)} extractive queries")
     repo, embedder = await build_tatqa_index(corpus, settings, db_path=db_path)

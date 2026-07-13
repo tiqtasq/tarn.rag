@@ -4,8 +4,8 @@ models/
 *.db-journal
 index.db
 uploads/
-# benchmark index stores (a data dir — the design docs live in doc/)
-docs/
+# runtime data: benchmark index stores + staged uploads (design docs in doc/, user docs in docs/)
+data/
 # the MOTHRAG paper — kept locally for reference, not committed
 doc/main.pdf
 

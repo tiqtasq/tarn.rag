@@ -10,7 +10,7 @@ retrieval sees ingests live, and works on an empty store); the generation engine
 first ``ask``. Use it directly::
 
     async with TarnRag("config.json") as tarn:
-        ingested = await tarn.ingest(["docs/"])
+        ingested = await tarn.ingest(["documents/"])
         for issue in ingested.report.issues:
             ...  # e.g. a path that wasn't found
         answer = await tarn.ask("…")
