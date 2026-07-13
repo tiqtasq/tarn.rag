@@ -4,6 +4,11 @@ Scoping for roadmap item **S1** (`doc/strategic-roadmap.md`, sequencing step 4).
 `doc/phases.md` (the measurement log this work will extend). Ground rules carried over: one lever
 per PR, measured before/after with the in-repo harnesses.
 
+> **Outcome (2026-07-13):** all three PRs landed; the sweep's verdict is in `doc/phases.md` § S1.
+> Headline: the CE quality profile subsumes routing entirely (ROUTED+CE ≡ HYBRID+CE); the routed
+> pipeline and the sparse-weighted hybrid ship as the documented **no-reranker** options; HyDE is
+> a null result on TAT-QA. The draft profile below is superseded by the measured README profile.
+
 **What S1 delivers:** a documented "quality" retrieval profile built on
 `routing_retrieval_pipeline` + the structural classifier — lexical queries → a sparse-weighted
 hybrid, semantic queries → hybrid + LLM query expansion (when an LLM is configured) — with a HyDE

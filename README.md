@@ -115,6 +115,37 @@ components:
 
 (Fetch the reranker model once with `scripts/fetch_model.py`; it loads lazily on first use.)
 
+**If the reranker's CPU cost is out of budget**, two measured cheaper levers exist (S1 sweep,
+`doc/phases.md`) — on TAT-QA each recovers about half the reranker's lift (+0.015 overall,
++0.031–0.042 on tables over plain hybrid):
+
+- **Sparse-weighted hybrid** (LLM-free): up-weight the BM25 arm where the corpus rewards
+  exact-token matching — `fuser: {class_name: rrf, weights: {sparse: 3.0}}`. Only the ratios
+  matter; tune the weight per corpus with `scripts/run_layout_eval.py --s1`.
+- **Query-routed retrieval** (~1 LLM call per semantic query): a `routing_retrieval_pipeline`
+  with the structural classifier — multi-query expansion helps natural-language questions but
+  *hurts* keyword/exact-match ones, and routing applies each arm only where it wins:
+
+  ```yaml
+  components:
+    retrieval_pipeline:
+      class_name: routing_retrieval_pipeline
+      classifier: {class_name: structural}
+      routes:
+        semantic:
+          class_name: retrieval_pipeline
+          retrievers: [{class_name: multi_query}, {class_name: sparse}]
+          fuser: {class_name: rrf}
+      default:
+        class_name: retrieval_pipeline
+        retrievers: [{class_name: dense}, {class_name: sparse}]
+        fuser: {class_name: rrf}
+  ```
+
+  The route taken is recorded on the search trace (`explain`), so every answer can show *why* it
+  was retrieved the way it was. Don't stack these under the reranker: measured, the CE subsumes
+  both (identical scores with and without routing beneath it).
+
 ## Modes
 
 - **`MODE='embedded'`** (default) — runs the whole pipeline in-process over SQLite; each ingest call

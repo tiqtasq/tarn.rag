@@ -619,3 +619,55 @@ Findings:
    inconsistent — some magnitude-based), count questions, cross-row derivations, row-matching
    recall. The reader's own 0.261 confirms LLM grid arithmetic is weak — routing was the right
    call.
+
+---
+
+## S1 — query-understanding sweep → the routed-profile verdict (2026-07-13)
+
+Setup: TAT-QA source-hit@10, n=334, native store (cached index), every leg's spec pinned; the
+structural classifier labels the set 33 lexical / 301 semantic (the same labels the router
+dispatches on, so the slices measure exactly what each route would receive). LLM legs
+(`multi_query` / `hyde` as the hybrid's dense arm) through gpt-4o-mini; `ROUTED` is composed from
+the measured per-slice winners (ties to the cheaper leg): lexical → HYBRID, semantic → MQ+SPARSE.
+Runner: `scripts/run_layout_eval.py --s1 --limit 100 -k 10`.
+
+| leg                      | table | table-text | text  | lexical | semantic | overall |
+|--------------------------|------:|-----------:|------:|--------:|---------:|--------:|
+| HYBRID (shipped default) | 0.853 |      0.945 | 0.953 |   0.970 |    0.917 |   0.922 |
+| HYBRID+CE (P4 profile)   | 0.926 |      0.964 | 0.946 |   0.970 |    0.944 | **0.946** |
+| W-SPARSE-1.5             | 0.863 |      0.955 | 0.961 |   0.970 |    0.927 |   0.931 |
+| W-SPARSE-2               | 0.863 |      0.945 | 0.961 |   0.970 |    0.924 |   0.928 |
+| W-SPARSE-3               | 0.884 |      0.955 | 0.961 |   0.970 |    0.934 |   0.937 |
+| MQ+SPARSE                | 0.874 |      0.955 | 0.953 |   0.939 |    0.930 |   0.931 |
+| HYDE+SPARSE              | 0.874 |      0.936 | 0.946 |   0.970 |    0.917 |   0.922 |
+| ROUTED                   | 0.895 |      0.955 | 0.953 |   0.970 |    0.934 |   0.937 |
+| ROUTED+CE                | 0.926 |      0.964 | 0.946 |   0.970 |    0.944 | **0.946** |
+
+Findings:
+
+1. **Clean A/A**: HYBRID and HYBRID+CE reproduce the P2–P4 numbers digit-for-digit — the S1
+   tooling (per-query hits, the sweep mode) moved nothing.
+2. **The cross-encoder subsumes every retrieval-arm gain**: ROUTED+CE is digit-identical to
+   HYBRID+CE on every column. Once the reranker sees the shortlist, how the shortlist was
+   assembled (weighted, multi-query, routed) stops mattering at this corpus's margins. **The
+   quality profile stays hybrid + CE** (P4, reconfirmed) — routing under it is pure cost.
+3. **Below the CE tier the routing story is real but nuanced**: `multi_query` wins the semantic
+   slice (+0.013) while *hurting* the lexical one (−0.031) — routing protects exactly that split
+   (ROUTED: +0.015 overall, +0.042 table over hybrid, at ~1 LLM call per semantic query). But
+   **W-SPARSE-3 matches ROUTED LLM-free** (0.937): on a corpus that rewards exact-token matching,
+   up-weighting the sparse arm buys the same lift for nothing. The weights knob (S1 PR-2) is the
+   cheap first lever; tune per corpus with `--s1`.
+4. **HyDE is a null result on TAT-QA** (0.922 = hybrid; semantic slice identical). The
+   fake-answer probe adds no recall where hybrid already has the vocabulary; its natural test is
+   the recall-limited pool setting — P7's composition work, not spent here.
+5. **The lexical slice still doesn't discriminate** (n=33, flat 0.970 on every leg that keeps a
+   real sparse arm) — the P3 open item stands: a manuals-style corpus with identifier-heavy
+   queries is the setting where the lexical route (and P3's phrase path) can actually be measured.
+6. **Pool regression skipped, deliberately**: nothing shipped changes (default hybrid and the
+   hybrid+CE profile are untouched), so there is no regression surface. MQ/HyDE over the pool
+   belongs to P7 (sub-questions through hybrid + pooled-evidence rerank).
+
+Verdict: S1's shipped deliverable is the *measured decision* plus the machinery — the routed
+pipeline, both bridge retrievers, weighted RRF, and the `--s1` sweep are all in place and one
+config edit away, with the README documenting when routing pays (no-reranker deployments on
+mixed-form query sets) and when it doesn't (under the CE).
