@@ -80,7 +80,9 @@ class RRFFuser(Fuser):
         k: int = Field(default=60, gt=0)
         # Per-retriever-key weight. Keys are the pipeline's retriever keys (configured ``name``, else
         # ``class_name``, ``#n``-deduped — ``RetrievalPipeline._retriever_keys``); unlisted keys weigh
-        # 1.0, so the empty default keeps every existing spec's fusion byte-identical.
+        # 1.0, so the empty default keeps every existing spec's fusion byte-identical. Only the ratios
+        # matter: uniform scaling scales every fused score alike and never changes the ranking, so
+        # {sparse: 2} ≡ {sparse: 4, dense: 2} — don't normalize, compare weight configs by ratio.
         weights: dict[str, Annotated[float, Field(gt=0)]] = Field(default_factory=dict)
 
     config: RRFFuser.Config
