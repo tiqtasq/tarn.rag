@@ -44,7 +44,8 @@ Design decisions:
   (score desc, chunk_id asc). HyDE-only retrieval is brittle when the LLM hallucinates off-domain;
   fusing with the literal query bounds the downside.
 - **Graceful degradation** mirroring `multi_query`: no `ctx.llm`, or an unusable completion ⇒
-  plain dense retrieval over the original query. The component never raises on LLM failure.
+  plain dense retrieval over the original query. Transport errors still propagate (also
+  `multi_query` parity) — a bad API key should fail loud, not silently degrade retrieval.
 - **Config:** `num_hypotheses: int = 1` (>1 samples several hypotheses and fuses all lists),
   `rrf_k: int = 60`, `max_words: int` cap folded into the prompt. Costs `num_hypotheses` LLM
   call(s) per query — opt-in, never in the lean default.
