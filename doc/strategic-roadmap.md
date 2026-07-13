@@ -30,7 +30,8 @@ Evidence base (see `doc/phases.md` for full tables):
 
 ### Tier 1: highest confidence (measured lever or direct fix of a measured deficit)
 
-**P1. Native table representation at ingest** *(the single most evidence-backed quality lever)*
+**P1. Native table representation at ingest** *(DONE 2026-07-05 — PR-1 #112 embed-side, PR-2 #113
+reader-side; measured in phases.md)* *(the single most evidence-backed quality lever)*
 Tables are currently embedded/read as linearized markdown; every TAT-QA metric shows the penalty.
 The schema is already ahead of the code: `table_cells` persists cell grid + headers + geometry, and
 `Table.column_headers_for`/`row_headers_for` exist. Work: (a) embed a table leaf as a
@@ -46,13 +47,15 @@ SOTA stack. Flip the default spec to `retrievers: [dense, sparse] + rrf`; keep d
 config edit away. Measure: the standing harness suites (regression gate already exists in
 `tests/retrieval/test_hybrid_regression.py`).
 
-**P3. Phrase- and identifier-aware sparse queries**
+**P3. Phrase- and identifier-aware sparse queries** *(DONE 2026-07-05 — #111; measured with P2 in
+phases.md)*
 `_fts_query` ORs bare tokens; the structural classifier already detects quoted spans and
 identifiers but nothing consumes them (pre-feature list B5). Use them: quoted span → FTS5 phrase
 query; identifier → required term (AND). Directly strengthens the lexical arm that P2 promotes.
 Measure: TAT-QA (identifier-heavy) + an eval-set slice of lexical-classified queries.
 
-**P4. Reranker on by default for quality profiles**
+**P4. Reranker on by default for quality profiles** *(DONE 2026-07-06 — #114: `cross_encoder` won
+the sweep; shipped as the top_n-capped quality profile, default stays lean)*
 The cross-encoder reranker exists but is opt-in and unmeasured on the differentiated setting.
 Sweep `cross_encoder` (local, offline-capable — fits the offline differentiator) vs `llm_judge`
 on TAT-QA + the pool benchmark; ship the winner in a documented "quality" config profile (default
@@ -89,7 +92,9 @@ Add a `reindex` operation (read stored documents → re-chunk/re-embed → new s
 bge/e5/API embedders — and shipping upgrades — is one command. Then actually sweep 2–3 modern
 small embedders vs gte-small on TAT-QA + pool; ship the best offline default.
 
-**P8b. Generic branching (`Router`) component family** *(added 2026-07-05, from review discussion)*
+**P8b. Generic branching (`Router`) component family** *(added 2026-07-05, from review discussion;
+partial 2026-07-06 — #118/#119 moved the component framework into the standalone `bausatz` package;
+the Router base, `metadata_key` selector, and `routing_chunker` are still open)*
 The N+2 pattern — a selector spec + `routes: dict[value → component spec]` + a `default` spec —
 already exists twice, specialized (`RoutingRetrievalPipeline`, `LoadAndParse`'s extractor routes).
 Generalize it as: a small shared base owning the config shape (a candidate for the standalone
@@ -110,14 +115,15 @@ P2–P4) and 4 (sections+provenance) outright; the gaps, smallest first:
 - **PP-1 Intent-taxonomy classifier** — a deterministic `QueryClassifier` labeling
   lookup / comparison / aggregation / summarization / troubleshooting / policy, so routers (retrieval
   today, per-class reasoners once P8b lands) can dispatch per class. *(easy — done with this entry)*
-- **PP-2 Answerability gate** — a wrapper reasoner that checks the query's exact-match cues
-  (identifiers / quoted spans, `core.text`) are covered by the retrieved evidence BEFORE spending the
-  read; refuses (abstains) instead of guessing. Calibrate on MuSiQue `should_abstain`. *(easy v1)*
-- **PP-3 Structured-logging observability adapter** — the seam exists but only ships a no-op; a JSON-lines
-  adapter makes `enabled=true` real. Full per-query trace/latency/token logging remains P10+S7. *(easy v1)*
-- **PP-4 Failure-mode regression sets** — named offline `EvalSet`s per failure mode (ambiguous acronyms,
-  permission-bound docs, should-refuse; table-heavy ≈ TAT-QA already), run in CI with the hash embedder.
-  Formal scorecard remains S4. *(easy, incremental)*
+- **PP-2 Answerability gate** *(DONE 2026-07-06 — #116)* — a wrapper reasoner that checks the query's
+  exact-match cues (identifiers / quoted spans, `core.text`) are covered by the retrieved evidence BEFORE
+  spending the read; refuses (abstains) instead of guessing. Calibrate on MuSiQue `should_abstain`.
+- **PP-3 Structured-logging observability adapter** *(DONE 2026-07-06 — #117)* — the seam existed but only
+  shipped a no-op; the JSON-lines adapter makes `enabled=true` real. Full per-query trace/latency/token
+  logging remains P10+S7.
+- **PP-4 Failure-mode regression sets** *(DONE 2026-07-06 — #117)* — named offline `EvalSet`s per failure
+  mode (ambiguous acronyms, permission-bound docs, should-refuse; table-heavy ≈ TAT-QA already), run in CI
+  with the hash embedder. Formal scorecard remains S4.
 - **PP-5 Metadata filter axes** — tenant / region / effective-date as first-class `ChunkFilter` axes +
   policy components (the license filter is the template). Schema change → follows the B2 chunk-metadata
   decision and the D1 migration stance. Note: per-tenant *stores* are the embedded model's stronger answer.
@@ -195,10 +201,11 @@ persist figure elements with geometry, add an optional captioning enricher (flag
 non-deterministic), and let citations point at figure regions. Defer until P1/S1–S3 land — table
 QA is the nearer, measured win in the same "layout" lane.
 
-**S7. Real observability adapter**
-`Observability` is a seam with only a no-op behind it. One structured-logging adapter (JSON lines:
-per-stage timings, per-query latency + component breakdown, token usage) makes every roadmap item
-above measurable in production, not just in the harness. Prometheus can follow; don't start with it.
+**S7. Real observability adapter** *(partial 2026-07-06 — PP-3/#117 shipped the JSON-lines
+structured-logging adapter)*
+Remaining scope: the full per-query trace — per-stage timings, per-query latency + component
+breakdown, token usage (overlaps P10) — so every roadmap item above is measurable in production,
+not just in the harness. Prometheus can follow; don't start with it.
 
 ---
 
@@ -206,11 +213,11 @@ above measurable in production, not just in the harness. Prometheus can follow; 
 
 | order | item | why now |
 |---|---|---|
-| 0 | `pre-feature-fixes.md` PRs 1–5 | stop debt proliferating under everything below |
-| 1 | **P2 + P3** hybrid default + phrase-aware sparse | cheapest measured win; P3 makes P2 stronger |
-| 2 | **P1** native table representation (2 PRs: embed-side, reader-side) | biggest evidence-backed quality lever |
-| 3 | **P4** reranker sweep → quality profile | completes the retrieval stack |
-| 4 | **S1** query-understanding profile (+ HyDE sweep) | turns existing components into shipped value |
+| 0 | ~~`pre-feature-fixes.md` PRs 1–5~~ **DONE** (#102–#106; plus D2 #107, C1–C5 #108, B7 #109) | stop debt proliferating under everything below |
+| 1 | ~~**P2 + P3** hybrid default + phrase-aware sparse~~ **DONE 2026-07-05** (#110, #111) | cheapest measured win; P3 makes P2 stronger |
+| 2 | ~~**P1** native table representation (2 PRs: embed-side, reader-side)~~ **DONE 2026-07-05** (#112, #113) | biggest evidence-backed quality lever |
+| 3 | ~~**P4** reranker sweep → quality profile~~ **DONE 2026-07-06** (#114) | completes the retrieval stack |
+| 4 | **S1** query-understanding profile (+ HyDE sweep) ← **next** | turns existing components into shipped value |
 | 5 | **P7** multi-hop composition (2 PRs) | attacks the pool ceiling with what exists |
 | 6 | **P5** contextual augmentation | the big published lever, now measurable against 1–5 |
 | 7 | **S4** scorecard + public sets | lock in gains; quantify the remaining SOTA gap |
