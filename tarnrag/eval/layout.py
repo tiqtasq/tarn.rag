@@ -107,12 +107,15 @@ def stream_tatqa(limit: int | None = None) -> list[dict]:
 
 @dataclass
 class SourceHitReport:
-    """source-hit@k overall and per ``answer_from`` segment (n + hit-rate each)."""
+    """source-hit@k overall and per ``answer_from`` segment (n + hit-rate each). ``hits`` carries the
+    per-query outcomes (aligned with the query list), so callers can re-segment by their own labels
+    (S1: the structural lexical/semantic slice) without re-running retrieval."""
 
     k: int
     n: int
     source_hit: float
     by_segment: dict[str, tuple[int, float]] = field(default_factory=dict)  # segment -> (n, hit-rate)
+    hits: list[bool] = field(default_factory=list)  # per-query, aligned with the input query list
 
 
 async def build_tatqa_index(
@@ -175,7 +178,8 @@ async def tatqa_source_hit(
         seg_hits = [h for h, q in zip(hits, queries) if q.answer_from == seg]
         by_segment[seg] = (len(seg_hits), sum(seg_hits) / len(seg_hits)) if seg_hits else (0, 0.0)
     return SourceHitReport(
-        k=k, n=len(queries), source_hit=(sum(hits) / len(hits)) if hits else 0.0, by_segment=by_segment
+        k=k, n=len(queries), source_hit=(sum(hits) / len(hits)) if hits else 0.0,
+        by_segment=by_segment, hits=list(hits),
     )
 
 
