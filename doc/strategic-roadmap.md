@@ -158,7 +158,10 @@ What strong contemporary stacks (LlamaIndex/LangChain pipelines, Cohere/Voyage A
 Self-RAG-style systems, contextual retrieval) have that tarn.rag lacks, filtered by fit. Items
 P1–P8 above are themselves gap-closers; these are the additional ones.
 
-**S1. Query understanding as the shipped default**
+**S1. Query understanding as the shipped default** *(DONE 2026-07-13 — 3 PRs: HyDE retriever,
+weighted RRF, the `--s1` sweep. Measured verdict (phases.md): the CE quality profile subsumes
+routing entirely (ROUTED+CE ≡ HYBRID+CE); routing/weighted-sparse ship as the documented
+no-reranker options (+0.015 overall, +0.042 table); HyDE null on TAT-QA)*
 SOTA stacks rewrite/expand queries by default; tarn.rag's `multi_query` retriever, structural
 classifier, and router all exist but nothing is wired in the default spec. Ship a documented
 "quality" profile: `routing_retrieval_pipeline` with the structural classifier — lexical →
@@ -217,7 +220,7 @@ not just in the harness. Prometheus can follow; don't start with it.
 | 1 | ~~**P2 + P3** hybrid default + phrase-aware sparse~~ **DONE 2026-07-05** (#110, #111) | cheapest measured win; P3 makes P2 stronger |
 | 2 | ~~**P1** native table representation (2 PRs: embed-side, reader-side)~~ **DONE 2026-07-05** (#112, #113) | biggest evidence-backed quality lever |
 | 3 | ~~**P4** reranker sweep → quality profile~~ **DONE 2026-07-06** (#114) | completes the retrieval stack |
-| 4 | **S1** query-understanding profile (+ HyDE sweep) ← **next** | turns existing components into shipped value |
+| 4 | ~~**S1** query-understanding profile (+ HyDE sweep)~~ **DONE 2026-07-13** | turns existing components into shipped value |
 | 5 | **P7** multi-hop composition (2 PRs) | attacks the pool ceiling with what exists |
 | 6 | **P5** contextual augmentation | the big published lever, now measurable against 1–5 |
 | 7 | **S4** scorecard + public sets | lock in gains; quantify the remaining SOTA gap |
