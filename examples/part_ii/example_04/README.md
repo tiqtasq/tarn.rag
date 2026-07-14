@@ -1,8 +1,7 @@
 # Example 04 · Structure-aware chunking + auto-merge
 
-The first step that changes the **representation**, so it re-ingests into its **own store**
-(`structured.db`, not the shared base store). Three changes from Example 03 —
-`diff examples/part_ii/example_03/config.yaml examples/part_ii/example_04/config.yaml`:
+The **only** step that changes the representation, so it re-ingests into its **own** store
+(`structured.db`). Three deltas from Example 03:
 
 ```yaml
   database:
@@ -14,73 +13,31 @@ The first step that changes the **representation**, so it re-ingests into its **
     merger: { class_name: auto_merge }                               # ← added
 ```
 
-## What it shows
+`structure_aware` splits on headings into **leaf chunks + section parents** (21 chunks vs the base
+store's ~19), so Example 03's fragment becomes the **whole section** — every step, including the
+loading sequence. **Auto-merge** then collapses retrieved sibling leaves into their parent, so one
+section's pieces stop crowding the top-k.
 
-`recursive` chunks are flat, overlapping windows — so a long section is sliced into pieces (Example 03's
-fragmentation). `structure_aware` instead splits on the document's headings into a tree of **leaf chunks +
-section parents**: a chunk over a whole section, emitted where a section groups ≥2 children.
+⚠️ `max_chars: 450` is coupled to the corpus — keep paragraphs under it or the chunker character-splits
+mid-word (corpus-2's longest is 400).
 
-| | Example 03 (recursive) | Example 04 (structure-aware) |
-|---|---|---|
-| *"all the steps in the startup procedure?"* (top-1) | ❌ a **fragment** — the first step-group only | ✅ the whole **section** (parent chunk) — complete |
+📖 **[Tutorial: Structure-aware chunking](../../../docs/tutorials/part-ii/04-structure-aware-chunking.md)**
+— flat windows vs a section tree, and the two distinct jobs these changes do.
 
-And **auto-merge**: when several sibling *leaf* fragments of one section are retrieved, they're collapsed
-into their parent. For *"compressor startup and shutdown"* that turns 5 redundant `compressor-startup`
-pieces into the consolidated section — leaving room for **5 distinct documents** in the top 6 instead of
-being dominated by one. Watch the `merged` stage in the `explain` breakdown.
-
-> Parents are themselves directly searchable (there's no level filter), so the *fix* above is really the
-> structure-aware representation; auto-merge then keeps a section's retrieved leaves from crowding the
-> top-k.
-
-## Run it (script)
+## Run
 
 ```bash
 python -m examples.part_ii.example_04.run
 ```
 
-## Run it interactively (console)
-
-Start the console on this example's config (run from the repo root):
+...or interactively — this example has its **own** store, so build it first:
 
 ```bash
 python -m tarnrag.console examples/part_ii/example_04/config.yaml
-```
-
-This example uses its **own** store (`structured.db`), so build it first — *this* is the re-ingest, with
-the structure-aware chunker:
-
-```text
 tarn> ingest examples/docs/corpus-2
 tarn> status
-```
-
-`status` reports ~**21 chunks** (vs the base store's ~19) — the extra chunks are the **section parents**
-the structure-aware chunker adds.
-
-**1 · the fragmentation from Example 03 is fixed.** Type:
-
-```text
 tarn> explain what are all the steps in the reciprocating compressor startup procedure?
+tarn> explain compressor startup and shutdown     # watch the new `merged` stage
 ```
 
-The top result is now a long (~700-char) `compressor-startup` passage — the **whole "startup" section** —
-and its text contains *every* step, including "loading sequence". (Run the same query under Example 03's
-config and the top result is a ~300-char fragment that stops after the first steps.)
-
-**2 · auto-merge consolidates fragments.** Type:
-
-```text
-tarn> explain compressor startup and shutdown
-```
-
-Notice a new **`merged`** stage in the breakdown — it doesn't appear in Examples 01–03. Auto-merge collapses
-the retrieved sibling chunks of one section into their parent: in that stage's `Δ` column a section parent
-appears (marked `＋`) and the redundant leaves drop out. The `final` table then holds **one** consolidated
-`compressor-startup` section plus a spread of *other* documents (compressor-models, lubrication-spec, …),
-instead of being dominated by one document's pieces.
-
-Type `quit` (or Ctrl-D) to exit.
-
-→ Next: **Example 05** closes Act A with **query routing** — classify each query and dispatch it to the
-per-type-best retrieval method, plus a scoreboard comparing dense / sparse / hybrid / routed.
+→ Next: **[Example 05](../example_05)** — query routing closes Act A.

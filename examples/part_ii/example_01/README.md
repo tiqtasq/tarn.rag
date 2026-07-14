@@ -1,29 +1,22 @@
 # Example 01 · Dense-only retrieval
 
-The simplest retrieval: a single **dense** retriever — vector KNN over the embedded chunks. This step
-reuses the base store **and** config from [Example 00](../example_00) (`retrieval_pipeline: dense + identity
-fuser`); there's no config change yet — the first config *delta* is Example 02's hybrid.
+A single **dense** retriever — vector KNN over the embedded chunks. Reuses the base store *and*
+config from [Example 00](../example_00); there is no config delta yet (the first one is Example 02).
 
-## What it shows
+Dense matches by **meaning** — so a paraphrase with no shared words HITs (rank 3), while the opaque
+part number `XQ-9920-A` MISSes (the right doc lands at rank 5, outside the top 4): a bare identifier
+has no meaning to embed.
 
-Dense embeddings match by **meaning**. That's their strength — and their blind spot.
+📖 **[Tutorial: Dense-only retrieval](../../../docs/tutorials/part-ii/01-dense-only-retrieval.md)** —
+both probes, the `explain` breakdown, and why no better embedding fixes this.
 
-| Probe | Query | Dense |
-|-------|-------|-------|
-| ✅ **good** | *"service a rotary fluid machine before powering it up"* — a paraphrase of `pump-maintenance` with **no shared words** | **HIT** (rank 3): found by meaning. A keyword search misses it entirely (BM25 ranks it 12th). |
-| ❌ **bad** | `XQ-9920-A` — an opaque **part number** | **MISS**: a bare identifier has no meaning to embed, so the right doc ranks 5th — out of the top 4. |
-
-The `explain` breakdown makes the *why* visible: for the paraphrase the dense retriever's candidates surface
-`pump-maintenance` near the top; for the part number it's pushed down, because the chunk's embedding is
-"about pump maintenance", not about the string `XQ-9920-A`.
-
-## Run it
+## Run
 
 ```bash
 python -m examples.part_ii.example_01.run
 ```
 
-…or `explain` both queries interactively over the base config:
+...or `explain` both queries interactively over the base config:
 
 ```bash
 python -m tarnrag.console examples/part_ii/example_00/config.yaml
@@ -31,5 +24,4 @@ tarn> explain service a rotary fluid machine before powering it up
 tarn> explain XQ-9920-A
 ```
 
-→ Next: **Example 02** adds a **sparse (BM25)** retriever — exact-term matching, the natural complement to
-dense — and fuses the two with RRF. The part-number query starts hitting, while the paraphrase still works.
+→ Next: **[Example 02](../example_02)** — add sparse (BM25) + RRF. The part number starts hitting.

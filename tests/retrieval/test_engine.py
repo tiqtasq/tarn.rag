@@ -13,7 +13,7 @@ from tarnrag.retrieval import (
     AutoMerger, CrossEncoderReranker, DefaultLicensePolicy, Query, RetrievalContext, RetrievalEngine,
     RetrievalError, RetrievalPipeline, SearchTrace,
 )
-from tarnrag.retrieval.types import Purpose, SearchTrace
+from tarnrag.retrieval.types import Purpose
 
 FINGERPRINT = "fp-123"
 
