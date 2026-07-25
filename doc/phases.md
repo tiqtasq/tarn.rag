@@ -703,3 +703,34 @@ Findings:
    HyDE pays where recall binds, not where precision does. Cost: one hypothesis call per
    sub-question.
 4. The MOTHRAG F1 gap narrows from −0.148 (June's best, 0.633) to −0.116 — with the mini reader.
+
+---
+
+## P7b — rerank the pooled evidence against the original question (2026-07-13)
+
+Same session and protocol as P7a. The decomposition pool was assembled in per-sub-question
+retrieval order (`Reasoner._accumulate`); `rerank_evidence` now orders it by cross-encoder
+relevance to the **original** question before the synthesis read, and `evidence_top_k` keeps only
+the best N after. Local ONNX cross-encoder — zero LLM cost, offline.
+
+| leg                            |   hit |    F1 |    EM |
+|--------------------------------|------:|------:|------:|
+| HYBRID (the arm; from P7a)     | 0.486 | 0.620 | 0.495 |
+| HYBRID + rerank                | 0.519 | 0.660 | 0.535 |
+| HYBRID + rerank, top_k=16      | 0.519 | 0.665 | 0.530 |
+| HYDE+SPARSE + rerank, top_k=16 | **0.541** | 0.665 | **0.540** |
+
+Findings:
+
+1. **The rerank clears the noise band on its own**: +0.033 hit / +0.045 F1 / +0.035 EM over its
+   retrieval arm — for free (the CE scores ~30 pooled passages per question, no LLM call).
+2. **top_k=16 ≡ uncapped** (F1 0.665 vs 0.660) at a smaller synthesis prompt — the P4 shortlist
+   lesson again: rerank, then hand the reader *less*, not more.
+3. **The levers compose on recall**: stacked on HyDE, hit reaches 0.541 (+0.027 over the best
+   single lever) and EM 0.540, while F1 saturates at 0.665. gpt-4o-mini now matches the June
+   gpt-4o hit reading (0.541). Recommended recall-critical composition: HyDE+sparse retrieval +
+   `rerank_evidence` with `evidence_top_k: 16`.
+4. **Post-P7 state of the wall**: the pool ceiling moved for the first time — June closed with
+   every lever inside the noise of hit ≈ 0.51 / F1 ≤ 0.633; P7 lands F1 0.665 / hit 0.541 in-run.
+   The remaining MOTHRAG gap is −0.116 F1 (mini reader vs their Llama-3.3-70B); the untried heavy
+   lever remains ChainFilter.

@@ -22,7 +22,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from tarnrag.core.engine.config import RETRIEVAL_PIPELINE, get_settings
+from tarnrag.core.engine.config import GENERATION_PIPELINE, RETRIEVAL_PIPELINE, get_settings
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.eval.benchmark_runner import (
     BRIDGE_RETRIEVAL,
@@ -41,7 +41,7 @@ from tarnrag.eval.benchmarks import HF_LOADERS, LOADERS, corpus_from_items
 async def _run(
     dataset: str, path: str | None, limit: int | None, hf: bool, sweep: bool, bridge: bool,
     corpus: str, corpus_limit: int | None, concurrency: int, reasoners: list[str] | None, grounding: str | None,
-    hybrid: bool, retrieval_spec: str | None,
+    hybrid: bool, retrieval_spec: str | None, generation_spec: str | None,
 ) -> None:
     settings = get_settings()
     tag = ""
@@ -54,6 +54,9 @@ async def _run(
     if retrieval_spec:  # an explicit pinned spec (e.g. the S1 routed profile) — overrides the flags above
         settings.components[RETRIEVAL_PIPELINE] = json.loads(retrieval_spec)
         tag = " + custom-retrieval"
+    if generation_spec:  # a pinned GENERATION_PIPELINE spec (e.g. decomposition + evidence rerank, P7)
+        settings.components[GENERATION_PIPELINE] = json.loads(generation_spec)
+        tag += " + custom-generation"
     llm = LanguageModel.create(settings.llm)
     if corpus == "pool":
         await _run_over_pool(
@@ -139,6 +142,11 @@ def main(argv: list[str] | None = None) -> None:
              "overrides --hybrid/--bridge; a measurement never inherits a default",
     )
     parser.add_argument(
+        "--generation-spec", default=None, metavar="JSON",
+        help="pin an explicit GENERATION_PIPELINE spec as JSON (e.g. decomposition with "
+             "rerank_evidence, P7); ignored with --sweep (which pins per-reasoner specs)",
+    )
+    parser.add_argument(
         "--corpus", choices=["distractor", "pool"], default="distractor",
         help="retrieval setting: 'distractor' (per-question pool, default) or 'pool' (one shared corpus "
              "built from the dev set — the fullwiki-style setting; built once + cached)",
@@ -171,7 +179,7 @@ def main(argv: list[str] | None = None) -> None:
         _run(
             args.dataset, args.path, args.limit, args.hf, args.sweep, args.bridge,
             args.corpus, args.corpus_limit, args.concurrency, args.reasoners, args.grounding,
-            args.hybrid, args.retrieval_spec,
+            args.hybrid, args.retrieval_spec, args.generation_spec,
         )
     )
 

@@ -146,6 +146,29 @@ components:
   was retrieved the way it was. Don't stack these under the reranker: measured, the CE subsumes
   both (identical scores with and without routing beneath it).
 
+**For multi-hop question answering over a large corpus** (recall-limited, P7 in `doc/phases.md`),
+the measured composition is HyDE retrieval + a pooled-evidence rerank on the decomposition
+reasoner — on the HotpotQA pool it lifts answer F1 0.620 → 0.665 and hit 0.486 → 0.541 over
+plain hybrid:
+
+```yaml
+components:
+  retrieval_pipeline:
+    class_name: retrieval_pipeline
+    retrievers: [{class_name: hyde}, {class_name: sparse}]   # fake-answer probe + BM25
+    fuser: {class_name: rrf}
+  generation_pipeline:
+    class_name: generation_pipeline
+    reasoner:
+      class_name: decomposition
+      rerank_evidence: true      # CE re-orders the pooled passages against the original question
+      evidence_top_k: 16         # then hands the reader only the best 16
+```
+
+(HyDE costs one LLM call per sub-question; the evidence rerank is the local cross-encoder — free
+and offline. On single-hop/layout corpora prefer the quality profile above: HyDE measured null
+there.)
+
 ## Modes
 
 - **`MODE='embedded'`** (default) — runs the whole pipeline in-process over SQLite; each ingest call

@@ -16,6 +16,7 @@ The passage-formatting / cited-index parsing / read logic live on the base, so a
 
 from __future__ import annotations
 
+import asyncio
 import re
 from abc import abstractmethod
 from dataclasses import dataclass, field, replace
@@ -23,6 +24,7 @@ from typing import Any, Literal
 
 from tarnrag.contracts import RetrievalResult
 from bausatz import Component
+from tarnrag.core.exceptions import GenerationError
 from tarnrag.core.resources.llm import Prompt
 from tarnrag.generation.components._parsing import extract_json
 from tarnrag.generation.components._passages import passage_text
@@ -164,6 +166,33 @@ class Reasoner(Component):
                 seen.add(r.chunk_id)
                 evidence.append(r)
 
+    async def _rerank_pool(
+        self,
+        query: Query,
+        evidence: list[RetrievalResult],
+        ctx: GenerationContext,
+        *,
+        top_k: int | None,
+    ) -> list[RetrievalResult]:
+        """P7: re-order the pooled evidence by cross-encoder relevance to the ORIGINAL question before
+        the synthesis read — the pool arrives in per-sub-question retrieval order, so the passages the
+        synthesis needs most can sit anywhere in it. Optionally truncate to the best ``top_k``.
+        Deterministic tie-break (score desc, ``chunk_id`` asc — the §5.5 contract); CPU-bound ONNX, so
+        scoring runs off the event loop (like query embedding)."""
+        if not evidence:
+            return evidence
+        if ctx.cross_encoder is None:
+            raise GenerationError(
+                "rerank_evidence is configured but the GenerationContext has no cross-encoder model — "
+                "set the `rerank` settings (model dir) so the engine can build it"
+            )
+        scores = await asyncio.to_thread(
+            ctx.cross_encoder.score, query.text, [r.text for r in evidence]
+        )
+        ranked = sorted(zip(evidence, scores), key=lambda pair: (-pair[1], pair[0].chunk_id))
+        reranked = [r for r, _ in ranked]
+        return reranked[:top_k] if top_k is not None else reranked
+
 
 class SingleHopReasoner(Reasoner):
     """One retrieval round + one read — the MVP reasoner. Search → numbered passages → strict-JSON answer
@@ -250,6 +279,10 @@ class DecompositionReasoner(Reasoner):
         class_name: Literal["decomposition"] = "decomposition"
         max_subquestions: int = 4
         top_k: int = 8  # passages retrieved per sub-question
+        # P7: re-rank the pooled evidence against the ORIGINAL question before the synthesis read
+        # (the pool arrives in per-sub-question retrieval order). Needs the cross-encoder resource.
+        rerank_evidence: bool = False
+        evidence_top_k: int | None = None  # after the rerank, keep only the best N (None = keep all)
 
     config: DecompositionReasoner.Config
 
@@ -259,6 +292,8 @@ class DecompositionReasoner(Reasoner):
         for sub_question in await self._decompose(query.text, ctx):
             results = await ctx.retrieval.search(replace(query, text=sub_question, top_k=self.config.top_k))
             self._accumulate(evidence, seen, results)
+        if self.config.rerank_evidence:
+            evidence = await self._rerank_pool(query, evidence, ctx, top_k=self.config.evidence_top_k)
         completion = await ctx.llm.complete(
             Prompt(
                 system=_READ_SYSTEM,

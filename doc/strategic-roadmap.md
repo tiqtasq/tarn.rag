@@ -22,6 +22,8 @@ Evidence base (see `doc/phases.md` for full tables):
   the measured bottleneck.
 - Multi-hop pool retrieval ceiling (~0.51 hit at pool scale) unbroken by reader/embedder/bridge/γ
   levers — further wiki-QA benchmark chasing is low-leverage; differentiated settings are not.
+  *(Moved 2026-07-13 by P7: HyDE + the pooled-evidence rerank are the first levers past the noise
+  band — pool F1 0.633 → 0.665, hit 0.541 stacked; phases.md P7a/P7b.)*
 - Bulk-ingest 3.6 → 9.4 docs/s (2.6×) — embedded only; distributed path unbatched.
 
 ---
@@ -79,7 +81,10 @@ pseudo-chunk (provenance = the section). This is hierarchical retrieval for long
 fraction of RAPTOR's machinery, and it reuses the existing tree + merger. Measure on a
 long-document corpus (not per-question distractor sets).
 
-**P7. Retrieval-aware multi-hop: rerank the pooled evidence**
+**P7. Retrieval-aware multi-hop: rerank the pooled evidence** *(DONE 2026-07-13 — 2 PRs;
+phases.md P7a/P7b: hybrid within-noise on the pool; HyDE +0.058 F1, the first lever past the
+band; the pooled-evidence CE rerank +0.045 F1 at zero LLM cost; stacked, hit 0.541 = the June
+gpt-4o reading with the mini reader)*
 Phase 0–3 showed decomposition wins but pool retrieval caps it. Two cheap composition changes,
 measured independently: (a) run each sub-question through the *hybrid* pipeline (today the
 benchmark default is dense unless flagged); (b) rerank the pooled evidence against the *original*
@@ -221,7 +226,7 @@ not just in the harness. Prometheus can follow; don't start with it.
 | 2 | ~~**P1** native table representation (2 PRs: embed-side, reader-side)~~ **DONE 2026-07-05** (#112, #113) | biggest evidence-backed quality lever |
 | 3 | ~~**P4** reranker sweep → quality profile~~ **DONE 2026-07-06** (#114) | completes the retrieval stack |
 | 4 | ~~**S1** query-understanding profile (+ HyDE sweep)~~ **DONE 2026-07-13** | turns existing components into shipped value |
-| 5 | **P7** multi-hop composition (2 PRs) | attacks the pool ceiling with what exists |
+| 5 | ~~**P7** multi-hop composition (2 PRs)~~ **DONE 2026-07-13** | attacks the pool ceiling with what exists |
 | 6 | **P5** contextual augmentation | the big published lever, now measurable against 1–5 |
 | 7 | **S4** scorecard + public sets | lock in gains; quantify the remaining SOTA gap |
 | 8 | **S3** verified-answers profile | differentiation |

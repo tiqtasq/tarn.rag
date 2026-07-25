@@ -14,6 +14,7 @@ from typing import Self
 
 from bausatz import ComponentFactory
 from tarnrag.core.engine.config import GENERATION_PIPELINE, Settings, get_settings
+from tarnrag.core.resources.cross_encoder import CrossEncoder, OnnxCrossEncoder
 from tarnrag.core.resources.llm import LanguageModel
 from tarnrag.generation.context import GenerationContext
 from tarnrag.generation.pipeline.pipeline import GenerationPipeline
@@ -33,11 +34,13 @@ class GenerationEngine:
         llm: LanguageModel,
         pipeline: GenerationPipeline,
         *,
+        cross_encoder: CrossEncoder | None = None,
         owns_resources: bool = False,
     ) -> None:
         self.retrieval = retrieval
         self.llm = llm
         self._pipeline = pipeline
+        self._cross_encoder = cross_encoder  # lazy resource for evidence reranking (P7); may be None
         # Whether aclose() releases the retrieval port + LLM: True only on the standalone ``create``
         # path, which builds them itself. Injected resources (a composition root's — TarnRag's shared
         # retrieval engine and LLM) are closed by their owner, never here.
@@ -55,11 +58,14 @@ class GenerationEngine:
         """Build the engine over a pre-built retrieval port + LLM, with the ``GenerationPipeline`` from
         ``Settings`` (``Settings`` guarantees the spec is present). The shared wiring used by both
         ``create`` (full standalone — which passes ``owns_resources=True``) and a composition root
-        (``TarnRag``) that injects an already-open retrieval engine it keeps ownership of."""
+        (``TarnRag``) that injects an already-open retrieval engine it keeps ownership of. The
+        cross-encoder (evidence reranking, P7) is built unconditionally like the retrieval engine's —
+        the resource is lazy, so it costs nothing unless a reasoner is configured to rerank."""
         pipeline = ComponentFactory.get().create_as(
             settings.components[GENERATION_PIPELINE], GenerationPipeline
         )
-        return cls(retrieval, llm, pipeline, owns_resources=owns_resources)
+        cross_encoder = OnnxCrossEncoder.create(settings.rerank)
+        return cls(retrieval, llm, pipeline, cross_encoder=cross_encoder, owns_resources=owns_resources)
 
     @classmethod
     async def create(cls, settings: Settings | None = None) -> GenerationEngine:
@@ -72,7 +78,9 @@ class GenerationEngine:
 
     async def answer(self, query: Query) -> GenerationResult:
         """Answer a question: retrieve, read, and return the answer + proof tree + evidence."""
-        return await self._pipeline.answer(query, GenerationContext(self.retrieval, self.llm))
+        return await self._pipeline.answer(
+            query, GenerationContext(self.retrieval, self.llm, self._cross_encoder)
+        )
 
     async def answer_text(self, text: str) -> GenerationResult:
         """Convenience over :meth:`answer`: build a :class:`Query` from a raw question string."""
